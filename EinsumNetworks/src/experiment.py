@@ -5,6 +5,8 @@ from EinsumNetwork import Graph, EinsumNetwork
 import numpy as np
 import os
 
+from ResNetHidden import get_latent_batched
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
@@ -14,7 +16,7 @@ depth = 3
 num_repetitions = 20
 K = 10
 
-max_num_epochs = 10
+max_num_epochs = 5
 batch_size = 100
 online_em_frequency = 1
 online_em_stepsize = 0.05
@@ -28,18 +30,41 @@ from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader
 
 batchsize_resnet = 64
-train_ds = MNIST("mnist", train=True, download=True, transform=ToTensor())
-test_ds = MNIST("mnist", train=False, download=True, transform=ToTensor())
+train_ds = MNIST("mnist", train=True, download=True, transform=ToTensor()) # 60000, 28, 28
+test_ds = MNIST("mnist", train=False, download=True, transform=ToTensor()) # 10000, 28, 28
+
+def manipulate_mnist(data: np.ndarray, num_cutoff: int):
+    # cutoff: strong: 10, mid: 5, weak: 2 
+    rows = []
+    for i in range(num_cutoff):
+        # choose random row
+        while True:
+            row = np.random.randint(0, data.shape[1])
+            if row not in rows:
+                break
+        row = np.random.randint(0, data.shape[1])
+        rows.append(row)
+        # set row to 0
+        data[:, row, :] = 0
+
+    # rotate: strong: 90, mid: 45, weak: 15
+    return data
+
+manipulated_size = 3200
+# extract some data from train_ds and test_ds
+test_manipulated = test_ds.data[:manipulated_size].numpy()
+test_manipulated = manipulate_mnist(test_manipulated, 2)
+test_manipulated_target = test_ds.targets[:manipulated_size]
+
+
 train_dl = DataLoader(train_ds, batch_size=batchsize_resnet, shuffle=True, pin_memory=True, num_workers=1)
 test_dl = DataLoader(test_ds, batch_size=batchsize_resnet, pin_memory=True, num_workers=1)
-print("train_dl", len(train_dl))
-print("test_dl", len(test_dl))
+test_manipulated_dl = DataLoader(test_manipulated, batch_size=batchsize_resnet, pin_memory=True, num_workers=1)
 
 print("done loading data")
 
 ###############################################################################
-exists = os.path.isfile("latent_train.npy") and os.path.isfile("latent_test.npy") and os.path.isfile("target_train.npy") and os.path.isfile("target_test.npy")
-exists = False
+exists = os.path.isfile("latent_train.npy") and os.path.isfile("latent_test.npy") and os.path.isfile("target_train.npy") and os.path.isfile("target_test.npy") and os.path.isfile("latent_test_manipulated.npy")
 
 if exists:
     print("loading latent dataset")
@@ -47,19 +72,20 @@ if exists:
     target_train = np.load("target_train.npy")
     latent_test = np.load("latent_test.npy")
     target_test = np.load("target_test.npy")
+    latenet_test_manipulated = np.load("latent_test_manipulated.npy")
     print("Latent train dataset shape: ", latent_train.shape)
 
 if not exists:
-    # load NN
     from ResNetHidden import train_eval_resnet, get_latent_dataset
     resnet = train_eval_resnet(train_dl, test_dl, device) 
     latent_train, target_train, latent_test, target_test = get_latent_dataset(train_ds, train_dl, test_ds, test_dl, resnet, device, batchsize_resnet, save_dir=".")
+    latent_test_manipulated = get_latent_batched(test_manipulated_dl, manipulated_size, resnet, device, batchsize_resnet, save_dir=".")
 
 # train simple MLP on latent space for mnist classification to show that latent space is useful
 # from ResNetHidden import train_small_mlp
 # train_small_mlp(latent_train, target_train, latent_test, target_test, device, batchsize_resnet)
 
-# normalize latent space
+# normalize latent space -> leads to higher accuracy and stronger LL's, but also works without
 latent_train /= latent_train.max()
 latent_test /= latent_test.max()
 latent_train -= .5
@@ -69,6 +95,7 @@ latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32)
 target_train = torch.from_numpy(target_train).to(dtype=torch.long)
 latent_test = torch.from_numpy(latent_test).to(dtype=torch.float32)
 target_test = torch.from_numpy(target_test).to(dtype=torch.long)
+latent_test_manipulated = torch.from_numpy(latent_test_manipulated).to(dtype=torch.float32)
 
 
 ##########################################################
@@ -101,7 +128,6 @@ latent_test = latent_test.to(device)
 target_train = target_train.to(device)
 target_test = target_test.to(device)
 
-
 # TODO: perform different perturbations on MNIST
 # rotation, translation, scaling, noise, occlusion, etc.
 # store perturbation in corresponding variables
@@ -124,7 +150,7 @@ for epoch_count in range(max_num_epochs):
                                                                     test_ll / latent_test_N,
                                                                     ood_ll / latent_train_N))
         
-        print("train accuracy: ", EinsumNetwork.eval_accuracy_batched(einet, latent_train, target_train, batch_size))
+        print("test accuracy: ", EinsumNetwork.eval_accuracy_batched(einet, latent_test, target_test, batch_size))
 
     # train
     idx_batches = torch.randperm(latent_train_N).split(batch_size)
@@ -137,3 +163,15 @@ for epoch_count in range(max_num_epochs):
         objective.backward()
         einet.em_process_batch()
     einet.em_update()
+
+# evaluate
+test_ll = EinsumNetwork.eval_loglikelihood_batched(einet, latent_test[:manipulated_size], target_test[:manipulated_size], batch_size)
+print("test LL {}".format(test_ll / latent_test_N))
+print("test accuracy: ", EinsumNetwork.eval_accuracy_batched(einet, latent_test[:manipulated_size], target_test[:manipulated_size], batch_size))
+
+test_manipulated_target = test_manipulated_target.to(device)
+latent_test_manipulated = latent_test_manipulated.to(device)
+
+test_manipulated_ll = EinsumNetwork.eval_loglikelihood_batched(einet, latent_test_manipulated, test_manipulated_target, batch_size)
+print("test manipulated LL {}".format(test_manipulated_ll / latent_test_manipulated.shape[0]))
+print("test manipulated accuracy: ", EinsumNetwork.eval_accuracy_batched(einet, latent_test_manipulated, test_manipulated_target, batch_size)) 

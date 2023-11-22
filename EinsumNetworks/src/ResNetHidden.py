@@ -90,6 +90,20 @@ def get_latent_dataset(train_ds, train_dl, test_ds, test_dl, resnet, device, bat
     print("done collecting latent space dataset")
     return latent_train, target_train, latent_test, target_test
 
+def get_latent_batched(data, manipulated_size, resnet, device, batchsize_resnet, save_dir):
+    latent = np.zeros((manipulated_size, 512))
+    with torch.no_grad():
+        for batch_idx, data in enumerate(data):
+            data = data.to(device)
+            # transform data from (64, 28, 28) to (64, 1, 28, 28)
+            data = data.unsqueeze(1).to(dtype=torch.float32)
+            low_idx = batch_idx
+            high_idx = batch_idx + batchsize_resnet if batch_idx + batchsize_resnet < manipulated_size+1 else manipulated_size+1
+            latent[low_idx:high_idx] = resnet.get_hidden(data).squeeze().cpu().numpy()
+
+    np.save(f"{save_dir}/test_manipulated.npy", latent)
+    return latent
+
 
 def train_small_mlp(latent_train, target_train, latent_test, target_test, device, batchsize_resnet):
 # train simple MLP on latent space for mnist classification to show that latent space is useful
