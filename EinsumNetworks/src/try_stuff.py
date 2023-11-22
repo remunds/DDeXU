@@ -11,14 +11,17 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 ##########################################################
 
 depth = 3
-num_repetitions = 10
-num_input_distributions = 20
-num_sums = 20
+num_repetitions = 20
+# num_input_distributions = 20
+# num_sums = 20
+K = 10
 
-max_num_epochs = 10
+max_num_epochs = 5 
 batch_size = 100
 online_em_frequency = 1
 online_em_stepsize = 0.05
+exponential_family = EinsumNetwork.NormalArray
+exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 
 ##########################################################
 
@@ -137,9 +140,21 @@ if not exists:
         np.save("target_test.npy", target_test)
     print("done collecting latent space dataset")
 
+# normalize latent space
+latent_train /= latent_train.max()
+latent_test /= latent_test.max()
+latent_train -= .5
+latent_test -= .5
+
+latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32)
+target_train = torch.from_numpy(target_train).to(dtype=torch.long)
+latent_test = torch.from_numpy(latent_test).to(dtype=torch.float32)
+target_test = torch.from_numpy(target_test).to(dtype=torch.long)
+
 
 ##########################################################
 # train simple MLP on latent space for mnist classification to show that latent space is useful
+
 # mlp = nn.Sequential(
 #     nn.Linear(512, 100),
 #     nn.ReLU(),
@@ -160,7 +175,7 @@ if not exists:
 
 
 # print("start training mlp")
-# for epoch in range(10):
+# for epoch in range(2):
 #     for batch_idx in range(0, latent_train.shape[0], batchsize_resnet):
 #         optimizer.zero_grad()
 
@@ -195,49 +210,76 @@ if not exists:
 # EinsumNetwork
 
 # graph = Graph.random_binary_trees(num_var=train_x.shape[1], depth=depth, num_repetitions=num_repetitions)
-# graph = Graph.random_binary_trees(num_var=latent.shape[1], depth=depth, num_repetitions=num_repetitions)
-graph = Graph.random_binary_trees(num_var=100, depth=depth, num_repetitions=num_repetitions)
+graph = Graph.random_binary_trees(num_var=latent_train.shape[1], depth=depth, num_repetitions=num_repetitions)
+# graph = Graph.random_binary_trees(num_var=100, depth=depth, num_repetitions=num_repetitions)
 
 args = EinsumNetwork.Args(
-    num_classes=10,
-    num_input_distributions=num_input_distributions,
-    exponential_family=EinsumNetwork.CategoricalArray,
-    exponential_family_args={'K': 2},
-    num_sums=num_sums,
-    # num_var=train_x.shape[1],
-    num_var=100,
-    online_em_frequency=1,
-    online_em_stepsize=0.05)
+        num_var=latent_train.shape[1],
+        num_dims=1,
+        num_classes=10,
+        num_sums=K,
+        num_input_distributions=K,
+        exponential_family=exponential_family,
+        exponential_family_args=exponential_family_args,
+        online_em_frequency=online_em_frequency,
+        online_em_stepsize=online_em_stepsize,)
+        # use_em=False)
 
 einet = EinsumNetwork.EinsumNetwork(graph, args)
 einet.initialize()
 einet.to(device)
 print(einet)
 
-for epoch_count in range(max_num_epochs):
+latent_train_N = latent_train.shape[0]
+latent_test_N = latent_test.shape[0]
 
-    # evaluate
-    train_ll = EinsumNetwork.eval_loglikelihood_batched(einet, train_x)
-    valid_ll = EinsumNetwork.eval_loglikelihood_batched(einet, valid_x)
-    test_ll = EinsumNetwork.eval_loglikelihood_batched(einet, test_x)
+latent_train = latent_train.to(device)
+latent_test = latent_test.to(device)
+target_train = target_train.to(device)
+target_test = target_test.to(device)
 
-    print("[{}]   train LL {}   valid LL {}  test LL {}".format(epoch_count,
-                                                                train_ll / train_N,
-                                                                valid_ll / valid_N,
-                                                                test_ll / test_N))
+ood = torch.rand(latent_test.shape[0], latent_test.shape[1]).to(device)
 
+# for SGD training
+# optimizer = torch.optim.Adam(einet.parameters(), lr=0.005)
+# optimizer = torch.optim.Adam(einet.parameters(), lr=0.01)
+# objective = torch.nn.CrossEntropyLoss()
+
+
+# for epoch_count in range(max_num_epochs):
+for epoch_count in range(200):
+
+    if epoch_count % 5 == 0:
+        # evaluate
+        train_ll = EinsumNetwork.eval_loglikelihood_batched(einet, latent_train)
+        test_ll = EinsumNetwork.eval_loglikelihood_batched(einet, latent_test)
+        ood_ll = EinsumNetwork.eval_loglikelihood_batched(einet, ood)
+
+        print("[{}]   train LL {}  test LL {} ood LL {}".format(epoch_count,
+                                                                    train_ll / latent_train_N,
+                                                                    test_ll / latent_test_N,
+                                                                    ood_ll / latent_train_N))
+        
+        print("train accuracy: ", EinsumNetwork.eval_accuracy_batched(einet, latent_train, target_train, batch_size))
     # train
-    idx_batches = torch.randperm(train_N).split(batch_size)
+    idx_batches = torch.randperm(latent_train_N).split(batch_size)
+    # total_loss = 0.0
     for batch_count, idx in enumerate(idx_batches):
-        batch_x = train_x[idx, :]
+        # optimizer.zero_grad()
+        batch_x = latent_train[idx, :]
         outputs = einet.forward(batch_x)
-
-        ll_sample = EinsumNetwork.log_likelihoods(outputs)
+        # loss = objective(outputs, target_train[idx])
+        # total_loss += loss.item()
+        # loss.backward()
+        # optimizer.step()
+        # ll_sample = EinsumNetwork.log_likelihoods(outputs)
+        ll_sample = EinsumNetwork.log_likelihoods(outputs, target_train[idx])
         log_likelihood = ll_sample.sum()
 
         objective = log_likelihood
         objective.backward()
 
         einet.em_process_batch()
+    # print("loss: ", total_loss / batch_count)
 
     einet.em_update()
