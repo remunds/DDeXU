@@ -25,7 +25,7 @@ exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 
 ##########################################################
 
-from torchvision.datasets import MNIST 
+from torchvision.datasets import MNIST, KMNIST
 from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader
 
@@ -33,28 +33,34 @@ batchsize_resnet = 64
 train_ds = MNIST("mnist", train=True, download=True, transform=ToTensor()) # 60000, 28, 28
 test_ds = MNIST("mnist", train=False, download=True, transform=ToTensor()) # 10000, 28, 28
 
+train_ds_K = KMNIST("kmnist", train=True, download=True, transform=ToTensor()) # 60000, 28, 28
+test_ds_K = KMNIST("kmnist", train=False, download=True, transform=ToTensor()) # 10000, 28, 28
+
 def manipulate_mnist(data: np.ndarray, num_cutoff: int):
-    # cutoff: strong: 10, mid: 5, weak: 2 
-    rows = []
-    for i in range(num_cutoff):
-        # choose random row
-        while True:
-            row = np.random.randint(0, data.shape[1])
-            if row not in rows:
-                break
-        row = np.random.randint(0, data.shape[1])
-        rows.append(row)
-        # set row to 0
-        data[:, row, :] = 0
+    # cutoff top rows. strong: 17, mid: 14, weak: 10 
+    # set row to 0
+    data[:, :num_cutoff, :] = 0
 
     # rotate: strong: 90, mid: 45, weak: 15
     return data
 
 manipulated_size = 3200
 # extract some data from train_ds and test_ds
-test_manipulated = test_ds.data[:manipulated_size].numpy()
-test_manipulated = manipulate_mnist(test_manipulated, 2)
+test_manipulated = test_ds.data[:manipulated_size].numpy().copy()
+test_manipulated = manipulate_mnist(test_manipulated, 14)
 test_manipulated_target = test_ds.targets[:manipulated_size]
+
+# write to png with matplotlib
+import matplotlib.pyplot as plt
+plt.imshow(test_manipulated[0])
+plt.savefig("test_manipulated.png")
+# also show original
+plt.imshow(test_ds.data[0])
+plt.savefig("test_original.png")
+
+# show kmnist
+plt.imshow(test_ds_K.data[0])
+plt.savefig("test_original_K.png")
 
 
 train_dl = DataLoader(train_ds, batch_size=batchsize_resnet, shuffle=True, pin_memory=True, num_workers=1)
@@ -85,11 +91,13 @@ if not exists:
 # from ResNetHidden import train_small_mlp
 # train_small_mlp(latent_train, target_train, latent_test, target_test, device, batchsize_resnet)
 
-# normalize latent space -> leads to higher accuracy and stronger LL's, but also works without
+# normalize and zero-center latent space -> leads to higher accuracy and stronger LL's, but also works without
 latent_train /= latent_train.max()
 latent_test /= latent_test.max()
+latent_test_manipulated /= latent_test_manipulated.max()
 latent_train -= .5
 latent_test -= .5
+latent_test_manipulated -= .5
 
 latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32)
 target_train = torch.from_numpy(target_train).to(dtype=torch.long)
@@ -135,6 +143,7 @@ target_test = target_test.to(device)
 # expect to see lower LL for perturbed data
 # expect to see low LL for variable that corresponds to the actual perturbation 
 # -> Explanation
+# Also try out KMNIST as out of distribution and check it's LL
 
 ood = torch.rand(latent_test.shape[0], latent_test.shape[1]).to(device)
 
