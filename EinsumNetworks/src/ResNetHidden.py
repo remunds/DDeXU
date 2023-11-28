@@ -15,14 +15,21 @@ class ResNetHidden(ResNet):
             stride=(2, 2),
             padding=(3, 3), bias=False)
     
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
+    
     def get_hidden(self, x):
         for name, module in self.named_children():
             if name != "fc":
                 x = module(x)
         return x
     
+def resnet_from_path(path):
+    resnet = ResNetHidden(BasicBlock, [2, 2, 2, 2], num_classes=10)
+    resnet.load(path)
+    return resnet
 
-def train_eval_resnet(train_dl, test_dl, device):
+def train_eval_resnet(train_dl, test_dl, device, save_dir):
     resnet = ResNetHidden(BasicBlock, [2, 2, 2, 2], num_classes=10)
 
     resnet.to(device)
@@ -59,6 +66,8 @@ def train_eval_resnet(train_dl, test_dl, device):
         loss /= len(test_dl)
         print(f"Test loss: {loss}")
         print(f"Test accuracy: {correct / len(test_dl.dataset)}")
+    
+    torch.save(resnet.state_dict(), f"{save_dir}/resnet.pt")
     return resnet
 
 def get_latent_dataset(train_ds, train_dl, test_ds, test_dl, resnet, device, batchsize_resnet, save_dir):
@@ -90,19 +99,19 @@ def get_latent_dataset(train_ds, train_dl, test_ds, test_dl, resnet, device, bat
     print("done collecting latent space dataset")
     return latent_train, target_train, latent_test, target_test
 
-def get_latent_batched(data, manipulated_size, resnet, device, batchsize_resnet, save_dir):
-    latent = np.zeros((manipulated_size, 512))
-    with torch.no_grad():
-        for batch_idx, data in enumerate(data):
-            data = data.to(device)
-            # transform data from (64, 28, 28) to (64, 1, 28, 28)
-            data = data.unsqueeze(1).to(dtype=torch.float32)
-            low_idx = batch_idx
-            high_idx = batch_idx + batchsize_resnet if batch_idx + batchsize_resnet < manipulated_size+1 else manipulated_size+1
-            latent[low_idx:high_idx] = resnet.get_hidden(data).squeeze().cpu().numpy()
+def get_latent_batched(data_loader, size, resnet, device, batchsize_resnet, save_dir):
 
-    np.save(f"{save_dir}/test_manipulated.npy", latent)
-    return latent
+    latent = np.zeros((size, 512))
+    latent_target = np.zeros((size,))
+    with torch.no_grad():
+        for batch_idx, (data, target) in enumerate(data_loader):
+            data = data.to(device)
+            target = target.to(device)
+            low_idx = batch_idx * batchsize_resnet
+            high_idx = (batch_idx + 1) * batchsize_resnet
+            latent[low_idx:high_idx] = resnet.get_hidden(data).squeeze().cpu().numpy()
+            latent_target[low_idx:high_idx] = target.cpu().numpy()
+    return latent, latent_target
 
 
 def train_small_mlp(latent_train, target_train, latent_test, target_test, device, batchsize_resnet):
