@@ -8,6 +8,8 @@ from ResNetHidden import get_latent_batched, resnet_from_path
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+newExp = True
+
 # according to DDU: MNIST: id, Dirty-MNIST: id (high aleatoric), Fashion-MNIST: ood (high epistemic)
 # for them: softmax entropy captures aleatoric, density-estimator captures epistemic
 
@@ -25,25 +27,30 @@ test_ds = MNIST("mnist", train=False, download=True, transform=ToTensor()) # 100
 # train_ds_F = FashionMNIST("fashionmnist", train=True, download=True, transform=ToTensor())
 # test_ds_F = FashionMNIST("fashionmnist", train=False, download=True, transform=ToTensor())
 
-def manipulate_mnist(data: np.ndarray, num_cutoff: int, noise_const: float):
+def manipulate_mnist(data: np.ndarray, max_cutoff: int, noise_const: float):
+    cutoffs = []
     # cutoff top rows. strong: 17, mid: 14, weak: 10 
     # set row to 0
-    if num_cutoff > 0:
+    if max_cutoff > 0:
+        num_cutoff = np.random.randint(0, max_cutoff)
         data[:, :num_cutoff, :] = 0
+        cutoffs.append(num_cutoff)
 
+    noises = []
     # add noise
     if noise_const > 0:
         # normal noise between 0 and 255
         noise = np.random.normal(0, noise_const, data.shape)
+        noises.append(noise)
         data += noise.astype(np.uint8)
 
-    return data
+    return data, cutoffs, noises
 
 manipulated_size = 3200
 # extract some data from train_ds and test_ds
 test_manipulated = test_ds.data[:manipulated_size].numpy().copy()
 # test_manipulated = manipulate_mnist(test_manipulated, 0, 0.8)
-test_manipulated = manipulate_mnist(test_manipulated, 12, 1)
+test_manipulated, cutoffs, noises = manipulate_mnist(test_manipulated, 12, 1)
 test_manipulated = [ToTensor()(img) for img in test_manipulated]
 test_manipulated_target = test_ds.targets[:manipulated_size].numpy().copy()
 test_manipulated_target = [torch.tensor(target) for target in test_manipulated_target]
@@ -75,7 +82,7 @@ test_manipulated_dl = DataLoader(test_manipulated_ds, batch_size=batchsize_resne
 print("done loading data")
 
 ###############################################################################
-exists = os.path.isfile("latent_train.npy") and os.path.isfile("latent_test.npy") and os.path.isfile("target_train.npy") and os.path.isfile("target_test.npy") and os.path.isfile("./resnet.pt")
+exists = not newExp and os.path.isfile("latent_train.npy") and os.path.isfile("latent_test.npy") and os.path.isfile("target_train.npy") and os.path.isfile("target_test.npy") and os.path.isfile("./resnet.pt")
 # exists = False
 
 if exists:
@@ -113,13 +120,22 @@ latent_test_manipulated -= .5
 # latent_test_K -= .5
 # latent_test_F -= .5
 
-latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32)
+latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32) #(N, 512)
 target_train = torch.from_numpy(target_train).to(dtype=torch.long)
 latent_test = torch.from_numpy(latent_test).to(dtype=torch.float32)
 target_test = torch.from_numpy(target_test).to(dtype=torch.long)
 
+# add explain-variables cutoffs and noises to latent space
+train_cutoffs = np.zeros((latent_train.shape[0], 1))
+test_cutoffs = np.zeros((latent_test.shape[0], 1))
+train_noises = np.zeros((latent_train.shape[0], 1))
+test_noises = np.zeros((latent_test.shape[0], 1))
+latent_train = torch.cat((latent_train, torch.from_numpy(train_cutoffs).to(dtype=torch.float32), torch.from_numpy(train_noises).to(dtype=torch.float32)), dim=1)
+latent_test = torch.cat((latent_test, torch.from_numpy(test_cutoffs).to(dtype=torch.float32), torch.from_numpy(test_noises).to(dtype=torch.float32)), dim=1)
+
+
 einsumExp = EinsumExperiment(device, latent_train.shape[1])
-exists = os.path.isfile("einet.mdl") and os.path.isfile("einet.pc")
+exists = not newExp and os.path.isfile("einet.mdl") and os.path.isfile("einet.pc")
 if exists:
     einsumExp.load("./")
 else:
