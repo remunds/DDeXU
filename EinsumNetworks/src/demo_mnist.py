@@ -203,7 +203,7 @@ image_scope = np.array(range(height * width)).reshape(height, width)
 marginalize_idx = list(image_scope[0:round(height/2), :].reshape(-1))
 keep_idx = [i for i in range(width*height) if i not in marginalize_idx]
 einet.set_marginalization_idx(marginalize_idx)
-
+print("x: ", test_x[0:25, :].shape)
 mpe_reconstruction = einet.mpe(x=test_x[0:25, :]).cpu().numpy()
 mpe_reconstruction = mpe_reconstruction.squeeze()
 mpe_reconstruction = mpe_reconstruction.reshape((-1, 28, 28))

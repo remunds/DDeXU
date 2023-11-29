@@ -89,6 +89,34 @@ class EinsumExperiment:
     def eval(self, test: torch.Tensor, target_test: torch.Tensor, name: str):
         test = test.to(self.device)
         target_test = target_test.to(self.device)
-        test_ll = EinsumNetwork.eval_loglikelihood_batched(self.einet, test, target_test)
+        test_ll_class = EinsumNetwork.eval_loglikelihood_batched(self.einet, test, target_test)
+        test_ll = EinsumNetwork.eval_loglikelihood_batched(self.einet, test)
         test_acc = EinsumNetwork.eval_accuracy_batched(self.einet, test, target_test, self.batch_size)
-        print(f"{name} LL: {test_ll / test.shape[0]}, {name} accuracy: {test_acc}")
+        print(f"{name} classification LL: {test_ll_class / test.shape[0]}, LL: {test_ll / test.shape[0]}, Accuracy: {test_acc}")
+
+    def explain_mpe(self, test: torch.Tensor, exp_vars: list, name: str):
+        # set all explaining features to 1
+        self.einet.set_marginalization_idx(exp_vars)
+        test = test.to(self.device)
+        mpe = self.einet.mpe(x=test)
+        self.einet.set_marginalization_idx([])
+
+        return mpe[:, exp_vars]
+    
+    def explain_ll(self, test: torch.Tensor, exp_vars: list, name: str):
+        test = test.to(self.device)
+        # set all explaining features to 1
+        full_ll = EinsumNetwork.eval_loglikelihood_batched(self.einet, test)
+        full_ll /= test.shape[0] 
+        self.einet.set_marginalization_idx(exp_vars)
+        marginal_ll = EinsumNetwork.eval_loglikelihood_batched(self.einet, test)
+        marginal_ll /= test.shape[0]
+        self.einet.set_marginalization_idx([])
+
+        return full_ll, marginal_ll
+
+
+    def draw_sample(self, num_samples: int):
+        samples = self.einet.sample(num_samples=num_samples).cpu().numpy()
+        samples = samples[:, :22*22]
+        return samples.reshape((-1, 22, 22)) 
