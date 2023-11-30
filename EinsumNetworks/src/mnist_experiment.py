@@ -8,8 +8,8 @@ from ResNetHidden import get_latent_batched, resnet_from_path
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# newExp = True
-newExp = False
+newExp = True
+# newExp = False
 
 # according to DDU: MNIST: id, Dirty-MNIST: id (high aleatoric), Fashion-MNIST: ood (high epistemic)
 # for them: softmax entropy captures aleatoric, density-estimator captures epistemic
@@ -19,14 +19,14 @@ from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader
 
 batchsize_resnet = 128
-train_ds = MNIST("mnist", train=True, download=True, transform=ToTensor()) # 60000, 28, 28
-test_ds = MNIST("mnist", train=False, download=True, transform=ToTensor()) # 10000, 28, 28
+# train_ds = MNIST("mnist", train=True, download=True, transform=ToTensor()) # 60000, 28, 28
+# test_ds = MNIST("mnist", train=False, download=True, transform=ToTensor()) # 10000, 28, 28
 
-# train_ds_K = KMNIST("kmnist", train=True, download=True, transform=ToTensor()) 
-# test_ds_K = KMNIST("kmnist", train=False, download=True, transform=ToTensor()) 
+# train_ds = KMNIST("kmnist", train=True, download=True, transform=ToTensor()) 
+# test_ds = KMNIST("kmnist", train=False, download=True, transform=ToTensor()) 
 
-# train_ds_F = FashionMNIST("fashionmnist", train=True, download=True, transform=ToTensor())
-# test_ds_F = FashionMNIST("fashionmnist", train=False, download=True, transform=ToTensor())
+train_ds = FashionMNIST("fashionmnist", train=True, download=True, transform=ToTensor())
+test_ds = FashionMNIST("fashionmnist", train=False, download=True, transform=ToTensor())
 
 def manipulate_mnist(data: np.ndarray, max_cutoff: int, noise_const: float):
     cutoffs = []

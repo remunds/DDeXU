@@ -29,8 +29,8 @@ def resnet_from_path(path):
     resnet.load(path)
     return resnet
 
-def train_eval_resnet(train_dl, test_dl, device, save_dir):
-    resnet = ResNetHidden(BasicBlock, [2, 2, 2, 2], num_classes=10)
+def train_eval_resnet(num_classes, train_dl, test_dl, device, save_dir):
+    resnet = ResNetHidden(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
 
     resnet.to(device)
 
