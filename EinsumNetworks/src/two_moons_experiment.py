@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import sklearn.datasets
 import os
+from EinsumNetwork import EinsumNetwork
 
-from ResNetHidden import get_latent_batched, resnet_from_path
+from ConvResNet import get_latent_batched, resnet_from_path
 from torch.utils.data import DataLoader
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -16,6 +17,7 @@ newExp = True
 # newExp = False
 
 batchsize_resnet = 128
+batchsize_einet = 128
 
 ### data and stuff from here: https://www.tensorflow.org/tutorials/understanding/sngp
 
@@ -29,71 +31,71 @@ DEFAULT_NORM = colors.Normalize(vmin=0, vmax=1,)
 DEFAULT_N_GRID = 100
 
 def plot_uncertainty_surface(test_uncertainty, ax, cmap=None):
-  """Visualizes the 2D uncertainty surface.
+    """Visualizes the 2D uncertainty surface.
 
-  For simplicity, assume these objects already exist in the memory:
+    For simplicity, assume these objects already exist in the memory:
 
-    test_examples: Array of test examples, shape (num_test, 2).
-    train_labels: Array of train labels, shape (num_train, ).
-    train_examples: Array of train examples, shape (num_train, 2).
+        test_examples: Array of test examples, shape (num_test, 2).
+        train_labels: Array of train labels, shape (num_train, ).
+        train_examples: Array of train examples, shape (num_train, 2).
 
-  Arguments:
-    test_uncertainty: Array of uncertainty scores, shape (num_test,).
-    ax: A matplotlib Axes object that specifies a matplotlib figure.
-    cmap: A matplotlib colormap object specifying the palette of the
-      predictive surface.
+    Arguments:
+        test_uncertainty: Array of uncertainty scores, shape (num_test,).
+        ax: A matplotlib Axes object that specifies a matplotlib figure.
+        cmap: A matplotlib colormap object specifying the palette of the
+        predictive surface.
 
-  Returns:
-    pcm: A matplotlib PathCollection object that contains the palette
-      information of the uncertainty plot.
-  """
-  # Normalize uncertainty for better visualization.
-  test_uncertainty = test_uncertainty / np.max(test_uncertainty)
+    Returns:
+        pcm: A matplotlib PathCollection object that contains the palette
+        information of the uncertainty plot.
+    """
+    # Normalize uncertainty for better visualization.
+    test_uncertainty = test_uncertainty / np.max(test_uncertainty)
 
-  # Set view limits.
-  ax.set_ylim(DEFAULT_Y_RANGE)
-  ax.set_xlim(DEFAULT_X_RANGE)
+    # Set view limits.
+    ax.set_ylim(DEFAULT_Y_RANGE)
+    ax.set_xlim(DEFAULT_X_RANGE)
 
-  # Plot normalized uncertainty surface.
-  pcm = ax.imshow(
-      np.reshape(test_uncertainty, [DEFAULT_N_GRID, DEFAULT_N_GRID]),
-      cmap=cmap,
-      origin="lower",
-      extent=DEFAULT_X_RANGE + DEFAULT_Y_RANGE,
-      vmin=DEFAULT_NORM.vmin,
-      vmax=DEFAULT_NORM.vmax,
-      interpolation='bicubic',
-      aspect='auto')
+    # Plot normalized uncertainty surface.
+    pcm = ax.imshow(
+        np.reshape(test_uncertainty, [DEFAULT_N_GRID, DEFAULT_N_GRID]),
+        cmap=cmap,
+        origin="lower",
+        extent=DEFAULT_X_RANGE + DEFAULT_Y_RANGE,
+        vmin=DEFAULT_NORM.vmin,
+        vmax=DEFAULT_NORM.vmax,
+        interpolation='bicubic',
+        aspect='auto')
 
-  # Plot training data.
-  ax.scatter(train_examples[:, 0], train_examples[:, 1],
-             c=train_labels, cmap=DEFAULT_CMAP, alpha=0.5)
-  ax.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
+    # Plot training data.
+    ax.scatter(train_examples[:, 0], train_examples[:, 1],
+                c=train_labels, cmap=DEFAULT_CMAP, alpha=0.5)
+    ax.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
 
-  return pcm
+    return pcm
 
 def make_training_data(sample_size=500):
-  """Create two moon training dataset."""
-  train_examples, train_labels = sklearn.datasets.make_moons(
-      n_samples=2 * sample_size, noise=0.1)
+    """Create two moon training dataset."""
+    train_examples, train_labels = sklearn.datasets.make_moons(
+        n_samples=2 * sample_size, noise=0.1)
 
-  # Adjust data position slightly.
-  train_examples[train_labels == 0] += [-0.1, 0.2]
-  train_examples[train_labels == 1] += [0.1, -0.2]
+    # Adjust data position slightly.
+    train_examples[train_labels == 0] += [-0.1, 0.2]
+    train_examples[train_labels == 1] += [0.1, -0.2]
 
-  return train_examples.astype(np.float32), train_labels.astype(np.int32)
+    return train_examples.astype(np.float32), train_labels.astype(np.int32)
 
 def make_testing_data(x_range=DEFAULT_X_RANGE, y_range=DEFAULT_Y_RANGE, n_grid=DEFAULT_N_GRID):
-  """Create a mesh grid in 2D space."""
-  # testing data (mesh grid over data space)
-  x = np.linspace(x_range[0], x_range[1], n_grid).astype(np.float32)
-  y = np.linspace(y_range[0], y_range[1], n_grid).astype(np.float32)
-  xv, yv = np.meshgrid(x, y)
-  return np.stack([xv.flatten(), yv.flatten()], axis=-1)
+    """Create a mesh grid in 2D space."""
+    # testing data (mesh grid over data space)
+    x = np.linspace(x_range[0], x_range[1], n_grid).astype(np.float32)
+    y = np.linspace(y_range[0], y_range[1], n_grid).astype(np.float32)
+    xv, yv = np.meshgrid(x, y)
+    return np.stack([xv.flatten(), yv.flatten()], axis=-1)
 
 def make_ood_data(sample_size=500, means=(2.5, -1.75), vars=(0.01, 0.01)):
-  return np.random.multivariate_normal(
-      means, cov=np.diag(vars), size=sample_size).astype(np.float32)
+    return np.random.multivariate_normal(
+        means, cov=np.diag(vars), size=sample_size).astype(np.float32)
 
 # Load the train, test and OOD datasets.
 train_examples, train_labels = make_training_data(
@@ -137,23 +139,76 @@ if exists:
     resnet.to(device)
 
 if not exists:
-    from ResNetHidden2 import ResNetSPN
-    resnet_config = dict(num_classes=2, input_dim=2, num_layers=6, num_hidden=128)
+    from ResNet import ResNetSPN
+    resnet_config = dict(input_dim=2, output_dim=2, num_layers=6, num_hidden=128)
     resnet = ResNetSPN(**resnet_config)
     print(resnet)
     loss_f = torch.nn.CrossEntropyLoss()
+    epochs = 10
     optimizer = torch.optim.Adam(resnet.parameters(), lr=0.001)
     resnet.to(device)
-    for epoch in range(10):
+    # resnet
+    for epoch in range(5):
+        loss = 0.0
         for data, target in train_dl:
             optimizer.zero_grad()
             target = target.type(torch.LongTensor) 
             data, target = data.to(device), target.to(device)
             output = resnet(data)
-            loss = loss_f(output, target)
-            loss.backward()
+            loss_v = loss_f(output, target)
+            loss += loss_v.item()
+            loss_v.backward()
             optimizer.step()
-        print(f"Epoch {epoch}, loss {loss.item()}")
+        print(f"Epoch {epoch}, loss {loss / len(train_ds)}") 
+    # evaluate
+    resnet.eval()
+    loss = 0.0
+    correct = 0
+    with torch.no_grad():
+        for data, target in train_dl:
+            target = target.type(torch.LongTensor) 
+            data, target = data.to(device), target.to(device)
+            output = resnet(data)
+            loss += loss_f(output, target).item()
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+        loss /= len(train_dl)
+        print(f"Train loss: {loss}")
+        print(f"Train accuracy: {correct / len(train_dl.dataset)}")
+    # collect latent_data
+    latent_train = []
+    with torch.no_grad():
+        for data, target in train_dl:
+            target = target.type(torch.LongTensor) 
+            data, target = data.to(device), target.to(device)
+            output = resnet.forward_latent(data)
+            latent_train.append(output.detach().cpu().numpy())
+        latent_train = np.concatenate(latent_train, axis=0)
+
+    latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32).to(device)
+    train_labels = torch.from_numpy(train_labels).to(dtype=torch.long).to(device)
+    print(latent_train.shape)
+    # switch to einet    
+    # resnet.replace_output_layer(device)
+    einsumExp = EinsumExperiment(device, latent_train.shape[1], out_dim=2)
+    for epoch in range(100):
+        train_ll = EinsumNetwork.eval_loglikelihood_batched(einsumExp.einet, latent_train, train_labels)
+        # test_ll = EinsumNetwork.eval_loglikelihood_batched(einsumExp.einet, test_examples, np.zeros((test_examples.shape[0],)))
+        print(f"Epoch {epoch}, train_ll {train_ll / len(train_ds)}")
+        idx_batches = torch.randperm(latent_train.shape[0]).split(batchsize_einet)
+        for batch_count, idx in enumerate(idx_batches):
+            batch_x = latent_train[idx, :]
+            batch_y = train_labels[idx]
+            outputs = einsumExp.einet(batch_x)
+            ll_sample = EinsumNetwork.log_likelihoods(outputs, batch_y)
+            log_likelihood = ll_sample.sum()
+            objective = log_likelihood
+            objective.backward()
+            einsumExp.einet.em_process_batch()
+        einsumExp.einet.em_update()
+    
+    #evaluate
+    einsumExp.eval(latent_train, train_labels, "Train")
 
     with torch.no_grad():
         resnet.eval()

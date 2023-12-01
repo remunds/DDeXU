@@ -3,14 +3,14 @@ import numpy as np
 from torchvision.models.resnet import ResNet, BasicBlock
 import torch.nn as nn
 
-class ResNetHidden(ResNet):
+class ConvResNet(ResNet):
     """
     ResNet model with ability to return latent space 
     """
-    def __init__(self, *args, **kwargs):
-        super(ResNetHidden, self).__init__(*args, **kwargs)
+    def __init__(self, in_channels, *args, **kwargs):
+        super(ConvResNet, self).__init__(*args, **kwargs)
         # adapt for mnist -> channel=1
-        self.conv1 = torch.nn.Conv2d(1, 64,
+        self.conv1 = torch.nn.Conv2d(in_channels, 64,
             kernel_size=(7, 7),
             stride=(2, 2),
             padding=(3, 3), bias=False)
@@ -25,12 +25,12 @@ class ResNetHidden(ResNet):
         return x
     
 def resnet_from_path(path):
-    resnet = ResNetHidden(BasicBlock, [2, 2, 2, 2], num_classes=10)
+    resnet = ConvResNet(1, BasicBlock, [2, 2, 2, 2], num_classes=10)
     resnet.load(path)
     return resnet
 
 def train_eval_resnet(num_classes, train_dl, test_dl, device, save_dir):
-    resnet = ResNetHidden(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
+    resnet = ConvResNet(1, BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
 
     resnet.to(device)
 

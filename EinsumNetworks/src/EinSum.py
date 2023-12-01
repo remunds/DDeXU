@@ -4,7 +4,7 @@ from EinsumNetwork import Graph, EinsumNetwork
 import os
 
 class EinsumExperiment:
-    def __init__(self, device: str, num_var: int):
+    def __init__(self, device: str, in_dim: int, out_dim: int):
         self.max_num_epochs = 5
         self.batch_size = 100
         self.device = device
@@ -17,18 +17,19 @@ class EinsumExperiment:
         exponential_family = EinsumNetwork.NormalArray
         exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 
-        self.graph = Graph.random_binary_trees(num_var=num_var, depth=depth, num_repetitions=num_repetitions)
+        self.graph = Graph.random_binary_trees(num_var=in_dim, depth=depth, num_repetitions=num_repetitions)
 
         args = EinsumNetwork.Args(
-                num_var=num_var,
+                num_var=in_dim,
                 num_dims=1,
-                num_classes=10,
+                num_classes=out_dim,
                 num_sums=K,
                 num_input_distributions=K,
                 exponential_family=exponential_family,
                 exponential_family_args=exponential_family_args,
                 online_em_frequency=online_em_frequency,
-                online_em_stepsize=online_em_stepsize
+                online_em_stepsize=online_em_stepsize,
+                # use_em=False
                 )
 
         einet = EinsumNetwork.EinsumNetwork(self.graph, args)
@@ -58,6 +59,10 @@ class EinsumExperiment:
         target_test = target_test.to(self.device)
 
         random_input = torch.rand(test.shape[0], test.shape[1]).to(self.device)
+        # TODO: Can not get training via SGD to work...
+        # optimizer = torch.optim.Adam(self.einet.parameters(), lr=0.2)
+        # lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        #     milestones=[int(self.max_num_epochs * 0.3), int(self.max_num_epochs * 0.5), int(self.max_num_epochs * 0.7), int(self.max_num_epochs * 0.9)], optimizer=optimizer, gamma=0.5)
         for epoch_count in range(self.max_num_epochs):
             if epoch_count % 2 == 0:
                 # evaluate
@@ -75,15 +80,19 @@ class EinsumExperiment:
             # train
             idx_batches = torch.randperm(train.shape[0]).split(self.batch_size)
             for batch_count, idx in enumerate(idx_batches):
+                # optimizer.zero_grad()
                 batch_x = train[idx, :]
                 outputs = self.einet.forward(batch_x)
                 ll_sample = EinsumNetwork.log_likelihoods(outputs, target_train[idx])
                 log_likelihood = ll_sample.sum()
                 objective = log_likelihood
                 objective.backward()
+                # loss = F.cross_entropy(outputs, target_train[idx])
+                # loss.backward()
+                # optimizer.step()
                 self.einet.em_process_batch()
             self.einet.em_update()
-
+            # lr_scheduler.step()
         self.store(".")
 
     def eval(self, test: torch.Tensor, target_test: torch.Tensor, name: str):

@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-from ResNetHidden import get_latent_batched, resnet_from_path
+from ConvResNet import get_latent_batched, resnet_from_path
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -114,8 +114,8 @@ if exists:
     resnet.to(device)
 
 if not exists:
-    from ResNetHidden import train_eval_resnet, get_latent_dataset
-    resnet = train_eval_resnet(train_dl, test_dl, device, save_dir=".") 
+    from ConvResNet import train_eval_resnet, get_latent_dataset
+    resnet = train_eval_resnet(10, train_dl, test_dl, device, save_dir=".") 
     latent_train, target_train, latent_test, target_test = get_latent_dataset(train_ds, train_dl, test_ds, test_dl, resnet, device, batchsize_resnet, save_dir=".")
 
 latent_test_manipulated, target_manipulated = get_latent_batched(test_manipulated_dl, manipulated_size, resnet, device, batchsize_resnet, save_dir=".")
