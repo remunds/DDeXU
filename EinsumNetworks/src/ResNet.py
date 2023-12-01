@@ -1,11 +1,21 @@
 import torch.nn as nn
 from EinsumNetwork import Graph, EinsumNetwork
 
+
 class ResNetHidden(nn.Module):
     """
-    ResNet model 
+    ResNet model
     """
-    def __init__(self, input_dim, output_dim, num_layers=3, num_hidden=128, dropout_rate=0.1, **classifier_kwargs):
+
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        num_layers=3,
+        num_hidden=128,
+        dropout_rate=0.1,
+        **classifier_kwargs
+    ):
         super(ResNetHidden, self).__init__()
         # Defines class meta data.
         self.num_hidden = num_hidden
@@ -40,27 +50,26 @@ class ResNetHidden(nn.Module):
     def make_dense_layer(self):
         """Uses the Dense layer as the hidden layer."""
         return nn.Sequential(
-            nn.Linear(self.num_hidden, self.num_hidden),
-            self.activation
+            nn.Linear(self.num_hidden, self.num_hidden), self.activation
         )
 
     def make_output_layer(self):
         """Uses the Dense layer as the output layer."""
         return nn.Linear(self.num_hidden, self.output_dim, **self.classifier_kwargs)
-    
-class ResNetSPN(ResNetHidden):
-#     def __init__(self, spec_norm_bound=0.9, **kwargs):
-#         self.spec_norm_bound = spec_norm_bound
-#         super().__init__(**kwargs)
 
-    def make_dense_layer(self):
-        """applies spectral normalization to the hidden layer."""
-        dense = nn.Linear(self.num_hidden, self.num_hidden)
-        # TODO: this is different to tf, since it does not use the spec_norm_bound...
-        return nn.Sequential(
-            nn.utils.parametrizations.spectral_norm(dense),
-            self.activation
-        )
+
+class ResNetSPN(ResNetHidden):
+    #     def __init__(self, spec_norm_bound=0.9, **kwargs):
+    #         self.spec_norm_bound = spec_norm_bound
+    #         super().__init__(**kwargs)
+
+    # def make_dense_layer(self):
+    #     """applies spectral normalization to the hidden layer."""
+    #     dense = nn.Linear(self.num_hidden, self.num_hidden)
+    #     # TODO: this is different to tf, since it does not use the spec_norm_bound...
+    #     return nn.Sequential(
+    #         nn.utils.parametrizations.spectral_norm(dense), self.activation
+    #     )
 
     def make_output_layer(self):
         """uses einet as the output layer."""
@@ -77,7 +86,7 @@ class ResNetSPN(ResNetHidden):
             hidden = hidden + resid
 
         return hidden
-    
+
     def replace_output_layer(self, device):
         """uses einet as the output layer."""
 
@@ -90,21 +99,23 @@ class ResNetSPN(ResNetHidden):
         online_em_frequency = 1
         online_em_stepsize = 0.05
         exponential_family = EinsumNetwork.NormalArray
-        exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
+        exponential_family_args = {"min_var": 1e-6, "max_var": 0.1}
 
-        self.graph = Graph.random_binary_trees(num_var=self.num_hidden, depth=depth, num_repetitions=num_repetitions)
+        self.graph = Graph.random_binary_trees(
+            num_var=self.num_hidden, depth=depth, num_repetitions=num_repetitions
+        )
 
         args = EinsumNetwork.Args(
-                num_var=self.num_hidden,
-                num_dims=1,
-                num_classes=self.output_dim,
-                num_sums=K,
-                num_input_distributions=K,
-                exponential_family=exponential_family,
-                exponential_family_args=exponential_family_args,
-                online_em_frequency=online_em_frequency,
-                online_em_stepsize=online_em_stepsize
-                )
+            num_var=self.num_hidden,
+            num_dims=1,
+            num_classes=self.output_dim,
+            num_sums=K,
+            num_input_distributions=K,
+            exponential_family=exponential_family,
+            exponential_family_args=exponential_family_args,
+            online_em_frequency=online_em_frequency,
+            online_em_stepsize=online_em_stepsize,
+        )
 
         einet = EinsumNetwork.EinsumNetwork(self.graph, args)
         einet.initialize()
@@ -122,8 +133,7 @@ class ResNetSPNEnd2End(ResNetHidden):
         dense = nn.linear(self.num_hidden, self.num_hidden)
         # todo: this is different to tf, since it does not use the spec_norm_bound...
         return nn.sequential(
-            nn.utils.parametrizations.spectral_norm(dense),
-            self.activation
+            nn.utils.parametrizations.spectral_norm(dense), self.activation
         )
 
     def make_output_layer(self):
@@ -138,21 +148,23 @@ class ResNetSPNEnd2End(ResNetHidden):
         online_em_frequency = 1
         online_em_stepsize = 0.05
         exponential_family = EinsumNetwork.NormalArray
-        exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
+        exponential_family_args = {"min_var": 1e-6, "max_var": 0.1}
 
-        self.graph = Graph.random_binary_trees(num_var=self.num_hidden, depth=depth, num_repetitions=num_repetitions)
+        self.graph = Graph.random_binary_trees(
+            num_var=self.num_hidden, depth=depth, num_repetitions=num_repetitions
+        )
 
         args = EinsumNetwork.Args(
-                num_var=self.num_hidden,
-                num_dims=1,
-                num_classes=self.output_dim,
-                num_sums=K,
-                num_input_distributions=K,
-                exponential_family=exponential_family,
-                exponential_family_args=exponential_family_args,
-                online_em_frequency=online_em_frequency,
-                online_em_stepsize=online_em_stepsize
-                )
+            num_var=self.num_hidden,
+            num_dims=1,
+            num_classes=self.output_dim,
+            num_sums=K,
+            num_input_distributions=K,
+            exponential_family=exponential_family,
+            exponential_family_args=exponential_family_args,
+            online_em_frequency=online_em_frequency,
+            online_em_stepsize=online_em_stepsize,
+        )
 
         einet = EinsumNetwork.EinsumNetwork(self.graph, args)
         einet.initialize()

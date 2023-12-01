@@ -1,0 +1,12 @@
+version: '2'
+services:
+  cuda:
+    build: .
+    container_name: latent_uncert
+    devices:
+      - /dev/nvidiactl
+      - /dev/nvidia-uvm
+      - /dev/nvidia0
+    volumes:
+      - /home/remunds/data_docker:/data_docker
+    tty: true
