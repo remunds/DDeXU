@@ -1,11 +1,11 @@
 import torch
-from EinSum import EinsumExperiment
+# from EinSum import EinsumExperiment
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import sklearn.datasets
 import os
-from EinsumNetwork import EinsumNetwork
+# from EinsumNetwork import EinsumNetwork
 
 from ConvResNet import get_latent_batched, resnet_from_path
 from torch.utils.data import DataLoader
@@ -54,7 +54,11 @@ def plot_uncertainty_surface(test_uncertainty, ax, cmap=None):
         information of the uncertainty plot.
     """
     # Normalize uncertainty for better visualization.
-    test_uncertainty = test_uncertainty / np.max(test_uncertainty)
+    if np.max(test_uncertainty) > 0:
+        test_uncertainty = test_uncertainty / np.max(test_uncertainty)
+    else:
+        test_uncertainty = test_uncertainty / np.min(test_uncertainty)
+
 
     # Set view limits.
     ax.set_ylim(DEFAULT_Y_RANGE)
@@ -163,17 +167,17 @@ if exists:
     resnet.to(device)
 
 if not exists:
-    from ResNet import ResNetSPN
+    from ResNet import ResNetSPNEnd2End
 
     resnet_config = dict(input_dim=2, output_dim=2, num_layers=3, num_hidden=32)
-    resnet = ResNetSPN(**resnet_config)
+    resnet = ResNetSPNEnd2End(**resnet_config)
     print(resnet)
     loss_f = torch.nn.CrossEntropyLoss()
-    epochs = 10
-    optimizer = torch.optim.Adam(resnet.parameters(), lr=0.001)
+    epochs = 50
+    optimizer = torch.optim.Adam(resnet.parameters(), lr=0.03)
     resnet.to(device)
     # resnet
-    for epoch in range(5):
+    for epoch in range(epochs):
         loss = 0.0
         for data, target in train_dl:
             optimizer.zero_grad()
@@ -199,181 +203,45 @@ if not exists:
             correct += pred.eq(target.view_as(pred)).sum().item()
         print(f"Train loss: {loss / len(train_dl.dataset)}")
         print(f"Train accuracy: {correct / len(train_dl.dataset)}")
-    # collect latent_data
-    latent_train = []
-    with torch.no_grad():
-        for data, target in train_dl:
-            target = target.type(torch.LongTensor)
-            data, target = data.to(device), target.to(device)
-            output = resnet.forward_latent(data)
-            latent_train.append(output.detach().cpu().numpy())
-        latent_train = np.concatenate(latent_train, axis=0)
 
-    latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32).to(device)
-    train_labels = torch.from_numpy(train_labels).to(dtype=torch.long).to(device)
-    print(latent_train.shape)
+with torch.no_grad():
+    resnet.eval()
 
-    # switch to einet
-    # resnet.replace_output_layer(device)
+    # get LL's of first 5 training examples
+    pos_ll = resnet(torch.from_numpy(pos_examples[:5]).to(device))
+    print("pos_ll: ", pos_ll) 
+    neg_ll = resnet(torch.from_numpy(neg_examples[:5]).to(device))
+    print("neg_ll: ", neg_ll)
 
-    latent_train = latent_train.cpu().numpy()
-
-    einsumExp = EinsumExperiment(device, latent_train.shape[1], out_dim=2)
-    # train_examples = torch.from_numpy(train_examples).to(dtype=torch.float32).to(device)
-    # train_labels = torch.from_numpy(train_labels).to(dtype=torch.long).to(device)
-    for epoch in range(100):
-        train_ll = EinsumNetwork.eval_loglikelihood_batched(
-            einsumExp.einet, latent_train, train_labels
-        )
-        # train_ll = EinsumNetwork.eval_loglikelihood_batched(
-        #     einsumExp.einet, train_examples, train_labels
-        # )
-        # test_ll = EinsumNetwork.eval_loglikelihood_batched(einsumExp.einet, test_examples, np.zeros((test_examples.shape[0],)))
-        print(f"Epoch {epoch}, train_ll {train_ll / len(latent_train)}")
-        idx_batches = torch.randperm(latent_train.shape[0]).split(batchsize_einet)
-        # idx_batches = torch.randperm(train_examples.shape[0]).split(batchsize_einet)
-        for batch_count, idx in enumerate(idx_batches):
-            batch_x = latent_train[idx, :]
-            batch_y = train_labels[idx]
-            outputs = einsumExp.einet(batch_x)
-            ll_sample = EinsumNetwork.log_likelihoods(outputs, batch_y)
-            log_likelihood = ll_sample.sum()
-            objective = log_likelihood
-            objective.backward()
-            einsumExp.einet.em_process_batch()
-        einsumExp.einet.em_update()
-
-    # evaluate
-    einsumExp.eval(latent_train, train_labels, "Train")
-    # einsumExp.eval(train_examples, train_labels, "Train")
-
-    with torch.no_grad():
-        resnet.eval()
-        resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
-        resnet_probs = torch.nn.functional.softmax(resnet_logits, dim=1)[:, 0]
-        resnet_probs = resnet_probs.cpu().numpy()
-        _, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(resnet_probs, ax=ax)
-
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Class Probability, SPN model")
-        plt.savefig(f"{result_dir}two_moons_SPN.png")
-
-        resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
-        _, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Uncertainty, SPN Model")
-        plt.savefig(f"{result_dir}two_moons_SPN_uncertainty.png")
-
-exit()
-###############################################################################
-
-latent_test_manipulated, target_manipulated = get_latent_batched(
-    test_manipulated_dl,
-    manipulated_size,
-    resnet,
-    device,
-    batchsize_resnet,
-    save_dir=".",
-)
-# latent_test_K, target_test_K = get_latent_batched(test_dl_K, test_ds_K.data.shape[0], resnet, device, batchsize_resnet, save_dir=".")
-# latent_test_F, target_test_F = get_latent_batched(test_dl_F, test_ds_F.data.shape[0], resnet, device, batchsize_resnet, save_dir=".")
-
-# train_small_mlp(latent_train, target_train, latent_test, target_test, device, batchsize_resnet)
+    # get LL's 5 ood examples
+    ood_ll = resnet(torch.from_numpy(ood_examples[:5]).to(device))
+    print("ood_ll: ", ood_ll)
 
 
-# normalize and zero-center latent space -> leads to higher accuracy and stronger LL's, but also works without
-latent_train /= latent_train.max()
-latent_test /= latent_test.max()
-latent_test_manipulated /= latent_test_manipulated.max()
-latent_train -= 0.5
-latent_test -= 0.5
-latent_test_manipulated -= 0.5
 
-# latent_test_K /= latent_test_K.max()
-# latent_test_F /= latent_test_F.max()
-# latent_test_K -= .5
-# latent_test_F -= .5
+    resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
+    resnet_probs = torch.nn.functional.softmax(resnet_logits, dim=1)[:, 0]
+    resnet_probs = resnet_probs.cpu().numpy()
+    _, ax = plt.subplots(figsize=(7, 5.5))
+    pcm = plot_uncertainty_surface(resnet_probs, ax=ax)
 
-latent_train = torch.from_numpy(latent_train).to(dtype=torch.float32)  # (N, 512)
-target_train = torch.from_numpy(target_train).to(dtype=torch.long)
-latent_test = torch.from_numpy(latent_test).to(dtype=torch.float32)
-target_test = torch.from_numpy(target_test).to(dtype=torch.long)
+    plt.colorbar(pcm, ax=ax)
+    plt.title("Class Probability, SPN model")
+    plt.savefig(f"{result_dir}two_moons_SPN.png")
 
-# add explain-variables cutoffs and noises to latent space
-# train_cutoffs = np.zeros((latent_train.shape[0], 1))
-test_cutoffs = np.zeros((latent_test.shape[0], 1))
-# train_noises = np.zeros((latent_train.shape[0], 1))
-test_noises = np.zeros((latent_test.shape[0], 1))
-latent_train = torch.cat(
-    (
-        latent_train,
-        torch.from_numpy(train_cutoffs).to(dtype=torch.float32).unsqueeze(1),
-        torch.from_numpy(train_noises).to(dtype=torch.float32).unsqueeze(1),
-    ),
-    dim=1,
-)
-latent_test = torch.cat(
-    (
-        latent_test,
-        torch.from_numpy(test_cutoffs).to(dtype=torch.float32),
-        torch.from_numpy(test_noises).to(dtype=torch.float32),
-    ),
-    dim=1,
-)
+    resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
+    _, ax = plt.subplots(figsize=(7, 5.5))
+    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
+    plt.colorbar(pcm, ax=ax)
+    plt.title("Predictive Uncertainty, SPN Model")
+    plt.savefig(f"{result_dir}two_moons_SPN_uncertainty.png")
 
-
-einsumExp = EinsumExperiment(device, latent_train.shape[1])
-exists = not newExp and os.path.isfile("einet.mdl") and os.path.isfile("einet.pc")
-if exists:
-    einsumExp.load("./")
-else:
-    einsumExp.train_eval(latent_train, target_train, latent_test, target_test)
-
-einsumExp.eval(latent_train, target_train, "Train Manipulated")
-einsumExp.eval(latent_test, target_test, "Test")
-
-latent_test_manipulated = torch.from_numpy(latent_test_manipulated).to(
-    dtype=torch.float32
-)
-
-# cutoffs shape = (N,), noises shape = (N,), latent_test_manipulated shape = (N, 512)
-# concat on dim=1 s.t. latent_test_manipulated shape = (N, 514)
-latent_test_manipulated = torch.cat(
-    (
-        latent_test_manipulated,
-        torch.from_numpy(test_manipulated_cutoffs).to(dtype=torch.float32).unsqueeze(1),
-        torch.from_numpy(test_manipulated_noises).to(dtype=torch.float32).unsqueeze(1),
-    ),
-    dim=1,
-)
-
-target_manipulated = torch.from_numpy(target_manipulated).to(dtype=torch.long)
-einsumExp.eval(latent_test_manipulated, target_manipulated, "Manipulated")
-
-exp_vars = [512, 513]
-exp_vals = einsumExp.explain_mpe(latent_test_manipulated[:5], exp_vars, "Manipulated")
-print("exp_vals: ", exp_vals[:5])
-print("orig: ", latent_test_manipulated[:5, exp_vars])
-
-exp_vars = [512]
-full_ll, marginal_ll = einsumExp.explain_ll(
-    latent_test_manipulated, exp_vars, "Manipulated"
-)
-print("full_ll: ", full_ll)
-print("marginal_ll_cutoff: ", marginal_ll)
-
-exp_vars = [513]
-full_ll, marginal_ll = einsumExp.explain_ll(
-    latent_test_manipulated, exp_vars, "Manipulated"
-)
-print("marginal_ll_noise: ", marginal_ll)
-
-# latent_test_K = torch.from_numpy(latent_test_K).to(dtype=torch.float32)
-# target_test_K = torch.from_numpy(target_test_K).to(dtype=torch.long)
-# einsumExp.eval(latent_test_K, target_test_K, "KMNIST")
-
-# latent_test_F = torch.from_numpy(latent_test_F).to(dtype=torch.float32)
-# target_test_F = torch.from_numpy(target_test_F).to(dtype=torch.long)
-# einsumExp.eval(latent_test_F, target_test_F, "FashionMNIST")
+    resnet_uncertainty = resnet_logits.cpu().numpy()[:, 0]  # predictive variance
+    # normalize
+    # resnet_uncertainty = resnet_uncertainty / np.min(resnet_uncertainty)
+    print(resnet_uncertainty[:5])
+    _, ax = plt.subplots(figsize=(7, 5.5))
+    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
+    plt.colorbar(pcm, ax=ax)
+    plt.title("LL Uncertainty, SPN Model")
+    plt.savefig(f"{result_dir}two_moons_SPN_ll_uncertainty.png")

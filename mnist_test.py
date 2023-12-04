@@ -62,7 +62,7 @@ manipulated_size = 3200
 test_manipulated = test_ds.data[:manipulated_size].numpy().copy()
 # test_manipulated = manipulate_mnist(test_manipulated, 0, 0.8)
 test_manipulated, test_manipulated_cutoffs, test_manipulated_noises = manipulate_mnist(
-    test_manipulated, 20, 0.0
+    test_manipulated, 10, 0.7
 )
 test_manipulated = [ToTensor()(img) for img in test_manipulated]
 test_manipulated_target = test_ds.targets[:manipulated_size].numpy().copy()
@@ -331,16 +331,32 @@ print("LL on ood test set: ", log_likelihood(model, ood))
 
 mpe_input = latent_test_manipulated[:5]
 # mpe_input[:, -2:] = 0.0#np.nan
+
+def explain_ll_batched(model, X, marginalized_scopes):
+    with torch.no_grad():
+        ll = 0
+        for i in range(0, X.shape[0], batchsize_resnet):
+            data = X[i : i + batchsize_resnet].to(device)
+            ll += model(data, marginalized_scopes=marginalized_scopes).mean()
+        return ll / (X.shape[0] / batchsize_resnet)
+
+# MPE explanations
 marginalized_scopes = [512, 513]
 mpe_input = mpe_input.to(device)
 print(mpe_input.shape)
-sample_out = model.sample(evidence=mpe_input, marginalized_scopes=marginalized_scopes)
-mpe_leave_out = model.sample(evidence=mpe_input, marginalized_scopes=marginalized_scopes, mpe_at_leaves=True)
 mpe_out = model.mpe(evidence=mpe_input, marginalized_scopes=marginalized_scopes)
-print("before: ", mpe_input[:5, marginalized_scopes])
-print("sample_out: ", sample_out[:5, marginalized_scopes])
-print("mpe_leave_out: ", mpe_leave_out[:5, marginalized_scopes])
-print("mpe_out: ", mpe_out[:5, marginalized_scopes])
+print("before: ", mpe_input[:, marginalized_scopes])
+print("mpe_out: ", mpe_out[:, marginalized_scopes])
+
+# LL explanations
+marginalized_scopes = [512]
+no_cutoff_ll = explain_ll_batched(model, latent_test_manipulated.to(device), marginalized_scopes=marginalized_scopes)
+print("no_cutoff_ll: ", no_cutoff_ll)
+
+marginalized_scopes = [513]
+no_noise_ll = explain_ll_batched(model, latent_test_manipulated.to(device), marginalized_scopes=marginalized_scopes)
+print("no_noise_ll: ", no_noise_ll)
+
 
 # cutoffs shape = (N,), noises shape = (N,), latent_test_manipulated shape = (N, 512)
 # concat on dim=1 s.t. latent_test_manipulated shape = (N, 514)
