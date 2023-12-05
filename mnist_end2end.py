@@ -1,21 +1,15 @@
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 import os
 
 from torchvision.datasets import MNIST, KMNIST, FashionMNIST
 from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader
 
-from ConvResNet import get_latent_batched, resnet_from_path
-
-from simple_einet.einet import EinetConfig, Einet
-from simple_einet.layers.distributions.normal import Normal
-
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# newExp = True
-newExp = False
+newExp = True
+# newExp = False
 
 # according to DDU: MNIST: id, Dirty-MNIST: id (high aleatoric), Fashion-MNIST: ood (high epistemic)
 # for them: softmax entropy captures aleatoric, density-estimator captures epistemic
@@ -65,40 +59,51 @@ manipulated_size = 3200
 test_manipulated = test_ds.data[:manipulated_size].numpy().copy()
 # test_manipulated = manipulate_mnist(test_manipulated, 0, 0.8)
 test_manipulated, test_manipulated_cutoffs, test_manipulated_noises = manipulate_mnist(
-    test_manipulated, 15, 0.6
+    test_manipulated, 17, 0.0
 )
-test_manipulated = [ToTensor()(img) for img in test_manipulated]
+test_manipulated_cutoffs = torch.from_numpy(test_manipulated_cutoffs).view(-1, 1)
+test_manipulated_noises = torch.from_numpy(test_manipulated_noises).view(-1, 1)
+test_manipulated = [ToTensor()(img).flatten() for img in test_manipulated]
+test_manipulated = torch.concat(
+    [
+        test_manipulated_cutoffs,
+        test_manipulated_noises,
+        torch.stack(test_manipulated),
+    ],
+    dim=1,
+).to(dtype=torch.float32)
 test_manipulated_target = test_ds.targets[:manipulated_size].numpy().copy()
 test_manipulated_target = [torch.tensor(target) for target in test_manipulated_target]
 test_manipulated_ds = list(zip(test_manipulated, test_manipulated_target))
 
-plt.imshow(test_manipulated_ds[0][0][0])
-plt.savefig("test_manipulated.png")
-plt.imshow(test_manipulated_ds[1][0][0])
-plt.savefig("test_manipulated1.png")
-plt.imshow(test_manipulated_ds[2][0][0])
-plt.savefig("test_manipulated2.png")
-print(
-    "test_manipulated_target: ",
-    test_manipulated_ds[0][1],
-    test_manipulated_ds[1][1],
-    test_manipulated_ds[2][1],
-)
+# plt.imshow(test_manipulated_ds[0][0][0])
+# plt.savefig("test_manipulated.png")
+# plt.imshow(test_manipulated_ds[1][0][0])
+# plt.savefig("test_manipulated1.png")
+# plt.imshow(test_manipulated_ds[2][0][0])
+# plt.savefig("test_manipulated2.png")
+# print(
+#     "test_manipulated_target: ",
+#     test_manipulated_ds[0][1],
+#     test_manipulated_ds[1][1],
+#     test_manipulated_ds[2][1],
+# )
 
-# also show original
-plt.imshow(test_ds.data[0])
-plt.savefig("test_original.png")
-
-# show kmnist
-# plt.imshow(test_ds_K.data[0])
-# plt.savefig("test_original_K.png")
+# # also show original
+# plt.imshow(test_ds.data[0])
+# plt.savefig("test_original.png")
 
 #### Also manipulate train data, but less intensely
 train_manipulated = train_ds.data.numpy().copy()
 train_manipulated, train_cutoffs, train_noises = manipulate_mnist(
-    train_manipulated, 12, 0.4
+    train_manipulated, 10, 0.2
 )
-train_manipulated = [ToTensor()(img) for img in train_manipulated]
+train_cutoffs = torch.from_numpy(train_cutoffs).view(-1, 1)
+train_noises = torch.from_numpy(train_noises).view(-1, 1)
+train_manipulated = [ToTensor()(img).flatten() for img in train_manipulated]
+train_manipulated = torch.concat(
+    [train_cutoffs, train_noises, torch.stack(train_manipulated)], dim=1
+).to(dtype=torch.float32)
 train_manipulated_target = train_ds.targets.numpy().copy()
 train_manipulated_target = [torch.tensor(target) for target in train_manipulated_target]
 train_manipulated_ds = list(zip(train_manipulated, train_manipulated_target))
@@ -108,8 +113,22 @@ train_manipulated_ds = list(zip(train_manipulated, train_manipulated_target))
 train_dl = DataLoader(
     train_ds, batch_size=batchsize_resnet, shuffle=True, pin_memory=True, num_workers=1
 )
+test_ds_complete = [ToTensor()(img).flatten() for img in test_ds.data.numpy().copy()]
+test_cutoffs = torch.zeros((len(test_ds_complete), 1))
+test_noises = torch.zeros((len(test_ds_complete), 1))
+test_ds_complete = torch.concat(
+    [
+        test_cutoffs,
+        test_noises,
+        torch.stack(test_ds_complete),
+    ],
+    dim=1,
+).to(dtype=torch.float32)
+test_ds_target = test_ds.targets.numpy().copy()
+test_ds_complete = list(zip(test_ds_complete, test_ds_target))
+
 test_dl = DataLoader(
-    test_ds, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
+    test_ds_complete, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
 )
 test_manipulated_dl = DataLoader(
     test_manipulated_ds, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
@@ -122,8 +141,23 @@ train_manipulated_dl = DataLoader(
     num_workers=1,
 )
 train_dl = train_manipulated_dl
+
+test_k = [ToTensor()(img).flatten() for img in test_ds_K.data.numpy().copy()]
+test_k_cutoffs = torch.zeros((len(test_k), 1))
+test_k_noises = torch.zeros((len(test_k), 1))
+test_k = torch.concat(
+    [
+        test_k_cutoffs,
+        test_k_noises,
+        torch.stack(test_k),
+    ],
+    dim=1,
+).to(dtype=torch.float32)
+test_k_target = test_ds_K.targets.numpy().copy()
+test_k = list(zip(test_k, test_k_target))
+
 test_dl_K = DataLoader(
-    test_ds_K, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
+    test_k, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
 )
 # test_dl_F = DataLoader(test_ds_F, batch_size=batchsize_resnet, pin_memory=True, num_workers=1)
 
@@ -131,10 +165,15 @@ test_dl_K = DataLoader(
 print("done loading data")
 
 ###############################################################################
-from ConvResNet import ResidualBlockSN, ResNetSPN
+from ResNetSPN import ResidualBlockSN, ConvResNetSPN, BottleNeckSN
 
-resnet_spn = ResNetSPN(
-    ResidualBlockSN, [2, 2, 2, 2], num_classes=10, spec_norm_bound=0.9
+resnet_spn = ConvResNetSPN(
+    ResidualBlockSN,
+    [2, 2, 2, 2],
+    num_classes=10,
+    image_shape=(1, 28, 28),
+    explaining_vars=[0, 1],
+    spec_norm_bound=0.9,
 )
 resnet_spn = resnet_spn.to(device)
 
@@ -153,7 +192,9 @@ if not exists or newExp:
             labels = labels.to(device)
             optimizer.zero_grad()
             outputs = resnet_spn(images)
-            loss_v = loss_fn(outputs, labels)
+            loss_CE = loss_fn(outputs, labels)
+            # loss_v = 10 * loss_CE + -outputs.mean()
+            loss_v = loss_CE
             loss_v.backward()
             loss += loss_v.item()
             optimizer.step()
@@ -163,140 +204,36 @@ else:
     resnet_spn.load_state_dict(torch.load("resnet_spn.pt"))
     print("loaded resnet_spn.pt")
 
-
-def eval_acc(model, dl):
-    model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for images, labels in dl:
-            images = images.to(device)
-            labels = labels.to(device)
-            outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum()
-    return correct.item() / total
-
-
-def eval_ll(model, dl):
-    model.eval()
-    ll_total = 0
-    total = 0
-    with torch.no_grad():
-        for images, labels in dl:
-            images = images.to(device)
-            labels = labels.to(device)
-            total += labels.size(0)
-            ll = model(images)
-            ll_total += ll.mean()
-    return ll_total / total
-
-
-def eval_pred_softmax(model, dl):
-    model.eval()
-    softmax_total = 0
-    total = 0
-    with torch.no_grad():
-        for images, labels in dl:
-            images = images.to(device)
-            labels = labels.to(device)
-            total += labels.size(0)
-            pred_logit = model(images)
-            pred = torch.softmax(pred_logit, dim=1)
-            softmax_total += torch.max(pred, dim=1)[0].mean()
-    return softmax_total / total
-
-
-def eval_variance(model, dl):
-    model.eval()
-    pred_var_total = 0
-    total = 0
-    with torch.no_grad():
-        for images, labels in dl:
-            images = images.to(device)
-            labels = labels.to(device)
-            total += labels.size(0)
-            pred_logit = model(images)
-            pred = torch.softmax(pred_logit, dim=1)
-            pred_var = torch.var(pred, dim=1).mean()
-            pred_var_total += pred_var
-    return pred_var_total / total
-
-
-def eval_pred_variance(model, dl):
-    model.eval()
-    pred_var_total = 0
-    total = 0
-    with torch.no_grad():
-        for images, labels in dl:
-            images = images.to(device)
-            labels = labels.to(device)
-            total += labels.size(0)
-            pred_logit = model(images)
-            pred = torch.softmax(pred_logit, dim=1)
-            pred = torch.max(pred, dim=1)[0]
-            pred_var = pred * (1 - pred)
-            pred_var_total += pred_var.mean()
-    return pred_var_total / total
-
-
 # eval accuracies
-train_acc = eval_acc(resnet_spn, train_dl)
-print("train accuracy: ", train_acc)
-test_acc = eval_acc(resnet_spn, test_dl)
-print("test accuracy: ", test_acc)
-test_manipulated_acc = eval_acc(resnet_spn, test_manipulated_dl)
-print("test_manipulated accuracy: ", test_manipulated_acc)
+print("train acc: ", resnet_spn.eval_acc(train_dl, device))
+print("test acc: ", resnet_spn.eval_acc(test_dl, device))
+print("test_manipulated acc: ", resnet_spn.eval_acc(test_manipulated_dl, device))
+print("test_K acc: ", resnet_spn.eval_acc(test_dl_K, device))
 
-# eval LL's
-train_ll = eval_ll(resnet_spn, train_dl)
-print("train_ll: ", train_ll)
-test_ll = eval_ll(resnet_spn, test_dl)
-print("test_ll: ", test_ll)
-test_manipulated_ll = eval_ll(resnet_spn, test_manipulated_dl)
-print("test_manipulated_ll: ", test_manipulated_ll)
-ood_ll = eval_ll(resnet_spn, test_dl_K)
-print("ood_ll: ", ood_ll)
-random_data = torch.randn_like(test_manipulated[0])
-random_target = torch.tensor([0])
-random_ds = list(zip([random_data], [random_target]))
-random_dl = DataLoader(random_ds, batch_size=1, pin_memory=True, num_workers=1)
-random_ll = eval_ll(resnet_spn, random_dl)
-print("random_ll: ", random_ll)
+# eval ll's
+print("train ll: ", resnet_spn.eval_ll(train_dl, device))
+print("test ll: ", resnet_spn.eval_ll(test_dl, device))
+print("test_manipulated ll: ", resnet_spn.eval_ll(test_manipulated_dl, device))
+print("test_K ll: ", resnet_spn.eval_ll(test_dl_K, device))
 
-# eval softmax
-train_pred_softmax = eval_pred_softmax(resnet_spn, train_dl)
-print("train_pred_softmax: ", train_pred_softmax)
-test_pred_softmax = eval_pred_softmax(resnet_spn, test_dl)
-print("test_pred_softmax: ", test_pred_softmax)
-test_manipulated_pred_softmax = eval_pred_softmax(resnet_spn, test_manipulated_dl)
-print("test_manipulated_pred_softmax: ", test_manipulated_pred_softmax)
-ood_pred_softmax = eval_pred_softmax(resnet_spn, test_dl_K)
-print("ood_pred_softmax: ", ood_pred_softmax)
-random_pred_softmax = eval_pred_softmax(resnet_spn, random_dl)
-print("random_pred_softmax: ", random_pred_softmax)
+# eval predictive variance
+print("train pred var: ", resnet_spn.eval_pred_variance(train_dl, device))
+print("test pred var: ", resnet_spn.eval_pred_variance(test_dl, device))
+print(
+    "test_manipulated pred var: ",
+    resnet_spn.eval_pred_variance(test_manipulated_dl, device),
+)
+print("test_K pred var: ", resnet_spn.eval_pred_variance(test_dl_K, device))
 
-# eval variance
-train_variance = eval_variance(resnet_spn, train_dl)
-print("train_variance: ", train_variance)
-test_variance = eval_variance(resnet_spn, test_dl)
-print("test_variance: ", test_variance)
-test_manipulated_variance = eval_variance(resnet_spn, test_manipulated_dl)
-print(test_manipulated_variance)
-ood_variance = eval_variance(resnet_spn, test_dl_K)
-print("ood_variance: ", ood_variance)
-random_variance = eval_variance(resnet_spn, random_dl)
-print("random_variance: ", random_variance)
+# eval predictive entropy
+print("train pred entropy: ", resnet_spn.eval_pred_entropy(train_dl, device))
+print("test pred entropy: ", resnet_spn.eval_pred_entropy(test_dl, device))
+print(
+    "test_manipulated pred entropy: ",
+    resnet_spn.eval_pred_entropy(test_manipulated_dl, device),
+)
+print("test_K pred entropy: ", resnet_spn.eval_pred_entropy(test_dl_K, device))
 
-# eval pred_variance
-train_pred_variance = eval_pred_variance(resnet_spn, train_dl)
-print("train_pred_variance: ", train_pred_variance)
-test_pred_variance = eval_pred_variance(resnet_spn, test_dl)
-print("test_pred_variance: ", test_pred_variance)
-test_manipulated_pred_variance = eval_pred_variance(resnet_spn, test_manipulated_dl)
-print("test_manipulated_pred_variance: ", test_manipulated_pred_variance)
-ood_pred_variance = eval_pred_variance(resnet_spn, test_dl_K)
-print("ood_pred_variance: ", ood_pred_variance)
-random_pred_variance = eval_pred_variance(resnet_spn, random_dl)
-print("random_pred_variance: ", random_pred_variance)
+# explain via LL
+explanations = resnet_spn.explain_ll(test_manipulated_dl, device)
+print("LL explanations: ", explanations)

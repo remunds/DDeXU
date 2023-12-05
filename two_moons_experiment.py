@@ -1,13 +1,10 @@
 import torch
-# from EinSum import EinsumExperiment
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import sklearn.datasets
-import os
-# from EinsumNetwork import EinsumNetwork
 
-from ConvResNet import get_latent_batched, resnet_from_path
 from torch.utils.data import DataLoader
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -58,7 +55,6 @@ def plot_uncertainty_surface(test_uncertainty, ax, cmap=None):
         test_uncertainty = test_uncertainty / np.max(test_uncertainty)
     else:
         test_uncertainty = test_uncertainty / np.min(test_uncertainty)
-
 
     # Set view limits.
     ax.set_ylim(DEFAULT_Y_RANGE)
@@ -147,77 +143,31 @@ train_dl = DataLoader(
 )
 
 ###############################################################################
-exists = (
-    not newExp
-    and os.path.isfile(f"{result_dir}latent_train.npy")
-    and os.path.isfile(f"{result_dir}latent_test.npy")
-    and os.path.isfile(f"{result_dir}target_train.npy")
-    and os.path.isfile(f"{result_dir}target_test.npy")
-    and os.path.isfile(f"{result_dir}resnet.pt")
-)
+from ResNetSPN import DenseResNetSPN
 
-if exists:
-    print("loading latent dataset")
-    latent_train = np.load(f"{result_dir}latent_train.npy")
-    target_train = np.load(f"{result_dir}target_train.npy")
-    latent_test = np.load(f"{result_dir}latent_test.npy")
-    target_test = np.load(f"{result_dir}target_test.npy")
-    print("Latent train dataset shape: ", latent_train.shape)
-    resnet = resnet_from_path(f"{result_dir}resnet.pt")
-    resnet.to(device)
-
-if not exists:
-    from ResNet import ResNetSPNEnd2End
-
-    resnet_config = dict(input_dim=2, output_dim=2, num_layers=3, num_hidden=32)
-    resnet = ResNetSPNEnd2End(**resnet_config)
-    print(resnet)
-    loss_f = torch.nn.CrossEntropyLoss()
-    epochs = 50
-    optimizer = torch.optim.Adam(resnet.parameters(), lr=0.03)
-    resnet.to(device)
-    # resnet
-    for epoch in range(epochs):
-        loss = 0.0
-        for data, target in train_dl:
-            optimizer.zero_grad()
-            target = target.type(torch.LongTensor)
-            data, target = data.to(device), target.to(device)
-            output = resnet(data)
-            loss_v = loss_f(output, target)
-            loss += loss_v.item()
-            loss_v.backward()
-            optimizer.step()
-        print(f"Epoch {epoch}, loss {loss / len(train_dl.dataset)}")
-    # evaluate
-    resnet.eval()
-    loss = 0.0
-    correct = 0
-    with torch.no_grad():
-        for data, target in train_dl:
-            target = target.type(torch.LongTensor)
-            data, target = data.to(device), target.to(device)
-            output = resnet(data)
-            loss += loss_f(output, target).item()
-            pred = output.argmax(dim=1, keepdim=True)
-            correct += pred.eq(target.view_as(pred)).sum().item()
-        print(f"Train loss: {loss / len(train_dl.dataset)}")
-        print(f"Train accuracy: {correct / len(train_dl.dataset)}")
+resnet_config = dict(input_dim=2, output_dim=2, num_layers=3, num_hidden=32)
+resnet = DenseResNetSPN(**resnet_config)
+print(resnet)
+epochs = 50
+optimizer = torch.optim.Adam(resnet.parameters(), lr=0.03)
+resnet.to(device)
+# resnet
+resnet.start_train(train_dl, device, optimizer, 1, epochs)
+# evaluate
+print("accuracy: ", resnet.eval_acc(train_dl, device))
 
 with torch.no_grad():
     resnet.eval()
 
     # get LL's of first 5 training examples
     pos_ll = resnet(torch.from_numpy(pos_examples[:5]).to(device))
-    print("pos_ll: ", pos_ll) 
+    print("pos_ll: ", pos_ll)
     neg_ll = resnet(torch.from_numpy(neg_examples[:5]).to(device))
     print("neg_ll: ", neg_ll)
 
     # get LL's 5 ood examples
     ood_ll = resnet(torch.from_numpy(ood_examples[:5]).to(device))
     print("ood_ll: ", ood_ll)
-
-
 
     resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
     resnet_probs = torch.nn.functional.softmax(resnet_logits, dim=1)[:, 0]
