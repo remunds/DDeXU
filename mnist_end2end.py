@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-newExp = True
-# newExp = False
+# newExp = True
+newExp = False
 
 # according to DDU: MNIST: id, Dirty-MNIST: id (high aleatoric), Fashion-MNIST: ood (high epistemic)
 # for them: softmax entropy captures aleatoric, density-estimator captures epistemic
@@ -59,7 +59,7 @@ manipulated_size = 3200
 test_manipulated = test_ds.data[:manipulated_size].numpy().copy()
 # test_manipulated = manipulate_mnist(test_manipulated, 0, 0.8)
 test_manipulated, test_manipulated_cutoffs, test_manipulated_noises = manipulate_mnist(
-    test_manipulated, 17, 0.0
+    test_manipulated, 18, 0.2
 )
 test_manipulated_cutoffs = torch.from_numpy(test_manipulated_cutoffs).view(-1, 1)
 test_manipulated_noises = torch.from_numpy(test_manipulated_noises).view(-1, 1)
@@ -182,26 +182,10 @@ if not exists or newExp:
     print("training resnet_spn")
     optimizer = torch.optim.Adam(resnet_spn.parameters(), lr=0.01)
     loss_fn = torch.nn.CrossEntropyLoss()
-
-    # start training
-    epochs = 5
-    for epoch in range(epochs):
-        loss = 0
-        for i, (images, labels) in enumerate(train_dl):
-            images = images.to(device)
-            labels = labels.to(device)
-            optimizer.zero_grad()
-            outputs = resnet_spn(images)
-            loss_CE = loss_fn(outputs, labels)
-            # loss_v = 10 * loss_CE + -outputs.mean()
-            loss_v = loss_CE
-            loss_v.backward()
-            loss += loss_v.item()
-            optimizer.step()
-        print("epoch: ", epoch, " loss: ", loss / len(train_dl))
-    torch.save(resnet_spn.state_dict(), "resnet_spn.pt")
+    resnet_spn.start_train(train_dl, device, optimizer, 1, 5)
+    resnet_spn.save("resnet_spn.pt")
 else:
-    resnet_spn.load_state_dict(torch.load("resnet_spn.pt"))
+    resnet_spn.load("resnet_spn.pt")
     print("loaded resnet_spn.pt")
 
 # eval accuracies
@@ -216,24 +200,39 @@ print("test ll: ", resnet_spn.eval_ll(test_dl, device))
 print("test_manipulated ll: ", resnet_spn.eval_ll(test_manipulated_dl, device))
 print("test_K ll: ", resnet_spn.eval_ll(test_dl_K, device))
 
-# eval predictive variance
-print("train pred var: ", resnet_spn.eval_pred_variance(train_dl, device))
-print("test pred var: ", resnet_spn.eval_pred_variance(test_dl, device))
+# eval dempster shafer
+print("train ds: ", resnet_spn.eval_dempster_shafer(train_dl, device))
+print("test ds: ", resnet_spn.eval_dempster_shafer(test_dl, device))
 print(
-    "test_manipulated pred var: ",
-    resnet_spn.eval_pred_variance(test_manipulated_dl, device),
+    "test_manipulated ds: ",
+    resnet_spn.eval_dempster_shafer(test_manipulated_dl, device),
 )
-print("test_K pred var: ", resnet_spn.eval_pred_variance(test_dl_K, device))
+print("test_K ds: ", resnet_spn.eval_dempster_shafer(test_dl_K, device))
 
-# eval predictive entropy
-print("train pred entropy: ", resnet_spn.eval_pred_entropy(train_dl, device))
-print("test pred entropy: ", resnet_spn.eval_pred_entropy(test_dl, device))
-print(
-    "test_manipulated pred entropy: ",
-    resnet_spn.eval_pred_entropy(test_manipulated_dl, device),
-)
-print("test_K pred entropy: ", resnet_spn.eval_pred_entropy(test_dl_K, device))
+# # eval predictive variance
+# print("train pred var: ", resnet_spn.eval_pred_variance(train_dl, device))
+# print("test pred var: ", resnet_spn.eval_pred_variance(test_dl, device))
+# print(
+#     "test_manipulated pred var: ",
+#     resnet_spn.eval_pred_variance(test_manipulated_dl, device),
+# )
+# print("test_K pred var: ", resnet_spn.eval_pred_variance(test_dl_K, device))
+
+# # eval predictive entropy
+# print("train pred entropy: ", resnet_spn.eval_pred_entropy(train_dl, device))
+# print("test pred entropy: ", resnet_spn.eval_pred_entropy(test_dl, device))
+# print(
+#     "test_manipulated pred entropy: ",
+#     resnet_spn.eval_pred_entropy(test_manipulated_dl, device),
+# )
+# print("test_K pred entropy: ", resnet_spn.eval_pred_entropy(test_dl_K, device))
 
 # explain via LL
 explanations = resnet_spn.explain_ll(test_manipulated_dl, device)
 print("LL explanations: ", explanations)
+
+# explain via MPE
+small_test_manip = test_manipulated_dl.dataset[:10]
+small_test_manip_dl = DataLoader(small_test_manip, batch_size=2)
+explanations = resnet_spn.explain_mpe(small_test_manip_dl, device)
+print("MPE explanations: ", explanations)

@@ -5,14 +5,17 @@ import torch.nn as nn
 from spectral_normalization import spectral_norm
 from simple_einet.einet import EinetConfig, Einet
 from simple_einet.layers.distributions.normal import Normal
+from tqdm import tqdm
 
 
 class EinetUtils:
-    def start_train(self, dl, device, optimizer, lambda_v, num_epochs=1):
+    def start_train(
+        self, dl, device, optimizer, lambda_v, num_epochs=1, lr_schedule=None
+    ):
         self.train()
         for epoch in range(num_epochs):
             loss = 0.0
-            for data, target in dl:
+            for data, target in tqdm(dl):
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
@@ -24,7 +27,15 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
+            if lr_schedule is not None:
+                lr_schedule.step()
             print(f"Epoch {epoch}, loss {loss / len(dl.dataset)}")
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
 
     def eval_acc(self, dl, device):
         self.eval()
@@ -84,6 +95,34 @@ class EinetUtils:
                 pred_entropy_total += pred_entropy.mean().item()
         return pred_entropy_total / total
 
+    def eval_dempster_shafer(self, dl, device):
+        """
+        SNGP: better for distance aware models, where
+        magnitude of logits reflects distance from observed data manifold
+        """
+        num_classes = self.einet.config.num_classes
+        self.eval()
+        total = 0
+        uncertainties = []
+        with torch.no_grad():
+            for data in dl:
+                data = data.to(device)
+                total += data.size(0)
+                lls = self(data)
+                # assumes negative log likelihoods
+                # not really sure if normalizing even makes sense
+                # but without, values are always 1(-) or 0(+)
+                # lls_norm = lls / torch.min(lls, dim=1)[0].unsqueeze(1)
+                lls_norm = lls - torch.mean(lls, dim=1).unsqueeze(1)
+                lls_norm = lls_norm / torch.max(torch.abs(lls_norm), dim=1)[
+                    0
+                ].unsqueeze(1)
+                uncertainty = num_classes / (
+                    num_classes + torch.sum(torch.exp(lls_norm), dim=1)
+                )
+                uncertainties.append(uncertainty)
+        return torch.cat(uncertainties, dim=0).cpu().numpy()
+
     def explain_ll(self, dl, device):
         """
         Check each explaining variable individually.
@@ -99,7 +138,38 @@ class EinetUtils:
         self.marginalized_scopes = None
         return explanations
 
-    # def explain_mpe(self, dl, device):
+    def explain_mpe(self, dl, device):
+        expl_var_vals = []
+        expl_var_mpes = []
+        for data, _ in dl:
+            data = data.to(device)
+            # extract explaining vars
+            exp_vars = data[:, self.explaining_vars]
+            expl_var_vals.append(exp_vars)
+            # mask out explaining vars for resnet
+            mask = torch.ones_like(data, dtype=torch.bool)
+            mask[:, self.explaining_vars] = False
+            data = data[mask]
+            if self.image_shape is not None:
+                # ConvResNetSPN
+                # reshape to image
+                data = data.reshape(
+                    -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
+                )
+            else:
+                # DenseResNetSPN
+                data = data.reshape(-1, self.input_dim)
+
+            # extract most probable explanation of current input
+            hidden = self.forward_hidden(data)
+            hidden = torch.cat([hidden, exp_vars], dim=1)
+            mpe = self.einet.mpe(
+                evidence=hidden, marginalized_scopes=self.explaining_vars
+            )
+            expl_var_mpes.append(mpe[:, self.explaining_vars])
+        expl_var_vals = torch.cat(expl_var_vals, dim=0)
+        expl_var_mpes = torch.cat(expl_var_mpes, dim=0)
+        return torch.abs(expl_var_mpes - expl_var_vals).mean(dim=0).cpu().numpy()
 
 
 class DenseResnet(nn.Module):
@@ -167,6 +237,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         self.spec_norm_bound = spec_norm_bound
         self.explaining_vars = explaining_vars
         super().__init__(**kwargs)
+        self.einet = self.classifier
 
     def make_dense_layer(self):
         """applies spectral normalization to the hidden layer."""
@@ -198,14 +269,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         model = Einet(cfg)
         return model
 
-    def forward(self, inputs):
-        # extract explaining vars
-        exp_vars = inputs[:, self.explaining_vars]
-        # mask out explaining vars for resnet
-        mask = torch.ones_like(inputs, dtype=torch.bool)
-        mask[:, self.explaining_vars] = False
-        inputs = inputs[mask]
-        inputs = inputs.reshape(-1, self.input_dim)
+    def forward_hidden(self, inputs):
         hidden = self.input_layer(inputs)
 
         # Computes the ResNet hidden representations.
@@ -214,8 +278,21 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             resid = self.dropout(resid)
             hidden = hidden + resid
 
+        return hidden
+
+    def forward(self, inputs):
+        # extract explaining vars
+        exp_vars = inputs[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(inputs, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        inputs = inputs[mask]
+        inputs = inputs.reshape(-1, self.input_dim)
+        # feed through resnet
+        hidden = self.forward_hidden(inputs)
         # classifier is einet, so we need to concatenate the explaining vars
         hidden = torch.cat([hidden, exp_vars], dim=1)
+
         return self.classifier(hidden)
 
 
@@ -224,8 +301,7 @@ class ResidualBlockSN(BasicBlock):
     Spectral normalized ResNet block.
     """
 
-    def __init__(self, *args, **kwargs):
-        spec_norm_bound = 6  # 0.9
+    def __init__(self, *args, spec_norm_bound=0.9, **kwargs):
         super(ResidualBlockSN, self).__init__(*args, **kwargs)
         # self.conv1 = nn.utils.spectral_norm(self.conv1)
         # self.conv2 = nn.utils.spectral_norm(self.conv2)
@@ -239,9 +315,8 @@ class BottleNeckSN(Bottleneck):
     """
 
     # def __init__(self, spec_norm_bound=0.9, *args, **kwargs):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, spec_norm_bound=0.9, **kwargs):
         super(BottleNeckSN, self).__init__(*args, **kwargs)
-        spec_norm_bound = 6  # 0.9
         # self.conv1 = nn.utils.spectral_norm(self.conv1)
         # self.conv2 = nn.utils.spectral_norm(self.conv2)
         # self.conv3 = nn.utils.spectral_norm(self.conv3)
@@ -274,7 +349,6 @@ class ConvResNetSPN(ResNet, EinetUtils):
             padding=(3, 3),
             bias=False,
         )
-        spec_norm_bound = 6
         # self.conv1 = nn.utils.spectral_norm(self.conv1)
         self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
         self.fc = self.make_output_layer(
@@ -283,6 +357,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         self.explaining_vars = explaining_vars
         self.image_shape = image_shape
         self.marginalized_scopes = None
+        self.einet = self.fc
 
     def make_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
@@ -303,17 +378,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         model = Einet(cfg)
         return model
 
-    def _forward_impl(self, x):
-        # x is flattened
-        # extract explaining vars
-        exp_vars = x[:, self.explaining_vars]
-        # mask out explaining vars for resnet
-        mask = torch.ones_like(x, dtype=torch.bool)
-        mask[:, self.explaining_vars] = False
-        x = x[mask]
-        # reshape to image
-        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
-
+    def forward_hidden(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -326,6 +391,22 @@ class ConvResNetSPN(ResNet, EinetUtils):
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
+        return x
+
+    def _forward_impl(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+
         # fc is einet, so we need to concatenate the explaining vars
         x = torch.cat([x, exp_vars], dim=1)
         x = self.fc(x, marginalized_scopes=self.marginalized_scopes)

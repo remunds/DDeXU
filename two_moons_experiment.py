@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 result_dir = "./two_moons/"
-newExp = True
-# newExp = False
+# newExp = True
+newExp = False
 
 batchsize_resnet = 128
 batchsize_einet = 128
@@ -186,12 +186,23 @@ with torch.no_grad():
     plt.title("Predictive Uncertainty, SPN Model")
     plt.savefig(f"{result_dir}two_moons_SPN_uncertainty.png")
 
-    resnet_uncertainty = resnet_logits.cpu().numpy()[:, 0]  # predictive variance
-    # normalize
-    # resnet_uncertainty = resnet_uncertainty / np.min(resnet_uncertainty)
+    resnet_uncertainty = resnet_logits.cpu().numpy()[:, 0]  # log likelihood
     print(resnet_uncertainty[:5])
     _, ax = plt.subplots(figsize=(7, 5.5))
     pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
     plt.colorbar(pcm, ax=ax)
     plt.title("LL Uncertainty, SPN Model")
     plt.savefig(f"{result_dir}two_moons_SPN_ll_uncertainty.png")
+
+    print(test_examples.shape)
+    test_dl = DataLoader(
+        test_examples, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
+    )
+    resnet_uncertainty = resnet.eval_dempster_shafer(test_dl, device)
+    print(resnet_uncertainty.shape)
+    print(resnet_uncertainty[:5])
+    _, ax = plt.subplots(figsize=(7, 5.5))
+    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
+    plt.colorbar(pcm, ax=ax)
+    plt.title("Dempster Shafer, SPN Model")
+    plt.savefig(f"{result_dir}two_moons_SPN_dempster_shafer.png")
