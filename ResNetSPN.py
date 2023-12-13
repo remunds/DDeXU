@@ -4,26 +4,40 @@ from torchvision.models.resnet import ResNet, BasicBlock, Bottleneck
 import torch.nn as nn
 from spectral_normalization import spectral_norm
 from simple_einet.einet import EinetConfig, Einet
+
 from simple_einet.layers.distributions.normal import Normal
 from tqdm import tqdm
 
 
 class EinetUtils:
     def start_train(
-        self, dl, device, optimizer, lambda_v, num_epochs=1, lr_schedule=None
+        self,
+        dl,
+        device,
+        optimizer,
+        lambda_v,
+        num_epochs,
+        activate_einet_after=10,
+        deactivate_resnet=True,
+        lr_schedule=None,
     ):
         self.train()
         for epoch in range(num_epochs):
             loss = 0.0
+            if not self.einet_active and epoch >= activate_einet_after:
+                self.activate_einet(deactivate_resnet)
             for data, target in tqdm(dl):
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
-                loss_v = (
-                    lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                    + (1 - lambda_v) * -output.mean()
-                )
+                if self.einet_active:
+                    loss_v = (
+                        lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                        + (1 - lambda_v) * -output.mean()
+                    )
+                else:
+                    loss_v = torch.nn.CrossEntropyLoss()(output, target)
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
@@ -233,11 +247,37 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
     Spectral normalized ResNet with einet as the output layer.
     """
 
-    def __init__(self, spec_norm_bound=0.9, explaining_vars=[], **kwargs):
+    def __init__(
+        self, spec_norm_bound=0.9, explaining_vars=[], seperate_training=False, **kwargs
+    ):
         self.spec_norm_bound = spec_norm_bound
         self.explaining_vars = explaining_vars
         super().__init__(**kwargs)
-        self.einet = self.classifier
+        self.einet = self.make_einet_output_layer()
+        if seperate_training:
+            # start with default resnet training
+            # then train einet on hidden representations
+            self.einet_active = False
+            for param in self.einet.parameters():
+                param.requires_grad = False
+            # make sure to later set einet_active to True for training einet
+        else:
+            # train resnet and einet jointly end-to-end
+            self.einet_active = True
+
+    def activate_einet(self, deactivate_resnet=True):
+        """
+        Activates the einet output layer for second stage training and inference.
+        """
+        self.einet_active = True
+        if deactivate_resnet:
+            for param in self.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.parameters():
+                param.requires_grad = True
+        for param in self.einet.parameters():
+            param.requires_grad = True
 
     def make_dense_layer(self):
         """applies spectral normalization to the hidden layer."""
@@ -251,7 +291,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             spectral_norm(dense, norm_bound=self.spec_norm_bound), self.activation
         )
 
-    def make_output_layer(self):
+    def make_einet_output_layer(self):
         """uses einet as the output layer."""
         cfg = EinetConfig(
             num_features=self.num_hidden + len(self.explaining_vars),
@@ -259,7 +299,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             depth=3,
             num_sums=20,
             num_leaves=20,
-            num_repetitions=20,
+            num_repetitions=1,
             num_classes=self.output_dim,
             leaf_type=Normal,
             # leaf_kwargs={"total_count": 2**n_bits - 1},
@@ -290,8 +330,11 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         inputs = inputs.reshape(-1, self.input_dim)
         # feed through resnet
         hidden = self.forward_hidden(inputs)
-        # classifier is einet, so we need to concatenate the explaining vars
-        hidden = torch.cat([hidden, exp_vars], dim=1)
+
+        if self.einet_active:
+            # classifier is einet, so we need to concatenate the explaining vars
+            hidden = torch.cat([hidden, exp_vars], dim=1)
+            return self.einet(hidden)
 
         return self.classifier(hidden)
 
@@ -338,6 +381,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         image_shape,  # (C, H, W)
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
+        seperate_training=False,
         **kwargs,
     ):
         super(ConvResNetSPN, self).__init__(block, layers, num_classes, **kwargs)
@@ -351,15 +395,38 @@ class ConvResNetSPN(ResNet, EinetUtils):
         )
         # self.conv1 = nn.utils.spectral_norm(self.conv1)
         self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
-        self.fc = self.make_output_layer(
-            512 * block.expansion + len(explaining_vars), num_classes
-        )
         self.explaining_vars = explaining_vars
         self.image_shape = image_shape
         self.marginalized_scopes = None
-        self.einet = self.fc
+        self.einet = self.make_einet_output_layer(
+            512 * block.expansion + len(explaining_vars), num_classes
+        )
+        if seperate_training:
+            # start with default resnet training
+            # then train einet on hidden representations
+            self.einet_active = False
+            for param in self.einet.parameters():
+                param.requires_grad = False
+            # make sure to later set einet_active to True for training einet
+        else:
+            # train resnet and einet jointly end-to-end
+            self.einet_active = True
 
-    def make_output_layer(self, in_features, out_features):
+    def activate_einet(self, deactivate_resnet=True):
+        """
+        Activates the einet output layer for second stage training and inference.
+        """
+        self.einet_active = True
+        if deactivate_resnet:
+            for param in self.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.parameters():
+                param.requires_grad = True
+        for param in self.einet.parameters():
+            param.requires_grad = True
+
+    def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
         cfg = EinetConfig(
             num_features=in_features,
@@ -368,10 +435,8 @@ class ConvResNetSPN(ResNet, EinetUtils):
             num_sums=20,
             num_leaves=20,
             num_repetitions=10,
-            # num_repetitions=1,
             num_classes=out_features,
             leaf_type=Normal,
-            # leaf_kwargs={"total_count": 2**n_bits - 1},
             layer_type="einsum",
             dropout=0.0,
         )
@@ -407,8 +472,9 @@ class ConvResNetSPN(ResNet, EinetUtils):
         # feed through resnet
         x = self.forward_hidden(x)
 
-        # fc is einet, so we need to concatenate the explaining vars
-        x = torch.cat([x, exp_vars], dim=1)
-        x = self.fc(x, marginalized_scopes=self.marginalized_scopes)
+        if self.einet_active:
+            # classifier is einet, so we need to concatenate the explaining vars
+            x = torch.cat([x, exp_vars], dim=1)
+            return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
-        return x
+        return self.fc(x)

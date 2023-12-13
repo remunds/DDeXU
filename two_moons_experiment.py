@@ -31,7 +31,7 @@ DEFAULT_NORM = colors.Normalize(
 DEFAULT_N_GRID = 100
 
 
-def plot_uncertainty_surface(test_uncertainty, ax, cmap=None):
+def plot_uncertainty_surface(test_uncertainty, ax, cmap=None, plot_train=True):
     """Visualizes the 2D uncertainty surface.
 
     For simplicity, assume these objects already exist in the memory:
@@ -51,10 +51,14 @@ def plot_uncertainty_surface(test_uncertainty, ax, cmap=None):
         information of the uncertainty plot.
     """
     # Normalize uncertainty for better visualization.
-    if np.max(test_uncertainty) > 0:
-        test_uncertainty = test_uncertainty / np.max(test_uncertainty)
-    else:
-        test_uncertainty = test_uncertainty / np.min(test_uncertainty)
+    # 1. all positive
+    # if np.min(test_uncertainty) > 0:
+    #     test_uncertainty = test_uncertainty / np.max(test_uncertainty)
+    # # 2. all negative or mixed
+    # elif np.max(test_uncertainty) < 0:
+    #     # shift to positive
+    test_uncertainty = test_uncertainty - np.min(test_uncertainty)
+    test_uncertainty = test_uncertainty / np.max(test_uncertainty)
 
     # Set view limits.
     ax.set_ylim(DEFAULT_Y_RANGE)
@@ -72,15 +76,16 @@ def plot_uncertainty_surface(test_uncertainty, ax, cmap=None):
         aspect="auto",
     )
 
-    # Plot training data.
-    ax.scatter(
-        train_examples[:, 0],
-        train_examples[:, 1],
-        c=train_labels,
-        cmap=DEFAULT_CMAP,
-        alpha=0.5,
-    )
-    ax.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
+    if plot_train:
+        # Plot training data.
+        ax.scatter(
+            train_examples[:, 0],
+            train_examples[:, 1],
+            c=train_labels,
+            cmap=DEFAULT_CMAP,
+            alpha=0.5,
+        )
+        ax.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
 
     return pcm
 
@@ -146,13 +151,20 @@ train_dl = DataLoader(
 from ResNetSPN import DenseResNetSPN
 
 resnet_config = dict(input_dim=2, output_dim=2, num_layers=3, num_hidden=32)
-resnet = DenseResNetSPN(**resnet_config)
+resnet = DenseResNetSPN(**resnet_config, seperate_training=True)
 print(resnet)
-epochs = 50
 optimizer = torch.optim.Adam(resnet.parameters(), lr=0.03)
 resnet.to(device)
-# resnet
-resnet.start_train(train_dl, device, optimizer, 1, epochs)
+# it is interesting to play with lambda_v, dropout, repetition and depth
+resnet.start_train(
+    train_dl,
+    device,
+    optimizer,
+    lambda_v=0.8,
+    num_epochs=20,
+    activate_einet_after=10,
+    deactivate_resnet=True,
+)
 # evaluate
 print("accuracy: ", resnet.eval_acc(train_dl, device))
 
@@ -193,6 +205,12 @@ with torch.no_grad():
     plt.colorbar(pcm, ax=ax)
     plt.title("LL Uncertainty, SPN Model")
     plt.savefig(f"{result_dir}two_moons_SPN_ll_uncertainty.png")
+
+    _, ax = plt.subplots(figsize=(7, 5.5))
+    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax, plot_train=False)
+    plt.colorbar(pcm, ax=ax)
+    plt.title("LL Uncertainty, SPN Model")
+    plt.savefig(f"{result_dir}two_moons_SPN_ll_uncertainty_no_train.png")
 
     print(test_examples.shape)
     test_dl = DataLoader(
