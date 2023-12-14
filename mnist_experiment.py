@@ -1,206 +1,125 @@
 import torch
-import numpy as np
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision import datasets, transforms
+from torch.optim import Adam
 import os
 
-from torchvision.datasets import MNIST, KMNIST, FashionMNIST
-from torchvision.transforms import ToTensor
-from torch.utils.data import DataLoader
-import torchvision
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(0)
 
 newExp = True
 # newExp = False
 
-# according to DDU: MNIST: id, Dirty-MNIST: id (high aleatoric), Fashion-MNIST: ood (high epistemic)
-# for them: softmax entropy captures aleatoric, density-estimator captures epistemic
+batchsize = 512
+data_dir = "/data_docker/datasets/"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-batchsize_resnet = 512
-batchsize_einet = 128
-# train_ds = MNIST(
-#     "mnist", train=True, download=True, transform=ToTensor()
-# )  # 60000, 28, 28
-# test_ds = MNIST(
-#     "mnist", train=False, download=True, transform=ToTensor()
-# )  # 10000, 28, 28
 
-dataset_dir = "/data_docker/datasets/"
-train_ds_K = KMNIST(
-    dataset_dir + "kmnist", train=True, download=True, transform=ToTensor()
+# load mnist
+train_ds = datasets.MNIST(
+    data_dir + "mnist", train=True, transform=transforms.ToTensor(), download=True
 )
-test_ds_K = KMNIST(
-    dataset_dir + "kmnist", train=False, download=True, transform=ToTensor()
+test_ds = datasets.MNIST(
+    data_dir + "mnist",
+    train=False,
+    transform=transforms.ToTensor(),
+    download=True,
 )
 
-train_ds = FashionMNIST(
-    dataset_dir + "fashionmnist", train=True, download=True, transform=ToTensor()
+ood_ds = datasets.FashionMNIST(
+    data_dir + "fashionmnist",
+    train=False,
+    download=True,
+    transform=transforms.ToTensor(),
 )
-test_ds = FashionMNIST(
-    dataset_dir + "fashionmnist", train=False, download=True, transform=ToTensor()
-)
-
-
-def manipulate_mnist(
-    data: np.ndarray, max_cutoff: int, noise_const: float, rotation: int
-):
-    rotations = []
-    if rotation > 0:
-        rotate_values = np.random.randint(rotation // 2, rotation, data.shape[0])
-        for i, rotate_value in enumerate(rotate_values):
-            print(rotate_value)
-            print(type(rotate_value))
-            data[i] = torchvision.transforms.functional.rotate(
-                img=data[i], angle=float(rotate_value)
-            )
-            rotations.append(rotate_value)
-
-    cutoffs = []
-    # cutoff top rows. strong: 17, mid: 14, weak: 10
-    # set row to 0
-    if max_cutoff > 0:
-        for i in range(data.shape[0]):
-            num_cutoff = np.random.randint(max_cutoff // 2, max_cutoff)
-            data[i, :num_cutoff, :] = 0
-            cutoffs.append(num_cutoff)
-    else:
-        cutoffs = np.zeros((data.shape[0],))
-
-    noises = []
-    # add noise
-    if noise_const > 0:
-        for i in range(data.shape[0]):
-            noise = np.random.normal(0, noise_const, data.shape[1:])
-            data[i] += noise.astype(np.uint8)
-            noises.append(np.sum(noise))
-    else:
-        noises = np.zeros((data.shape[0],))
-    return data, np.array(cutoffs), np.array(noises), np.array(rotations)
-
-
-manipulated_size = 3200
-# extract some data from train_ds and test_ds
-test_manipulated = test_ds.data[:manipulated_size]
-# test_manipulated = manipulate_mnist(test_manipulated, 0, 0.8)
-(
-    test_manipulated,
-    test_manipulated_cutoffs,
-    test_manipulated_noises,
-    test_manipulated_rotations,
-) = manipulate_mnist(test_manipulated, 0, 0, 150)
-test_manipulated_cutoffs = torch.from_numpy(test_manipulated_cutoffs).view(-1, 1)
-test_manipulated_noises = torch.from_numpy(test_manipulated_noises).view(-1, 1)
-test_manipulated_rotations = torch.from_numpy(test_manipulated_rotations).view(-1, 1)
-# test_manipulated = [ToTensor()(img).flatten() for img in test_manipulated]
-test_manipulated = [img.flatten() for img in test_manipulated]
-test_manipulated = torch.concat(
-    [
-        test_manipulated_cutoffs,
-        test_manipulated_noises,
-        test_manipulated_rotations,
-        torch.stack(test_manipulated),
-    ],
-    dim=1,
-).to(dtype=torch.float32)
-test_manipulated_target = test_ds.targets[:manipulated_size].numpy().copy()
-test_manipulated_target = [torch.tensor(target) for target in test_manipulated_target]
-test_manipulated_ds = list(zip(test_manipulated, test_manipulated_target))
-
-# plt.imshow(test_manipulated_ds[0][0][0])
-# plt.savefig("test_manipulated.png")
-# plt.imshow(test_manipulated_ds[1][0][0])
-# plt.savefig("test_manipulated1.png")
-# plt.imshow(test_manipulated_ds[2][0][0])
-# plt.savefig("test_manipulated2.png")
-# print(
-#     "test_manipulated_target: ",
-#     test_manipulated_ds[0][1],
-#     test_manipulated_ds[1][1],
-#     test_manipulated_ds[2][1],
+# train_ds = datasets.FashionMNIST(
+#     data_dir + "fashionmnist",
+#     train=True,
+#     download=True,
+#     transform=transforms.ToTensor(),
+# )
+# test_ds = datasets.FashionMNIST(
+#     data_dir + "fashionmnist",
+#     train=False,
+#     download=True,
+#     transform=transforms.ToTensor(),
+# )
+# ood_ds = datasets.MNIST(
+#     data_dir + "mnist", train=False, transform=transforms.ToTensor(), download=True
 # )
 
-# # also show original
-# plt.imshow(test_ds.data[0])
-# plt.savefig("test_original.png")
 
-#### Also manipulate train data, but less intensely
-train_manipulated = train_ds.data.numpy().copy()
-train_manipulated, train_cutoffs, train_noises, train_rotations = manipulate_mnist(
-    train_manipulated, 10, 0.2, 30
-)
-train_cutoffs = torch.from_numpy(train_cutoffs).view(-1, 1)
-train_noises = torch.from_numpy(train_noises).view(-1, 1)
-train_rotations = torch.from_numpy(train_rotations).view(-1, 1)
-train_manipulated = [ToTensor()(img).flatten() for img in train_manipulated]
-train_manipulated = torch.concat(
-    [train_cutoffs, train_noises, train_rotations, torch.stack(train_manipulated)],
-    dim=1,
-).to(dtype=torch.float32)
-train_manipulated_target = train_ds.targets.numpy().copy()
-train_manipulated_target = [torch.tensor(target) for target in train_manipulated_target]
-train_manipulated_ds = list(zip(train_manipulated, train_manipulated_target))
-# print(train_manipulated.shape, cutoffs_train.shape, noises_train.shape)
+mean = 0.1307
+std = 0.3081
+
+print("manipulating images randomly")
+# rotate images randomly up to 45 degrees
+rotations = torch.randint(0, 45, (len(train_ds),))
+cutoffs = torch.randint(0, 10, (len(train_ds),))
+noises = torch.randint(20, 50, (len(train_ds),))
+# we want the images to be flattened (+3 for rotation, cutoff, noise)
+train_ds_manip = torch.zeros((len(train_ds), 28 * 28 + 3))
+for i, img in enumerate(train_ds.data):
+    image = img.reshape(1, 28, 28).clone()
+    # rotate image
+    image = transforms.functional.rotate(
+        img=image, angle=int(rotations[i]), fill=-mean / std
+    )
+    # cutoff top rows
+    image[:, : int(cutoffs[i]), :] = 0  # -mean / std
+    # add noise
+    this_noise = torch.randn((1, 28, 28)) * noises[i]
+    image = torch.clamp_max(image + this_noise, 255)
+
+    train_ds_manip[i, 3:] = image.flatten()
+    train_ds_manip[i, 0] = rotations[i]
+    train_ds_manip[i, 1] = cutoffs[i]
+    train_ds_manip[i, 2] = noises[i]
+
+# for test_rot we want stronger rotations
+# rotations = torch.randint(45, 120, (len(test_ds),))
+rotations = torch.ones((len(test_ds),)) * 90
+# cutoffs = torch.randint(0, 12, (len(test_ds),))
+cutoffs = torch.ones((len(test_ds),)) * 1
+# noises = torch.randint(20, 50, (len(test_ds),))
+noises = torch.ones((len(test_ds),)) * 25
+
+test_ds_manip = torch.zeros((len(test_ds), 28 * 28 + 3))
+for i, img in enumerate(test_ds.data):
+    image = img.reshape(1, 28, 28).clone()
+    image = transforms.functional.rotate(
+        img=image, angle=int(rotations[i]), fill=-mean / std
+    )
+    image[:, : int(cutoffs[i]), :] = 0
+    this_noise = torch.randn((1, 28, 28)) * noises[i]
+    image = torch.clamp_max(image + this_noise, 255)
+
+    test_ds_manip[i, 3:] = image.flatten()
+    test_ds_manip[i, 0] = rotations[i]
+    test_ds_manip[i, 1] = cutoffs[i]
+    test_ds_manip[i, 2] = noises[i]
+print("done rotating images")
+
+# show first 5 images
+import matplotlib.pyplot as plt
+
+for i in range(5):
+    image = train_ds_manip[i, 3:].reshape(28, 28)
+    plt.imshow(image, cmap="gray")
+    plt.savefig(f"rotated_mnist_{i}.png")
 
 
-train_dl = DataLoader(
-    train_ds, batch_size=batchsize_resnet, shuffle=True, pin_memory=True, num_workers=1
-)
-test_ds_complete = [ToTensor()(img).flatten() for img in test_ds.data.numpy().copy()]
-test_cutoffs = torch.zeros((len(test_ds_complete), 1))
-test_noises = torch.zeros((len(test_ds_complete), 1))
-test_rotations = torch.zeros((len(test_ds_complete), 1))
-test_ds_complete = torch.concat(
-    [
-        test_cutoffs,
-        test_noises,
-        test_rotations,
-        torch.stack(test_ds_complete),
-    ],
-    dim=1,
-).to(dtype=torch.float32)
-test_ds_target = test_ds.targets.numpy().copy()
-test_ds_complete = list(zip(test_ds_complete, test_ds_target))
+# create dataloaders
+train_ds_manip = TensorDataset(train_ds_manip, train_ds.targets)
+train_dl = DataLoader(train_ds_manip, batch_size=batchsize, shuffle=True)
+test_ds_flat = test_ds.data.reshape(-1, 28 * 28).to(dtype=torch.float32)
+test_ds_flat = torch.concat((torch.zeros((len(test_ds_flat), 3)), test_ds_flat), dim=1)
+test_ds_flat = TensorDataset(test_ds_flat, test_ds.targets)
+test_dl = DataLoader(test_ds_flat, batch_size=batchsize, shuffle=True)
+test_ds_manip = TensorDataset(test_ds_manip, test_ds.targets)
+test_dl_manip = DataLoader(test_ds_manip, batch_size=batchsize, shuffle=True)
 
-test_dl = DataLoader(
-    test_ds_complete, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
-)
-test_manipulated_dl = DataLoader(
-    test_manipulated_ds, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
-)
-train_manipulated_dl = DataLoader(
-    train_manipulated_ds,
-    batch_size=batchsize_resnet,
-    shuffle=True,
-    pin_memory=True,
-    num_workers=1,
-)
-train_dl = train_manipulated_dl
-
-test_k = [ToTensor()(img).flatten() for img in test_ds_K.data.numpy().copy()]
-test_k_cutoffs = torch.zeros((len(test_k), 1))
-test_k_noises = torch.zeros((len(test_k), 1))
-test_k_rotations = torch.zeros((len(test_k), 1))
-test_k = torch.concat(
-    [
-        test_k_cutoffs,
-        test_k_noises,
-        test_k_rotations,
-        torch.stack(test_k),
-    ],
-    dim=1,
-).to(dtype=torch.float32)
-test_k_target = test_ds_K.targets.numpy().copy()
-test_k = list(zip(test_k, test_k_target))
-
-test_dl_K = DataLoader(
-    test_k, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
-)
-# test_dl_F = DataLoader(test_ds_F, batch_size=batchsize_resnet, pin_memory=True, num_workers=1)
-
-# print shape of first of test_dl
-print("done loading data")
-
-###############################################################################
-from ResNetSPN import ResidualBlockSN, ConvResNetSPN, BottleNeckSN
+# create model
+from ResNetSPN import ConvResNetSPN, ResidualBlockSN
 
 resnet_spn = ConvResNetSPN(
     ResidualBlockSN,
@@ -208,66 +127,55 @@ resnet_spn = ConvResNetSPN(
     num_classes=10,
     image_shape=(1, 28, 28),
     explaining_vars=[0, 1, 2],
+    # spec_norm_bound=6,
     spec_norm_bound=0.9,
+    seperate_training=True,
 )
 resnet_spn = resnet_spn.to(device)
 
 exists = os.path.isfile("resnet_spn.pt")
 if not exists or newExp:
     print("training resnet_spn")
-    optimizer = torch.optim.Adam(resnet_spn.parameters(), lr=0.01)
-    loss_fn = torch.nn.CrossEntropyLoss()
-    resnet_spn.start_train(train_dl, device, optimizer, 1, 5)
+    # train model
+    optimizer = Adam(resnet_spn.parameters(), lr=0.01)
+    resnet_spn.start_train(
+        train_dl,
+        device,
+        optimizer,
+        lambda_v=0.01,
+        num_epochs=20,
+        activate_einet_after=10,
+        deactivate_resnet=True,
+    )
     resnet_spn.save("resnet_spn.pt")
 else:
     resnet_spn.load("resnet_spn.pt")
     print("loaded resnet_spn.pt")
 
-# eval accuracies
-print("train acc: ", resnet_spn.eval_acc(train_dl, device))
-print("test acc: ", resnet_spn.eval_acc(test_dl, device))
-print("test_manipulated acc: ", resnet_spn.eval_acc(test_manipulated_dl, device))
-print("test_K acc: ", resnet_spn.eval_acc(test_dl_K, device))
+# evaluate
+resnet_spn.einet_active = False
+print("resnet accuracy train: ", resnet_spn.eval_acc(train_dl, device))
+print("resnet accuracy test (unrotated): ", resnet_spn.eval_acc(test_dl, device))
+print("resnet accuracy test (rotated): ", resnet_spn.eval_acc(test_dl_manip, device))
 
-# eval ll's
-print("train ll: ", resnet_spn.eval_ll(train_dl, device))
-print("test ll: ", resnet_spn.eval_ll(test_dl, device))
-print("test_manipulated ll: ", resnet_spn.eval_ll(test_manipulated_dl, device))
-print("test_K ll: ", resnet_spn.eval_ll(test_dl_K, device))
+resnet_spn.einet_active = True
+print("accuracy train: ", resnet_spn.eval_acc(train_dl, device))
+print("accuracy test (unrotated): ", resnet_spn.eval_acc(test_dl, device))
+print("accuracy test (rotated): ", resnet_spn.eval_acc(test_dl_manip, device))
 
-# eval dempster shafer
-print("train ds: ", resnet_spn.eval_dempster_shafer(train_dl, device))
-print("test ds: ", resnet_spn.eval_dempster_shafer(test_dl, device))
-print(
-    "test_manipulated ds: ",
-    resnet_spn.eval_dempster_shafer(test_manipulated_dl, device),
-)
-print("test_K ds: ", resnet_spn.eval_dempster_shafer(test_dl_K, device))
+print("likelihood train: ", resnet_spn.eval_ll(train_dl, device))
+print("likelihood test (unrotated): ", resnet_spn.eval_ll(test_dl, device))
+print("likelihood test (rotated): ", resnet_spn.eval_ll(test_dl_manip, device))
 
-# # eval predictive variance
-# print("train pred var: ", resnet_spn.eval_pred_variance(train_dl, device))
-# print("test pred var: ", resnet_spn.eval_pred_variance(test_dl, device))
-# print(
-#     "test_manipulated pred var: ",
-#     resnet_spn.eval_pred_variance(test_manipulated_dl, device),
-# )
-# print("test_K pred var: ", resnet_spn.eval_pred_variance(test_dl_K, device))
+ood_ds_flat = ood_ds.data.reshape(-1, 28 * 28).to(dtype=torch.float32)
+ood_ds_flat = torch.concat((torch.zeros((len(ood_ds_flat), 3)), ood_ds_flat), dim=1)
+ood_ds_flat = TensorDataset(ood_ds_flat, ood_ds.targets)
+ood_dl = DataLoader(ood_ds_flat, batch_size=batchsize, shuffle=True)
+print("accuracy ood: ", resnet_spn.eval_acc(ood_dl, device))
+print("likelihood ood: ", resnet_spn.eval_ll(ood_dl, device))
 
-# # eval predictive entropy
-# print("train pred entropy: ", resnet_spn.eval_pred_entropy(train_dl, device))
-# print("test pred entropy: ", resnet_spn.eval_pred_entropy(test_dl, device))
-# print(
-#     "test_manipulated pred entropy: ",
-#     resnet_spn.eval_pred_entropy(test_manipulated_dl, device),
-# )
-# print("test_K pred entropy: ", resnet_spn.eval_pred_entropy(test_dl_K, device))
+print("explain LL rot: ", resnet_spn.explain_ll(test_dl_manip, device))
+print("explain LL ood: ", resnet_spn.explain_ll(ood_dl, device))
 
-# explain via LL
-explanations = resnet_spn.explain_ll(test_manipulated_dl, device)
-print("LL explanations: ", explanations)
-
-# explain via MPE
-small_test_manip = test_manipulated_dl.dataset[:10]
-small_test_manip_dl = DataLoader(small_test_manip, batch_size=2)
-explanations = resnet_spn.explain_mpe(small_test_manip_dl, device)
-print("MPE explanations: ", explanations)
+print("explain MPE rot: ", resnet_spn.explain_mpe(test_dl_manip, device))
+print("explain MPE ood: ", resnet_spn.explain_mpe(ood_dl, device))

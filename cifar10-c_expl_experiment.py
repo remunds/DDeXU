@@ -3,14 +3,19 @@ import numpy as np
 from torch.utils.data import DataLoader
 import torch
 
+torch.manual_seed(0)
+
 newExp = True
 # newExp = False
 
 batch_size = 512
 dataset_dir = "/data_docker/datasets/"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
 cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
 cifar10_c_path = "CIFAR-10-C"
 cifar10_c_path_complete = dataset_dir + cifar10_c_path
+
 # download cifar10-c
 if not os.path.exists(cifar10_c_path_complete + ".tar"):
     print("Downloading CIFAR-10-C...")

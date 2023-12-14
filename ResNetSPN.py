@@ -1,5 +1,5 @@
+import os
 import torch
-import numpy as np
 from torchvision.models.resnet import ResNet, BasicBlock, Bottleneck
 import torch.nn as nn
 from spectral_normalization import spectral_norm
@@ -12,44 +12,130 @@ from tqdm import tqdm
 class EinetUtils:
     def start_train(
         self,
-        dl,
+        dl_train,
+        dl_valid,
         device,
         optimizer,
         lambda_v,
+        warmup_epochs,
         num_epochs,
-        activate_einet_after=10,
         deactivate_resnet=True,
         lr_schedule=None,
+        early_stop=3,
+        checkpoint_dir=None,
     ):
         self.train()
-        for epoch in range(num_epochs):
+        val_increase = 0
+        lowest_val_loss = torch.inf
+        # warmup by only training resnet
+        for epoch in range(warmup_epochs):
             loss = 0.0
-            if not self.einet_active and epoch >= activate_einet_after:
-                self.activate_einet(deactivate_resnet)
-            for data, target in tqdm(dl):
+            for data, target in tqdm(dl_train):
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
-                if self.einet_active:
-                    loss_v = (
-                        lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                        + (1 - lambda_v) * -output.mean()
-                    )
-                else:
-                    loss_v = torch.nn.CrossEntropyLoss()(output, target)
+                loss_v = torch.nn.CrossEntropyLoss()(output, target)
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
             if lr_schedule is not None:
                 lr_schedule.step()
-            print(f"Epoch {epoch}, loss {loss / len(dl.dataset)}")
+
+            val_loss = 0.0
+            with torch.no_grad():
+                for data, target in tqdm(dl_valid):
+                    optimizer.zero_grad()
+                    target = target.type(torch.LongTensor)
+                    data, target = data.to(device), target.to(device)
+                    output = self(data)
+                    loss_v = torch.nn.CrossEntropyLoss()(output, target)
+                    val_loss += loss_v.item()
+            print(
+                f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+            )
+            # early stopping
+            if val_loss > lowest_val_loss:
+                val_increase += 1
+                if val_increase >= early_stop:
+                    print(
+                        f"Stopping Resnet early, val loss increased for the last {early_stop} epochs."
+                    )
+                    break
+            else:
+                val_increase = 0
+                lowest_val_loss = val_loss
+                if checkpoint_dir is not None:
+                    self.save(checkpoint_dir + "checkpoint.pt")
+
+        if checkpoint_dir is not None:
+            # load best
+            self.load(checkpoint_dir + "checkpoint.pt")
+
+        # train einet (and optionally resnet jointly)
+        self.activate_einet(deactivate_resnet)
+        lowest_val_loss = torch.inf
+        val_increase = 0
+        for epoch in range(num_epochs):
+            loss = 0.0
+            for data, target in tqdm(dl_train):
+                optimizer.zero_grad()
+                target = target.type(torch.LongTensor)
+                data, target = data.to(device), target.to(device)
+                output = self(data)
+                loss_v = (
+                    lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                    + (1 - lambda_v) * -output.mean()
+                )
+                loss += loss_v.item()
+                loss_v.backward()
+                optimizer.step()
+            if lr_schedule is not None:
+                lr_schedule.step()
+
+            val_loss = 0.0
+            with torch.no_grad():
+                for data, target in tqdm(dl_valid):
+                    optimizer.zero_grad()
+                    target = target.type(torch.LongTensor)
+                    data, target = data.to(device), target.to(device)
+                    output = self(data)
+                    loss_v = (
+                        lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                        + (1 - lambda_v) * -output.mean()
+                    )
+                    val_loss += loss_v.item()
+                print(
+                    f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+                )
+                # early stopping
+                if val_loss > lowest_val_loss:
+                    val_increase += 1
+                    if val_increase >= early_stop:
+                        print(
+                            f"Stopping Einet early, val loss increased for the last {early_stop} epochs."
+                        )
+                        break
+                else:
+                    val_increase = 0
+                    lowest_val_loss = val_loss
+                    if checkpoint_dir is not None:
+                        self.save(checkpoint_dir + "checkpoint.pt")
+        if checkpoint_dir is not None:
+            # load best
+            self.load(checkpoint_dir + "checkpoint.pt")
 
     def save(self, path):
+        # create path if not exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.state_dict(), path)
 
-    def load(self, path):
+    def load(self, path, resnet_only=False):
         self.load_state_dict(torch.load(path))
+        if resnet_only:
+            # reinitialize einet
+            for param in self.einet.parameters():
+                torch.nn.init.normal_(param, mean=0.0, std=0.01)
 
     def eval_acc(self, dl, device):
         self.eval()
