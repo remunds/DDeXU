@@ -1,12 +1,17 @@
 import os
 import torch
+
 from torchvision.models.resnet import ResNet, BasicBlock, Bottleneck
+
+# from net.resnet import ResNet, BasicBlock, Bottleneck
 import torch.nn as nn
 from spectral_normalization import spectral_norm
 from simple_einet.einet import EinetConfig, Einet
 
 from simple_einet.layers.distributions.normal import Normal
 from tqdm import tqdm
+import numpy as np
+import torch.nn.functional as F
 
 
 class EinetUtils:
@@ -20,7 +25,8 @@ class EinetUtils:
         warmup_epochs,
         num_epochs,
         deactivate_resnet=True,
-        lr_schedule=None,
+        lr_schedule_resnet=None,
+        lr_schedule_einet=None,
         early_stop=3,
         checkpoint_dir=None,
     ):
@@ -39,8 +45,8 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule is not None:
-                lr_schedule.step()
+            if lr_schedule_resnet is not None:
+                lr_schedule_resnet.step()
 
             val_loss = 0.0
             with torch.no_grad():
@@ -90,8 +96,8 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule is not None:
-                lr_schedule.step()
+            if lr_schedule_einet is not None:
+                lr_schedule_einet.step()
 
             val_loss = 0.0
             with torch.no_grad():
@@ -151,51 +157,54 @@ class EinetUtils:
                 correct += (pred == labels).sum().item()
         return correct / total
 
-    def eval_ll(self, dl, device):
+    def eval_ll(self, dl, device, return_all=False):
         self.eval()
-        total = 0
-        ll_total = 0
+        index = 0
+        lls = torch.zeros(len(dl.dataset))
         with torch.no_grad():
-            for data, labels in dl:
+            for data, _ in dl:
                 data = data.to(device)
-                labels = labels.to(device)
-                total += labels.size(0)
                 ll = self(data)
-                ll_total += ll.mean().item()
-        return ll_total / total
+                lls[index : index + len(ll)] = ll.mean(dim=1)
+                index += len(ll)
+        if return_all:
+            return lls
+        return torch.mean(lls)
 
-    def eval_pred_variance(self, dl, device):
+    def eval_pred_variance(self, dl, device, return_all=False):
         self.eval()
-        pred_var_total = 0
-        total = 0
+        index = 0
+        pred_vars = torch.zeros(len(dl.dataset))
         with torch.no_grad():
-            for data, labels in dl:
+            for data, _ in dl:
                 data = data.to(device)
-                labels = labels.to(device)
-                total += labels.size(0)
                 pred_logit = self(data)
                 pred = torch.softmax(pred_logit, dim=1)
                 pred = torch.max(pred, dim=1)[0]
                 pred_var = pred * (1 - pred)
-                pred_var_total += pred_var.mean().item()
-        return pred_var_total / total
+                pred_vars[index : index + len(pred_var)] = pred_var
+                index += len(pred_var)
+        if return_all:
+            return pred_vars
+        return torch.mean(pred_vars)
 
-    def eval_pred_entropy(self, dl, device):
+    def eval_pred_entropy(self, dl, device, return_all=False):
         self.eval()
-        pred_entropy_total = 0
-        total = 0
+        index = 0
+        pred_entropies = torch.zeros(len(dl.dataset))
         with torch.no_grad():
-            for data, labels in dl:
+            for data, _ in dl:
                 data = data.to(device)
-                labels = labels.to(device)
-                total += labels.size(0)
                 pred_logit = self(data)
                 pred = torch.softmax(pred_logit, dim=1)
                 pred_entropy = -torch.sum(pred * torch.log(pred), dim=1)
-                pred_entropy_total += pred_entropy.mean().item()
-        return pred_entropy_total / total
+                pred_entropies[index : index + len(pred_entropy)] = pred_entropy
+                index += len(pred_entropy)
+        if return_all:
+            return pred_entropies
+        return torch.mean(pred_entropies)
 
-    def eval_dempster_shafer(self, dl, device):
+    def eval_dempster_shafer(self, dl, device, return_all=False):
         """
         SNGP: better for distance aware models, where
         magnitude of logits reflects distance from observed data manifold
@@ -221,7 +230,9 @@ class EinetUtils:
                     num_classes + torch.sum(torch.exp(lls_norm), dim=1)
                 )
                 uncertainties.append(uncertainty)
-        return torch.cat(uncertainties, dim=0).cpu().numpy()
+        if return_all:
+            return uncertainties
+        return torch.mean(uncertainties)
 
     def explain_ll(self, dl, device):
         """
@@ -481,6 +492,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         )
         # self.conv1 = nn.utils.spectral_norm(self.conv1)
         self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
+        self.bn2 = nn.BatchNorm2d(512)  # new
         self.explaining_vars = explaining_vars
         self.image_shape = image_shape
         self.marginalized_scopes = None
@@ -541,6 +553,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         x = self.layer4(x)
 
         x = self.avgpool(x)
+        x = self.bn2(x)  # new
         x = torch.flatten(x, 1)
         return x
 
@@ -564,3 +577,117 @@ class ConvResNetSPN(ResNet, EinetUtils):
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.fc(x)
+
+
+from net.resnet import ResNet
+
+
+class ConvResnetDDU(ResNet, EinetUtils):
+    def __init__(
+        self,
+        block,
+        num_blocks,
+        num_classes=10,
+        temp=1.0,
+        spectral_normalization=True,
+        mod=True,
+        coeff=3,
+        n_power_iterations=1,
+        image_shape=(1, 28, 28),  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        seperate_training=False,
+        **kwargs,
+    ):
+        mnist = image_shape[0] == 1 and image_shape[1] == 28 and image_shape[2] == 28
+        super(ConvResnetDDU, self).__init__(
+            block,
+            num_blocks,
+            num_classes,
+            temp,
+            spectral_normalization,
+            mod,
+            coeff,
+            n_power_iterations,
+            mnist,
+        )
+
+        self.explaining_vars = explaining_vars
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.einet = self.make_einet_output_layer(
+            512 * block.expansion + len(explaining_vars), num_classes
+        )
+        if seperate_training:
+            # start with default resnet training
+            # then train einet on hidden representations
+            self.einet_active = False
+            for param in self.einet.parameters():
+                param.requires_grad = False
+            # make sure to later set einet_active to True for training einet
+        else:
+            # train resnet and einet jointly end-to-end
+            self.einet_active = True
+
+    def activate_einet(self, deactivate_resnet=True):
+        """
+        Activates the einet output layer for second stage training and inference.
+        """
+        self.einet_active = True
+        if deactivate_resnet:
+            for param in self.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.parameters():
+                param.requires_grad = True
+        for param in self.einet.parameters():
+            param.requires_grad = True
+
+    def make_einet_output_layer(self, in_features, out_features):
+        """Uses einet as the output layer."""
+        cfg = EinetConfig(
+            num_features=in_features,
+            num_channels=1,
+            depth=3,
+            num_sums=20,
+            num_leaves=20,
+            num_repetitions=10,
+            num_classes=out_features,
+            leaf_type=Normal,
+            layer_type="einsum",
+            dropout=0.0,
+        )
+        model = Einet(cfg)
+        return model
+
+    def forward_hidden(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.activation(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = F.avg_pool2d(x, 4)
+        x = x.view(x.size(0), -1)
+        return x
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+
+        if self.einet_active:
+            # classifier is einet, so we need to concatenate the explaining vars
+            x = torch.cat([x, exp_vars], dim=1)
+            return self.einet(x, marginalized_scopes=self.marginalized_scopes)
+
+        return self.fc(x) / self.temp

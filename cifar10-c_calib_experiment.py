@@ -4,14 +4,14 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim import Adam
 
-torch.manual_seed(0)
+torch.manual_seed(1)
 
 newExp = True
 # newExp = False
-# load_resnet = True
 load_resnet = False
+# load_resnet = False
 
-batch_size = 512
+batch_size = 512  # 512
 dataset_dir = "/data_docker/datasets/"
 result_dir = "/data_docker/results/cifar10-c_calib/"
 
@@ -98,18 +98,30 @@ test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
 ##############################################################33
 # Training
-from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
+# from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
+from ResNetSPN import ConvResnetDDU
+from net.resnet import BasicBlock, Bottleneck
 
-resnet_spn = ConvResNetSPN(
-    ResidualBlockSN,
-    # BottleNeckSN,
+# resnet_spn = ConvResNetSPN(
+#     ResidualBlockSN,
+#     # BottleNeckSN,
+#     [2, 2, 2, 2],
+#     # [3, 4, 6, 3],
+#     num_classes=10,
+#     image_shape=(3, 32, 32),
+#     explaining_vars=[],  # for calibration experiment, no explaining vars needed
+#     # spec_norm_bound=6,
+#     spec_norm_bound=0.9,
+#     seperate_training=True,
+# )
+resnet_spn = ConvResnetDDU(
+    BasicBlock,
     [2, 2, 2, 2],
-    # [3, 4, 6, 3],
     num_classes=10,
+    spectral_normalization=True,
+    mod=True,
     image_shape=(3, 32, 32),
     explaining_vars=[],  # for calibration experiment, no explaining vars needed
-    spec_norm_bound=6,
-    # spec_norm_bound=0.9,
     seperate_training=True,
 )
 resnet_spn = resnet_spn.to(device)
@@ -121,18 +133,22 @@ if not exists or newExp:
         resnet_spn.load(result_dir + "resnet_spn.pt", resnet_only=True)
     print("training resnet_spn")
     # train model
-    optimizer = Adam(resnet_spn.parameters(), lr=0.01)
+    optimizer = Adam(resnet_spn.parameters(), lr=0.03)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     resnet_spn.start_train(
         train_dl,
         valid_dl,
         device,
         optimizer,
         # lambda_v=0.01,
-        lambda_v=1,
-        warmup_epochs=40,
-        num_epochs=20,
+        lambda_v=0.8,
+        warmup_epochs=20,
+        num_epochs=50,
+        # warmup_epochs=10,
+        # num_epochs=10,
         deactivate_resnet=True,
-        early_stop=5,
+        lr_schedule_einet=lr_scheduler,
+        early_stop=10,
         checkpoint_dir=result_dir,
     )
     resnet_spn.save(result_dir + "resnet_spn.pt")
@@ -154,14 +170,50 @@ print("resnet test acc: ", test_acc)
 resnet_spn.einet_active = True
 train_acc = resnet_spn.eval_acc(train_dl, device)
 train_ll = resnet_spn.eval_ll(train_dl, device)
+train_pred_var = resnet_spn.eval_pred_variance(train_dl, device)
+train_pred_entropy = resnet_spn.eval_pred_entropy(train_dl, device)
 print("train acc: ", train_acc)
 print("train ll: ", train_ll)
+print("train pred var: ", train_pred_var)
+print("train pred entropy: ", train_pred_entropy)
 
 test_acc = resnet_spn.eval_acc(test_dl, device)
-test_ll = resnet_spn.eval_ll(test_dl, device)
+orig_test_ll = resnet_spn.eval_ll(test_dl, device)
+orig_test_pred_var = resnet_spn.eval_pred_variance(test_dl, device)
+orig_test_pred_entropy = resnet_spn.eval_pred_entropy(test_dl, device)
 
 print("test acc: ", test_acc)
-print("test ll: ", test_ll)
+print("test ll: ", orig_test_ll)
+print("test pred var: ", orig_test_pred_var)
+print("test pred entropy: ", orig_test_pred_entropy)
+
+# random noise baseline
+random_data = np.random.rand(10000, 32, 32, 3)
+random_data = torch.stack([test_transformer(img) for img in random_data], dim=0)
+random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.targets))
+random_dl = DataLoader(
+    random_ds,
+    batch_size=batch_size,
+    shuffle=False,
+    pin_memory=True,
+    num_workers=1,
+)
+random_acc = resnet_spn.eval_acc(random_dl, device)
+random_ll = resnet_spn.eval_ll(random_dl, device)
+random_pred_var = resnet_spn.eval_pred_variance(random_dl, device)
+random_pred_entropy = resnet_spn.eval_pred_entropy(random_dl, device)
+print("random acc: ", random_acc)
+print("random ll: ", random_ll)
+print("random pred var: ", random_pred_var)
+print("random pred entropy: ", random_pred_entropy)
+
+
+def normalize_lls(lls, min, max):
+    lls = np.clip(lls, min, max)
+    return (lls - min) / (max - min)
+
+
+normalize_lls(orig_test_ll, orig_test_ll - 0.5, orig_test_ll + 0.5)
 
 # train: 50k, 32, 32, 3
 # test: 10k, 32, 32, 3
@@ -188,15 +240,15 @@ corruptions = [
     "speckle_noise",
     "zoom_blur",
 ]
+from tqdm import tqdm
+
 # iterate over all corruptions, load dataset, evaluate
-for corruption in corruptions:
-    print("corruption: ", corruption)
+for corruption in tqdm(corruptions):
     # load dataset
     data = np.load(f"{cifar10_c_path_complete}/{corruption}.npy")
     eval_dict[corruption] = {}
     # iterate over severity levels
     for severity in range(5):
-        print("severity: ", severity)
         current_data = data[severity * 10000 : (severity + 1) * 10000]
         # transform with cifar10_transformer
         current_data = torch.stack(
@@ -219,11 +271,15 @@ for corruption in corruptions:
         # evaluate
         test_acc = resnet_spn.eval_acc(test_dl, device)
         test_ll = resnet_spn.eval_ll(test_dl, device)
+        test_pred_var = resnet_spn.eval_pred_variance(test_dl, device)
+        test_pred_entropy = resnet_spn.eval_pred_entropy(test_dl, device)
 
-        print("acc: ", test_acc)
-        print("ll: ", test_ll)
-
-        eval_dict[corruption][severity] = {"acc": test_acc, "ll": test_ll}
+        eval_dict[corruption][severity] = {
+            "acc": test_acc,
+            "ll": test_ll,
+            "var": test_pred_var,
+            "entropy": test_pred_entropy,
+        }
 
 overall_acc = np.mean(
     [
@@ -241,8 +297,27 @@ overall_ll = np.mean(
     ]
 )
 
+overall_pred_var = np.mean(
+    [
+        eval_dict[corruption][severity]["var"]
+        for corruption in eval_dict
+        for severity in eval_dict[corruption]
+    ]
+)
+
+overall_pred_entropy = np.mean(
+    [
+        eval_dict[corruption][severity]["entropy"]
+        for corruption in eval_dict
+        for severity in eval_dict[corruption]
+    ]
+)
+
 print("overall acc: ", overall_acc)
 print("overall ll: ", overall_ll)
+print("overall pred var: ", overall_pred_var)
+print("overall pred entropy: ", overall_pred_entropy)
+
 
 # create plot for each corruption
 # x axis: severity
@@ -255,15 +330,36 @@ for corruption in eval_dict:
         eval_dict[corruption][severity]["acc"] for severity in eval_dict[corruption]
     ]
     lls = [eval_dict[corruption][severity]["ll"] for severity in eval_dict[corruption]]
+    pred_var = [
+        eval_dict[corruption][severity]["var"] for severity in eval_dict[corruption]
+    ]
+    pred_entropy = [
+        eval_dict[corruption][severity]["entropy"] for severity in eval_dict[corruption]
+    ]
     fig, ax = plt.subplots()
-    ax.plot(accs, label="acc", color="red")
     ax.set_xlabel("severity")
+    ax.set_xticks(np.array(list(range(5))) + 1)
+
+    ax.plot(accs, label="acc", color="red")
     ax.set_ylabel("accuracy", color="red")
     ax.tick_params(axis="y", labelcolor="red")
+    ax.set_ylim([0, 1])
 
     ax2 = ax.twinx()
     ax2.plot(lls, label="ll", color="blue")
-    ax2.set_ylabel("log-likelihood", color="blue")
+    # ax2.set_ylabel("log-likelihood", color="blue")
     ax2.tick_params(axis="y", labelcolor="blue")
+
+    ax3 = ax.twinx()
+    ax3.plot(pred_var, label="pred var", color="green")
+    # ax3.set_ylabel("predictive variance", color="green")
+    ax3.tick_params(axis="y", labelcolor="green")
+
+    ax4 = ax.twinx()
+    ax4.plot(pred_entropy, label="pred entropy", color="orange")
+    # ax4.set_ylabel("predictive entropy", color="orange")
+    ax4.tick_params(axis="y", labelcolor="orange")
+
     fig.tight_layout()
+    fig.legend()
     plt.savefig(result_dir + f"{corruption}.png")

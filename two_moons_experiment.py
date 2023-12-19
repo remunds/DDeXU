@@ -144,26 +144,45 @@ plt.savefig(f"{result_dir}two_moons.png")
 # put into data loaders
 train_ds = list(zip(train_examples, train_labels))
 train_dl = DataLoader(
-    train_ds, batch_size=batchsize_resnet, shuffle=True, pin_memory=True, num_workers=1
+    train_ds[:900],
+    batch_size=batchsize_resnet,
+    shuffle=True,
+    pin_memory=True,
+    num_workers=1,
+)
+valid_dl = DataLoader(
+    train_ds[900:],
+    batch_size=batchsize_resnet,
+    shuffle=True,
+    pin_memory=True,
+    num_workers=1,
 )
 
 ###############################################################################
 from ResNetSPN import DenseResNetSPN
 
-resnet_config = dict(input_dim=2, output_dim=2, num_layers=3, num_hidden=32)
+resnet_config = dict(
+    input_dim=2, output_dim=2, num_layers=3, num_hidden=32, spec_norm_bound=0.5  # 0.95
+)
 resnet = DenseResNetSPN(**resnet_config, seperate_training=True)
 print(resnet)
 optimizer = torch.optim.Adam(resnet.parameters(), lr=0.03)
+lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 resnet.to(device)
 # it is interesting to play with lambda_v, dropout, repetition and depth
 resnet.start_train(
     train_dl,
+    valid_dl,
     device,
     optimizer,
     lambda_v=0.8,
-    num_epochs=20,
-    activate_einet_after=10,
+    # lambda_v=0.1,
+    warmup_epochs=20,
+    num_epochs=50,
     deactivate_resnet=True,
+    lr_schedule_einet=lr_scheduler,
+    early_stop=10,
+    checkpoint_dir=result_dir,
 )
 # evaluate
 print("accuracy: ", resnet.eval_acc(train_dl, device))
