@@ -106,29 +106,29 @@ test_dl = DataLoader(
 # create model
 from ResNetSPN import ConvResNetSPN, ResidualBlockSN
 
-# from ResNetSPN import ConvResnetDDU
-# from net.resnet import BasicBlock
+from ResNetSPN import ConvResnetDDU
+from net.resnet import BasicBlock
 
-resnet_spn = ConvResNetSPN(
-    ResidualBlockSN,
-    [2, 2, 2, 2],
-    num_classes=10,
-    image_shape=(1, 28, 28),
-    explaining_vars=[],  # for calibration test, we don't need explaining vars
-    # spec_norm_bound=6,
-    spec_norm_bound=0.9,
-    seperate_training=True,
-)
-# resnet_spn = ConvResnetDDU(
-#     BasicBlock,
+# resnet_spn = ConvResNetSPN(
+#     ResidualBlockSN,
 #     [2, 2, 2, 2],
 #     num_classes=10,
 #     image_shape=(1, 28, 28),
-#     spectral_normalization=True,
-#     mod=True,
 #     explaining_vars=[],  # for calibration test, we don't need explaining vars
+#     # spec_norm_bound=6,
+#     spec_norm_bound=0.9,
 #     seperate_training=True,
 # )
+resnet_spn = ConvResnetDDU(
+    BasicBlock,
+    [2, 2, 2, 2],
+    num_classes=10,
+    image_shape=(1, 28, 28),
+    spectral_normalization=True,
+    mod=True,
+    explaining_vars=[],  # for calibration test, we don't need explaining vars
+    seperate_training=True,
+)
 resnet_spn = resnet_spn.to(device)
 
 exists = os.path.isfile("resnet_spn.pt")
@@ -138,16 +138,15 @@ if not exists or newExp:
         print("loaded resnet")
     print("training resnet_spn")
     # train model
-    optimizer = torch.optim.Adam(resnet_spn.parameters(), lr=0.03)
+    optimizer = torch.optim.Adam(resnet_spn.parameters(), lr=0.05)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     resnet_spn.start_train(
         train_dl,
         valid_dl,
         device,
         optimizer,
-        lambda_v=0.8,
-        # lambda_v=0.1,
-        warmup_epochs=20,
+        lambda_v=0.5,
+        warmup_epochs=50,
         num_epochs=50,
         # warmup_epochs=50,
         # num_epochs=50,

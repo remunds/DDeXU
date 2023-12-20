@@ -6,18 +6,16 @@ import matplotlib.colors as colors
 import sklearn.datasets
 
 from torch.utils.data import DataLoader
+import os
+import mlflow
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# Set our tracking server uri for logging
+mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 
-result_dir = "./two_moons/"
-# newExp = True
-newExp = False
-
-batchsize_resnet = 128
-batchsize_einet = 128
+# Create a new MLflow Experiment
+mlflow.set_experiment("two-moons")
 
 ### data and stuff from here: https://www.tensorflow.org/tutorials/understanding/sngp
-
 ### visualization macros
 plt.rcParams["figure.dpi"] = 140
 
@@ -31,7 +29,15 @@ DEFAULT_NORM = colors.Normalize(
 DEFAULT_N_GRID = 100
 
 
-def plot_uncertainty_surface(test_uncertainty, ax, cmap=None, plot_train=True):
+def plot_uncertainty_surface(
+    train_examples,
+    train_labels,
+    ood_examples,
+    test_uncertainty,
+    ax,
+    cmap=None,
+    plot_train=True,
+):
     """Visualizes the 2D uncertainty surface.
 
     For simplicity, assume these objects already exist in the memory:
@@ -120,126 +126,173 @@ def make_ood_data(sample_size=500, means=(2.5, -1.75), vars=(0.01, 0.01)):
     ).astype(np.float32)
 
 
-# Load the train, test and OOD datasets.
-train_examples, train_labels = make_training_data(sample_size=500)
-test_examples = make_testing_data()
-ood_examples = make_ood_data(sample_size=500)
+def start_run(run_name, batch_sizes, model_params, train_params):
+    with mlflow.start_run(run_name=run_name):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        mlflow.log_param("device", device)
 
-# Visualize
-pos_examples = train_examples[train_labels == 0]
-neg_examples = train_examples[train_labels == 1]
+        ckpt_dir = f"ckpts/two_moons/{run_name}/"
+        os.makedirs(ckpt_dir, exist_ok=True)
+        mlflow.log_param("ckpt_dir", ckpt_dir)
 
-plt.figure(figsize=(7, 5.5))
+        # log all params
+        mlflow.log_params(batch_sizes)
+        mlflow.log_params(model_params)
+        mlflow.log_params(train_params)
 
-plt.scatter(pos_examples[:, 0], pos_examples[:, 1], c="#377eb8", alpha=0.5)
-plt.scatter(neg_examples[:, 0], neg_examples[:, 1], c="#ff7f00", alpha=0.5)
-plt.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
+        # Load the train, test and OOD datasets.
+        train_examples, train_labels = make_training_data(sample_size=500)
+        test_examples = make_testing_data()
+        ood_examples = make_ood_data(sample_size=500)
 
-plt.legend(["Positive", "Negative", "Out-of-Domain"])
+        pos_examples = train_examples[train_labels == 0]
+        neg_examples = train_examples[train_labels == 1]
 
-plt.ylim(DEFAULT_Y_RANGE)
-plt.xlim(DEFAULT_X_RANGE)
+        # put into data loaders
+        train_ds = list(zip(train_examples, train_labels))
+        train_dl = DataLoader(
+            train_ds[:900],
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=1,
+        )
+        valid_dl = DataLoader(
+            train_ds[900:],
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=1,
+        )
 
-plt.savefig(f"{result_dir}two_moons.png")
-# put into data loaders
-train_ds = list(zip(train_examples, train_labels))
-train_dl = DataLoader(
-    train_ds[:900],
-    batch_size=batchsize_resnet,
-    shuffle=True,
-    pin_memory=True,
-    num_workers=1,
+        from ResNetSPN import DenseResNetSPN
+
+        resnet = DenseResNetSPN(**model_params)
+        mlflow.set_tag("model", resnet.__class__.__name__)
+        print(resnet)
+        resnet.to(device)
+        # it is interesting to play with lambda_v, dropout, repetition and depth
+        resnet.start_train(
+            train_dl,
+            valid_dl,
+            device,
+            checkpoint_dir=ckpt_dir,
+            **train_params,
+        )
+        mlflow.pytorch.log_model(resnet, "resnet_spn")
+        # evaluate
+        resnet.eval()
+        train_acc = resnet.eval_acc(train_dl, device)
+        print("train accuracy: ", train_acc)
+        mlflow.log_metric("train accuracy", train_acc)
+
+        # get LL's of first 5 training examples
+        pos_ll = resnet(torch.from_numpy(pos_examples).to(device)).mean()
+        mlflow.log_metric("pos_ll", pos_ll)
+        neg_ll = resnet(torch.from_numpy(neg_examples).to(device)).mean()
+        mlflow.log_metric("neg_ll", neg_ll)
+
+        # get LL's 5 ood examples
+        ood_ll = resnet(torch.from_numpy(ood_examples).to(device)).mean()
+        mlflow.log_metric("ood_ll", ood_ll)
+
+        resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
+        resnet_probs = torch.nn.functional.softmax(resnet_logits, dim=1)[:, 0]
+        resnet_probs = resnet_probs.cpu().detach().numpy()
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, resnet_probs, ax=ax
+        )
+
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Class Probability, SPN model")
+        mlflow.log_figure(fig, "class_probability.png")
+
+        resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Predictive Uncertainty, SPN Model")
+        mlflow.log_figure(fig, "predictive_variance.png")
+
+        resnet_uncertainty = (
+            resnet_logits.cpu().detach().numpy()[:, 0]
+        )  # log likelihood
+        print(resnet_uncertainty[:5])
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("LL Uncertainty, SPN Model")
+        mlflow.log_figure(fig, "ll_uncertainty.png")
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples,
+            train_labels,
+            ood_examples,
+            resnet_uncertainty,
+            ax=ax,
+            plot_train=False,
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("LL Uncertainty, SPN Model")
+        mlflow.log_figure(fig, "ll_uncertainty_no_train.png")
+
+        print(test_examples.shape)
+        test_dl = DataLoader(
+            test_examples,
+            batch_size=batch_sizes["resnet"],
+            pin_memory=True,
+            num_workers=1,
+        )
+        resnet_uncertainty = (
+            resnet.eval_dempster_shafer(test_dl, device, return_all=True)
+            .cpu()
+            .detach()
+            .numpy()
+        )
+        print(resnet_uncertainty.shape)
+        print(resnet_uncertainty[:5])
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Dempster Shafer, SPN Model")
+        mlflow.log_figure(fig, "dempster_shafer.png")
+
+
+batch_sizes = dict(resnet=512)
+model_params = dict(
+    input_dim=2,
+    output_dim=2,
+    num_layers=3,
+    num_hidden=32,
+    spec_norm_bound=0.9,
+    einet_depth=3,
+    einet_num_sums=20,
+    einet_num_leaves=20,
+    einet_num_repetitions=1,
+    einet_leaf_type="Normal",
+    einet_dropout=0.0,
 )
-valid_dl = DataLoader(
-    train_ds[900:],
-    batch_size=batchsize_resnet,
-    shuffle=True,
-    pin_memory=True,
-    num_workers=1,
-)
-
-###############################################################################
-from ResNetSPN import DenseResNetSPN
-
-resnet_config = dict(
-    input_dim=2, output_dim=2, num_layers=3, num_hidden=32, spec_norm_bound=0.5  # 0.95
-)
-resnet = DenseResNetSPN(**resnet_config, seperate_training=True)
-print(resnet)
-optimizer = torch.optim.Adam(resnet.parameters(), lr=0.03)
-lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-resnet.to(device)
-# it is interesting to play with lambda_v, dropout, repetition and depth
-resnet.start_train(
-    train_dl,
-    valid_dl,
-    device,
-    optimizer,
-    lambda_v=0.8,
-    # lambda_v=0.1,
-    warmup_epochs=20,
-    num_epochs=50,
+train_params = dict(
+    learning_rate_warmup=0.05,
+    learning_rate=0.05,
+    lambda_v=0.995,
+    warmup_epochs=50,
+    num_epochs=100,
     deactivate_resnet=True,
-    lr_schedule_einet=lr_scheduler,
+    lr_schedule_warmup_step_size=10,
+    lr_schedule_warmup_gamma=0.5,
+    lr_schedule_step_size=10,
+    lr_schedule_gamma=0.5,
     early_stop=10,
-    checkpoint_dir=result_dir,
 )
-# evaluate
-print("accuracy: ", resnet.eval_acc(train_dl, device))
 
-with torch.no_grad():
-    resnet.eval()
-
-    # get LL's of first 5 training examples
-    pos_ll = resnet(torch.from_numpy(pos_examples[:5]).to(device))
-    print("pos_ll: ", pos_ll)
-    neg_ll = resnet(torch.from_numpy(neg_examples[:5]).to(device))
-    print("neg_ll: ", neg_ll)
-
-    # get LL's 5 ood examples
-    ood_ll = resnet(torch.from_numpy(ood_examples[:5]).to(device))
-    print("ood_ll: ", ood_ll)
-
-    resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
-    resnet_probs = torch.nn.functional.softmax(resnet_logits, dim=1)[:, 0]
-    resnet_probs = resnet_probs.cpu().numpy()
-    _, ax = plt.subplots(figsize=(7, 5.5))
-    pcm = plot_uncertainty_surface(resnet_probs, ax=ax)
-
-    plt.colorbar(pcm, ax=ax)
-    plt.title("Class Probability, SPN model")
-    plt.savefig(f"{result_dir}two_moons_SPN.png")
-
-    resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
-    _, ax = plt.subplots(figsize=(7, 5.5))
-    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
-    plt.colorbar(pcm, ax=ax)
-    plt.title("Predictive Uncertainty, SPN Model")
-    plt.savefig(f"{result_dir}two_moons_SPN_uncertainty.png")
-
-    resnet_uncertainty = resnet_logits.cpu().numpy()[:, 0]  # log likelihood
-    print(resnet_uncertainty[:5])
-    _, ax = plt.subplots(figsize=(7, 5.5))
-    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
-    plt.colorbar(pcm, ax=ax)
-    plt.title("LL Uncertainty, SPN Model")
-    plt.savefig(f"{result_dir}two_moons_SPN_ll_uncertainty.png")
-
-    _, ax = plt.subplots(figsize=(7, 5.5))
-    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax, plot_train=False)
-    plt.colorbar(pcm, ax=ax)
-    plt.title("LL Uncertainty, SPN Model")
-    plt.savefig(f"{result_dir}two_moons_SPN_ll_uncertainty_no_train.png")
-
-    print(test_examples.shape)
-    test_dl = DataLoader(
-        test_examples, batch_size=batchsize_resnet, pin_memory=True, num_workers=1
-    )
-    resnet_uncertainty = resnet.eval_dempster_shafer(test_dl, device)
-    print(resnet_uncertainty.shape)
-    print(resnet_uncertainty[:5])
-    _, ax = plt.subplots(figsize=(7, 5.5))
-    pcm = plot_uncertainty_surface(resnet_uncertainty, ax=ax)
-    plt.colorbar(pcm, ax=ax)
-    plt.title("Dempster Shafer, SPN Model")
-    plt.savefig(f"{result_dir}two_moons_SPN_dempster_shafer.png")
+run_name = "end_to_end"
+start_run(run_name, batch_sizes, model_params, train_params)

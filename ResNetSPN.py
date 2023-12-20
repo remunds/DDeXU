@@ -12,6 +12,7 @@ from simple_einet.layers.distributions.normal import Normal
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
+import mlflow
 
 
 class EinetUtils:
@@ -20,19 +21,35 @@ class EinetUtils:
         dl_train,
         dl_valid,
         device,
-        optimizer,
+        learning_rate_warmup,
+        learning_rate,
         lambda_v,
         warmup_epochs,
         num_epochs,
         deactivate_resnet=True,
-        lr_schedule_resnet=None,
-        lr_schedule_einet=None,
+        lr_schedule_warmup_step_size=None,
+        lr_schedule_warmup_gamma=None,
+        lr_schedule_step_size=None,
+        lr_schedule_gamma=None,
         early_stop=3,
         checkpoint_dir=None,
     ):
         self.train()
+        self.deactivate_einet()
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
+        if (
+            lr_schedule_warmup_step_size is not None
+            and lr_schedule_warmup_gamma is not None
+        ):
+            lr_schedule_resnet = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=lr_schedule_warmup_step_size,
+                gamma=lr_schedule_warmup_gamma,
+            )
+
         val_increase = 0
         lowest_val_loss = torch.inf
+        epoch = 0
         # warmup by only training resnet
         for epoch in range(warmup_epochs):
             loss = 0.0
@@ -45,7 +62,7 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule_resnet is not None:
+            if lr_schedule_resnet:
                 lr_schedule_resnet.step()
 
             val_loss = 0.0
@@ -59,6 +76,12 @@ class EinetUtils:
                     val_loss += loss_v.item()
             print(
                 f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+            )
+            mlflow.log_metric(
+                key="train_loss", value=loss / len(dl_train.dataset), step=epoch
+            )
+            mlflow.log_metric(
+                key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
             )
             # early stopping
             if val_loss > lowest_val_loss:
@@ -74,14 +97,27 @@ class EinetUtils:
                 if checkpoint_dir is not None:
                     self.save(checkpoint_dir + "checkpoint.pt")
 
-        if checkpoint_dir is not None:
+        if checkpoint_dir is not None and warmup_epochs > 0:
             # load best
             self.load(checkpoint_dir + "checkpoint.pt")
 
         # train einet (and optionally resnet jointly)
+
         self.activate_einet(deactivate_resnet)
+        if deactivate_resnet:
+            optimizer = torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
+        else:
+            optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+
+        if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
+            lr_schedule_einet = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=lr_schedule_step_size,
+                gamma=lr_schedule_gamma,
+            )
         lowest_val_loss = torch.inf
         val_increase = 0
+        warmup_epochs_performed = epoch + 1
         for epoch in range(num_epochs):
             loss = 0.0
             for data, target in tqdm(dl_train):
@@ -96,7 +132,7 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule_einet is not None:
+            if lr_schedule_einet:
                 lr_schedule_einet.step()
 
             val_loss = 0.0
@@ -113,6 +149,16 @@ class EinetUtils:
                     val_loss += loss_v.item()
                 print(
                     f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+                )
+                mlflow.log_metric(
+                    key="train_loss",
+                    value=loss / len(dl_train.dataset),
+                    step=warmup_epochs_performed + epoch,
+                )
+                mlflow.log_metric(
+                    key="val_loss",
+                    value=val_loss / len(dl_valid.dataset),
+                    step=warmup_epochs_performed + epoch,
                 )
                 # early stopping
                 if val_loss > lowest_val_loss:
@@ -211,12 +257,11 @@ class EinetUtils:
         """
         num_classes = self.einet.config.num_classes
         self.eval()
-        total = 0
-        uncertainties = []
+        index = 0
+        uncertainties = torch.zeros(len(dl.dataset))
         with torch.no_grad():
             for data in dl:
                 data = data.to(device)
-                total += data.size(0)
                 lls = self(data)
                 # assumes negative log likelihoods
                 # not really sure if normalizing even makes sense
@@ -229,7 +274,8 @@ class EinetUtils:
                 uncertainty = num_classes / (
                     num_classes + torch.sum(torch.exp(lls_norm), dim=1)
                 )
-                uncertainties.append(uncertainty)
+                uncertainties[index : index + len(uncertainty)] = uncertainty
+                index += len(uncertainty)
         if return_all:
             return uncertainties
         return torch.mean(uncertainties)
@@ -345,22 +391,31 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
     """
 
     def __init__(
-        self, spec_norm_bound=0.9, explaining_vars=[], seperate_training=False, **kwargs
+        self,
+        spec_norm_bound=0.9,
+        explaining_vars=[],
+        einet_depth=3,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=1,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
+        **kwargs,
     ):
         self.spec_norm_bound = spec_norm_bound
         self.explaining_vars = explaining_vars
+        self.einet_depth = einet_depth
+        self.einet_num_sums = einet_num_sums
+        self.einet_num_leaves = einet_num_leaves
+        self.einet_num_repetitions = einet_num_repetitions
+        if einet_leaf_type == "Normal":
+            self.einet_leaf_type = Normal
+        else:
+            raise NotImplementedError
+        self.einet_dropout = einet_dropout
+
         super().__init__(**kwargs)
         self.einet = self.make_einet_output_layer()
-        if seperate_training:
-            # start with default resnet training
-            # then train einet on hidden representations
-            self.einet_active = False
-            for param in self.einet.parameters():
-                param.requires_grad = False
-            # make sure to later set einet_active to True for training einet
-        else:
-            # train resnet and einet jointly end-to-end
-            self.einet_active = True
 
     def activate_einet(self, deactivate_resnet=True):
         """
@@ -375,6 +430,14 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
                 param.requires_grad = True
         for param in self.einet.parameters():
             param.requires_grad = True
+
+    def deactivate_einet(self):
+        """
+        Deactivates the einet output layer for first stage training.
+        """
+        self.einet_active = False
+        for param in self.einet.parameters():
+            param.requires_grad = False
 
     def make_dense_layer(self):
         """applies spectral normalization to the hidden layer."""
@@ -393,15 +456,15 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         cfg = EinetConfig(
             num_features=self.num_hidden + len(self.explaining_vars),
             num_channels=1,
-            depth=3,
-            num_sums=20,
-            num_leaves=20,
-            num_repetitions=1,
+            depth=self.einet_depth,
+            num_sums=self.einet_num_sums,
+            num_leaves=self.einet_num_leaves,
+            num_repetitions=self.einet_num_repetitions,
             num_classes=self.output_dim,
-            leaf_type=Normal,
+            leaf_type=self.einet_leaf_type,
             # leaf_kwargs={"total_count": 2**n_bits - 1},
             layer_type="einsum",
-            dropout=0.0,
+            dropout=self.einet_dropout,
         )
         model = Einet(cfg)
         return model
@@ -478,7 +541,12 @@ class ConvResNetSPN(ResNet, EinetUtils):
         image_shape,  # (C, H, W)
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
-        seperate_training=False,
+        einet_depth=3,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=1,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
         **kwargs,
     ):
         super(ConvResNetSPN, self).__init__(block, layers, num_classes, **kwargs)
@@ -494,21 +562,20 @@ class ConvResNetSPN(ResNet, EinetUtils):
         self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
         self.bn2 = nn.BatchNorm2d(512)  # new
         self.explaining_vars = explaining_vars
+        self.einet_depth = einet_depth
+        self.einet_num_sums = einet_num_sums
+        self.einet_num_leaves = einet_num_leaves
+        self.einet_num_repetitions = einet_num_repetitions
+        if einet_leaf_type == "Normal":
+            self.einet_leaf_type = Normal
+        else:
+            raise NotImplementedError
+        self.einet_dropout = einet_dropout
         self.image_shape = image_shape
         self.marginalized_scopes = None
         self.einet = self.make_einet_output_layer(
             512 * block.expansion + len(explaining_vars), num_classes
         )
-        if seperate_training:
-            # start with default resnet training
-            # then train einet on hidden representations
-            self.einet_active = False
-            for param in self.einet.parameters():
-                param.requires_grad = False
-            # make sure to later set einet_active to True for training einet
-        else:
-            # train resnet and einet jointly end-to-end
-            self.einet_active = True
 
     def activate_einet(self, deactivate_resnet=True):
         """
@@ -524,19 +591,27 @@ class ConvResNetSPN(ResNet, EinetUtils):
         for param in self.einet.parameters():
             param.requires_grad = True
 
+    def deactivate_einet(self):
+        """
+        Deactivates the einet output layer for first stage training.
+        """
+        self.einet_active = False
+        for param in self.einet.parameters():
+            param.requires_grad = False
+
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
-            depth=3,
-            num_sums=20,
-            num_leaves=20,
-            num_repetitions=10,
+            depth=self.einet_depth,
+            num_sums=self.einet_num_sums,
+            num_leaves=self.einet_num_leaves,
+            num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
-            leaf_type=Normal,
+            leaf_type=self.einet_leaf_type,
             layer_type="einsum",
-            dropout=0.0,
+            dropout=self.einet_dropout,
         )
         model = Einet(cfg)
         return model
@@ -595,7 +670,12 @@ class ConvResnetDDU(ResNet, EinetUtils):
         n_power_iterations=1,
         image_shape=(1, 28, 28),  # (C, H, W)
         explaining_vars=[],  # indices of variables that should be explained
-        seperate_training=False,
+        einet_depth=3,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=1,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
         **kwargs,
     ):
         mnist = image_shape[0] == 1 and image_shape[1] == 28 and image_shape[2] == 28
@@ -614,19 +694,18 @@ class ConvResnetDDU(ResNet, EinetUtils):
         self.explaining_vars = explaining_vars
         self.image_shape = image_shape
         self.marginalized_scopes = None
+        self.einet_depth = einet_depth
+        self.einet_num_sums = einet_num_sums
+        self.einet_num_leaves = einet_num_leaves
+        self.einet_num_repetitions = einet_num_repetitions
+        if einet_leaf_type == "Normal":
+            self.einet_leaf_type = Normal
+        else:
+            raise NotImplementedError
+        self.einet_dropout = einet_dropout
         self.einet = self.make_einet_output_layer(
             512 * block.expansion + len(explaining_vars), num_classes
         )
-        if seperate_training:
-            # start with default resnet training
-            # then train einet on hidden representations
-            self.einet_active = False
-            for param in self.einet.parameters():
-                param.requires_grad = False
-            # make sure to later set einet_active to True for training einet
-        else:
-            # train resnet and einet jointly end-to-end
-            self.einet_active = True
 
     def activate_einet(self, deactivate_resnet=True):
         """
@@ -642,19 +721,27 @@ class ConvResnetDDU(ResNet, EinetUtils):
         for param in self.einet.parameters():
             param.requires_grad = True
 
+    def deactivate_einet(self):
+        """
+        Deactivates the einet output layer for first stage training.
+        """
+        self.einet_active = False
+        for param in self.einet.parameters():
+            param.requires_grad = False
+
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
-            depth=3,
-            num_sums=20,
-            num_leaves=20,
-            num_repetitions=10,
+            depth=self.einet_depth,
+            num_sums=self.einet_num_sums,
+            num_leaves=self.einet_num_leaves,
+            num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
-            leaf_type=Normal,
+            leaf_type=self.einet_leaf_type,
             layer_type="einsum",
-            dropout=0.0,
+            dropout=self.einet_dropout,
         )
         model = Einet(cfg)
         return model
