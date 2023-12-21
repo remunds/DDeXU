@@ -124,12 +124,12 @@ _, valid_ds = torch.utils.data.random_split(
 )
 
 
-def start_run(run_name, batch_sizes, model_params, train_params):
+def start_run(run_name, batch_sizes, model_name, model_params, train_params):
     with mlflow.start_run(run_name=run_name):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
 
-        ckpt_dir = f"ckpts/mnist_calib/{run_name}/"
+        ckpt_dir = f"/data_docker/ckpts/mnist_calib/{run_name}/"
         os.makedirs(ckpt_dir, exist_ok=True)
         mlflow.log_param("ckpt_dir", ckpt_dir)
 
@@ -156,30 +156,51 @@ def start_run(run_name, batch_sizes, model_params, train_params):
         test_dl = DataLoader(test_ds, batch_size=batch_sizes["resnet"], shuffle=True)
 
         # create model
-        # from ResNetSPN import ConvResNetSPN, ResidualBlockSN
-        from ResNetSPN import ConvResnetDDU
-        from net.resnet import BasicBlock
+        if model_name == "ConvResNetSPN":
+            from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
 
-        # resnet_spn = ConvResNetSPN(
-        #     ResidualBlockSN,
-        #     [2, 2, 2, 2],
-        #     num_classes=10,
-        #     image_shape=(1, 28, 28),
-        #     explaining_vars=[],  # for calibration test, we don't need explaining vars
-        #     # spec_norm_bound=6,
-        #     spec_norm_bound=0.9,
-        #     seperate_training=True,
-        # )
-        resnet_spn = ConvResnetDDU(
-            BasicBlock,
-            [2, 2, 2, 2],
-            num_classes=10,
-            image_shape=(1, 28, 28),
-            spectral_normalization=True,
-            mod=True,
-            explaining_vars=[],  # for calibration test, we don't need explaining vars
-            seperate_training=True,
-        )
+            if model_params["block"] == "basic":
+                block = ResidualBlockSN
+            elif model_params["block"] == "bottleneck":
+                block = BottleNeckSN
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spectral_normalization"]
+            del model_params["mod"]
+
+            resnet_spn = ConvResNetSPN(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "ConvResNetDDU":
+            from ResNetSPN import ConvResnetDDU
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            resnet_spn = ConvResnetDDU(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        else:
+            raise NotImplementedError
         mlflow.set_tag("model", resnet_spn.__class__.__name__)
         resnet_spn = resnet_spn.to(device)
 
@@ -368,26 +389,27 @@ def start_run(run_name, batch_sizes, model_params, train_params):
             mlflow.log_figure(fig, f"{m}.png")
 
 
-batch_sizes = dict(resnet=512)
 model_params = dict(
-    input_dim=2,
-    output_dim=2,
-    num_layers=3,
-    num_hidden=32,
-    spec_norm_bound=0.9,
-    einet_depth=7,
+    block="bottleneck",
+    layers=[2, 2, 2, 2],
+    num_classes=10,
+    image_shape=(1, 28, 28),
+    einet_depth=3,
     einet_num_sums=20,
     einet_num_leaves=20,
-    einet_num_repetitions=20,
+    einet_num_repetitions=1,
     einet_leaf_type="Normal",
     einet_dropout=0.0,
+    spec_norm_bound=0.9,  # only for ConvResNetSPN
+    spectral_normalization=True,  # only for ConvResNetDDU
+    mod=True,  # only for ConvResNetDDU
 )
 train_params = dict(
     learning_rate_warmup=0.05,
     learning_rate=0.05,
     lambda_v=0.995,
-    warmup_epochs=5,
-    num_epochs=10,
+    warmup_epochs=3,
+    num_epochs=3,
     deactivate_resnet=True,
     lr_schedule_warmup_step_size=10,
     lr_schedule_warmup_gamma=0.5,
@@ -395,6 +417,8 @@ train_params = dict(
     lr_schedule_gamma=0.5,
     early_stop=10,
 )
-
 run_name = "seperate"
-start_run(run_name, batch_sizes, model_params, train_params)
+batch_sizes = dict(resnet=512)
+model_name = "ConvResNetSPN"
+# model_name = "ConvResNetDDU"
+start_run(run_name, batch_sizes, model_name, model_params, train_params)

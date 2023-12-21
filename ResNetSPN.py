@@ -545,7 +545,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         einet_num_sums=20,
         einet_num_leaves=20,
         einet_num_repetitions=1,
-        einet_leaf_type="Normal",
+        einet_leaf_type="normal",
         einet_dropout=0.0,
         **kwargs,
     ):
@@ -560,7 +560,6 @@ class ConvResNetSPN(ResNet, EinetUtils):
         )
         # self.conv1 = nn.utils.spectral_norm(self.conv1)
         self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
-        self.bn2 = nn.BatchNorm2d(512)  # new
         self.explaining_vars = explaining_vars
         self.einet_depth = einet_depth
         self.einet_num_sums = einet_num_sums
@@ -628,7 +627,6 @@ class ConvResNetSPN(ResNet, EinetUtils):
         x = self.layer4(x)
 
         x = self.avgpool(x)
-        x = self.bn2(x)  # new
         x = torch.flatten(x, 1)
         return x
 
@@ -778,3 +776,83 @@ class ConvResnetDDU(ResNet, EinetUtils):
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.fc(x) / self.temp
+
+
+class AutoEncoderSPN(nn.Module):
+    """
+    Performs some Convolutions to get latent embeddings, then trains SPN on those for downstream tasks.
+    Lastly, uses stochastically conditioned MPE of SPN and DeConvolution to reconstruct the original image.
+    """
+
+    def __init__(self):
+        super(AutoEncoderSPN, self).__init__()
+        # specify encoder
+        self.conv1 = nn.Conv2d(1, 32, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.activation = nn.ReLU()
+        self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.fc = nn.Linear(128 * 28 * 28, 128)
+
+        # specify decoder
+        self.fc2 = nn.Linear(128, 128 * 28 * 28)
+        self.deconv1 = nn.ConvTranspose2d(128, 64, 3, padding=1)
+        self.deconv2 = nn.ConvTranspose2d(64, 32, 3, padding=1)
+        self.deconv3 = nn.ConvTranspose2d(32, 1, 3, padding=1)
+        self.latent = None
+
+        # specify SPN
+        self.einet = self.make_einet_layer(128, 10)
+
+    def make_einet_layer(self, in_features, out_features):
+        """Uses einet as the output layer."""
+        cfg = EinetConfig(
+            num_features=in_features,
+            num_channels=1,
+            depth=3,
+            num_sums=20,
+            num_leaves=20,
+            num_repetitions=1,
+            num_classes=out_features,
+            leaf_type=Normal,
+            layer_type="einsum",
+            dropout=0.0,
+        )
+        model = Einet(cfg)
+        return model
+
+    def forward(self, x):
+        # encode
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.activation(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.activation(x)
+        x = x.view(-1, 128 * 28 * 28)
+        x = self.fc(x)
+        self.latent = x
+        # SPN
+        lls = self.einet(x)
+
+        return lls
+
+    def decode(self, x):
+        # decode
+        x = self.fc2(x)
+        x = x.view(-1, 128, 28, 28)
+        x = self.bn3(x)
+        x = self.deconv1(x)
+        x = self.activation(x)
+        x = self.bn2(x)
+        x = self.deconv2(x)
+        x = self.activation(x)
+        x = self.bn1(x)
+        x = self.deconv3(x)
+        x = torch.sigmoid(x)
+        return x
