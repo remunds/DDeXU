@@ -1,94 +1,81 @@
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import os
 import ddu_dirty_mnist
 import mlflow
 
-torch.manual_seed(0)
 
-mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
+def get_datasets():
+    data_dir = "/data_docker/datasets/"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-mlflow.set_experiment("dirty-mnist")
+    mnist_transform = transforms.Compose(
+        [
+            # transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,)),
+            transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
+        ]
+    )
+    fashion_mnist_transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,)),
+            transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
+        ]
+    )
 
-data_dir = "/data_docker/datasets/"
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # load dirty mnist
+    train_ds = ddu_dirty_mnist.DirtyMNIST(
+        data_dir + "dirty_mnist",
+        train=True,
+        transform=mnist_transform,
+        download=True,
+        normalize=False,
+        device=device,
+    )
+    test_ds = ddu_dirty_mnist.DirtyMNIST(
+        data_dir + "dirty_mnist",
+        train=False,
+        transform=mnist_transform,
+        download=True,
+        normalize=False,
+        device=device,
+    )
 
-mnist_transform = transforms.Compose(
-    [
-        # transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)),
-        transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
-    ]
-)
-fashion_mnist_transform = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)),
-        transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
-    ]
-)
+    ambiguous_ds_test = ddu_dirty_mnist.AmbiguousMNIST(
+        data_dir + "dirty_mnist",
+        train=False,
+        transform=mnist_transform,
+        download=True,
+        normalize=False,
+        device=device,
+    )
 
-# load dirty mnist
-train_ds = ddu_dirty_mnist.DirtyMNIST(
-    data_dir + "dirty_mnist",
-    train=True,
-    transform=mnist_transform,
-    download=True,
-    normalize=False,
-    device=device,
-)
-valid_ds = ddu_dirty_mnist.DirtyMNIST(
-    data_dir + "dirty_mnist",
-    train=True,
-    transform=mnist_transform,
-    download=True,
-    normalize=False,
-    device=device,
-)
-test_ds = ddu_dirty_mnist.DirtyMNIST(
-    data_dir + "dirty_mnist",
-    train=False,
-    transform=mnist_transform,
-    download=True,
-    normalize=False,
-    device=device,
-)
+    mnist_ds_test = ddu_dirty_mnist.FastMNIST(
+        data_dir + "dirty_mnist",
+        train=False,
+        transform=mnist_transform,
+        download=True,
+        normalize=False,
+        device=device,
+    )
 
-ambiguous_ds_test = ddu_dirty_mnist.AmbiguousMNIST(
-    data_dir + "dirty_mnist",
-    train=False,
-    transform=mnist_transform,
-    download=True,
-    normalize=False,
-    device=device,
-)
+    ood_ds = datasets.FashionMNIST(
+        data_dir + "fashionmnist",
+        train=False,
+        download=True,
+        transform=fashion_mnist_transform,
+    )
 
-mnist_ds_test = ddu_dirty_mnist.FastMNIST(
-    data_dir + "dirty_mnist",
-    train=False,
-    transform=mnist_transform,
-    download=True,
-    normalize=False,
-    device=device,
-)
+    train_ds, valid_ds = torch.utils.data.random_split(
+        train_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
+    )
 
-ood_ds = datasets.FashionMNIST(
-    data_dir + "fashionmnist",
-    train=False,
-    download=True,
-    transform=fashion_mnist_transform,
-)
-
-train_ds, _ = torch.utils.data.random_split(
-    train_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
-)
-_, valid_ds = torch.utils.data.random_split(
-    valid_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
-)
+    return train_ds, valid_ds, test_ds, ambiguous_ds_test, mnist_ds_test, ood_ds
 
 
-def start_run(run_name, batch_sizes, model_name, model_params, train_params):
+def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params):
     with mlflow.start_run(run_name=run_name) as run:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
@@ -101,6 +88,16 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         mlflow.log_params(batch_sizes)
         mlflow.log_params(model_params)
         mlflow.log_params(train_params)
+
+        # load data
+        (
+            train_ds,
+            valid_ds,
+            test_ds,
+            ambiguous_ds_test,
+            mnist_ds_test,
+            ood_ds,
+        ) = get_datasets()
 
         # create dataloaders
         train_dl = DataLoader(
@@ -126,6 +123,8 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         )
 
         # create model
+        model_name = model_params["model"]
+        del model_params["model"]
         if model_name == "ConvResNetSPN":
             from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
 
@@ -343,38 +342,3 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             "Fraction of data",
             "mnist_amb_ood_pred_entropy.png",
         )
-
-
-model_params = dict(
-    block="basic",
-    layers=[2, 2, 2, 2],
-    num_classes=10,
-    image_shape=(1, 28, 28),
-    einet_depth=3,
-    einet_num_sums=20,
-    einet_num_leaves=20,
-    einet_num_repetitions=1,
-    einet_leaf_type="Normal",
-    einet_dropout=0.0,
-    spec_norm_bound=0.9,  # only for ConvResNetSPN
-    spectral_normalization=True,  # only for ConvResNetDDU
-    mod=True,  # only for ConvResNetDDU
-)
-train_params = dict(
-    learning_rate_warmup=0.05,
-    learning_rate=0.05,
-    lambda_v=0.995,
-    warmup_epochs=3,
-    num_epochs=3,
-    deactivate_resnet=True,
-    lr_schedule_warmup_step_size=10,
-    lr_schedule_warmup_gamma=0.5,
-    lr_schedule_step_size=10,
-    lr_schedule_gamma=0.5,
-    early_stop=10,
-)
-run_name = "seperate"
-batch_sizes = dict(resnet=512)
-model_name = "ConvResNetSPN"
-# model_name = "ConvResNetDDU"
-start_run(run_name, batch_sizes, model_name, model_params, train_params)

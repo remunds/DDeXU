@@ -4,75 +4,65 @@ import torch
 from torch.utils.data import DataLoader
 import mlflow
 
-torch.manual_seed(0)
-
-mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
-
-mlflow.set_experiment("cifar10-c-calib")
 
 dataset_dir = "/data_docker/datasets/"
-
-# load data
-
 cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
 cifar10_c_path = "CIFAR-10-C"
 cifar10_c_path_complete = dataset_dir + cifar10_c_path
 
-# download cifar10-c
-if not os.path.exists(cifar10_c_path_complete + ".tar"):
-    print("Downloading CIFAR-10-C...")
-    os.system(f"wget {cifar10_c_url} -O {cifar10_c_path_complete}")
 
-    print("Extracting CIFAR-10-C...")
-    os.system(f"tar -xvf {cifar10_c_path_complete}.tar")
+def load_datasets():
+    # download cifar10-c
+    if not os.path.exists(cifar10_c_path_complete + ".tar"):
+        print("Downloading CIFAR-10-C...")
+        os.system(f"wget {cifar10_c_url} -O {cifar10_c_path_complete}")
 
-    print("Done!")
+        print("Extracting CIFAR-10-C...")
+        os.system(f"tar -xvf {cifar10_c_path_complete}.tar")
 
-# get normal cifar-10
-from torchvision.datasets import CIFAR10
-from torchvision import transforms
+        print("Done!")
 
-train_transformer = transforms.Compose(
-    [
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-        transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
-    ]
-)
-test_transformer = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-        transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
-    ]
-)
+    # get normal cifar-10
+    from torchvision.datasets import CIFAR10
+    from torchvision import transforms
 
-train_ds = CIFAR10(
-    root=dataset_dir + "cifar10",
-    download=True,
-    train=True,
-    transform=train_transformer,
-)
-valid_ds = CIFAR10(
-    root=dataset_dir + "cifar10", download=True, train=True, transform=test_transformer
-)
-train_ds, _ = torch.utils.data.random_split(
-    train_ds, [45000, 5000], generator=torch.Generator().manual_seed(0)
-)
-_, valid_ds = torch.utils.data.random_split(
-    valid_ds, [45000, 5000], generator=torch.Generator().manual_seed(0)
-)
-test_ds = CIFAR10(
-    root=dataset_dir + "cifar10",
-    download=True,
-    train=False,
-    transform=test_transformer,
-)
+    train_transformer = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+        ]
+    )
+    test_transformer = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+        ]
+    )
+
+    train_ds = CIFAR10(
+        root=dataset_dir + "cifar10",
+        download=True,
+        train=True,
+        transform=train_transformer,
+    )
+    train_ds, valid_ds = torch.utils.data.random_split(
+        train_ds, [45000, 5000], generator=torch.Generator().manual_seed(0)
+    )
+    test_ds = CIFAR10(
+        root=dataset_dir + "cifar10",
+        download=True,
+        train=False,
+        transform=test_transformer,
+    )
+
+    return train_ds, valid_ds, test_ds, test_transformer
 
 
-def start_run(run_name, batch_sizes, model_name, model_params, train_params):
+def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params):
     with mlflow.start_run(run_name=run_name):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
@@ -84,6 +74,9 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         mlflow.log_params(batch_sizes)
         mlflow.log_params(model_params)
         mlflow.log_params(train_params)
+
+        # load datasets
+        train_ds, valid_ds, test_ds, test_transformer = load_datasets()
 
         train_dl = DataLoader(
             train_ds,
@@ -105,6 +98,8 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         test_dl = DataLoader(test_ds, batch_size=batch_sizes["resnet"], shuffle=False)
 
         # Create model
+        model_name = model_params["model"]
+        del model_params["model"]
         if model_name == "ConvResNetSPN":
             from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
 
@@ -369,38 +364,3 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{corruption}.png")
-
-
-model_params = dict(
-    block="basic",
-    layers=[2, 2, 2, 2],
-    num_classes=10,
-    image_shape=(3, 32, 32),
-    einet_depth=3,
-    einet_num_sums=20,
-    einet_num_leaves=20,
-    einet_num_repetitions=1,
-    einet_leaf_type="Normal",
-    einet_dropout=0.0,
-    spec_norm_bound=0.9,  # only for ConvResNetSPN
-    spectral_normalization=True,  # only for ConvResNetDDU
-    mod=True,  # only for ConvResNetDDU
-)
-train_params = dict(
-    learning_rate_warmup=0.05,
-    learning_rate=0.05,
-    lambda_v=0.995,
-    warmup_epochs=10,
-    num_epochs=10,
-    deactivate_resnet=True,
-    lr_schedule_warmup_step_size=10,
-    lr_schedule_warmup_gamma=0.5,
-    lr_schedule_step_size=10,
-    lr_schedule_gamma=0.5,
-    early_stop=10,
-)
-run_name = "seperate"
-batch_sizes = dict(resnet=512)
-model_name = "ConvResNetSPN"
-# model_name = "ConvResNetDDU"
-start_run(run_name, batch_sizes, model_name, model_params, train_params)

@@ -9,12 +9,6 @@ from torch.utils.data import DataLoader
 import os
 import mlflow
 
-# Set our tracking server uri for logging
-mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
-
-# Create a new MLflow Experiment
-mlflow.set_experiment("two-moons")
-
 ### data and stuff from here: https://www.tensorflow.org/tutorials/understanding/sngp
 ### visualization macros
 plt.rcParams["figure.dpi"] = 140
@@ -126,7 +120,7 @@ def make_ood_data(sample_size=500, means=(2.5, -1.75), vars=(0.01, 0.01)):
     ).astype(np.float32)
 
 
-def start_run(run_name, batch_sizes, model_params, train_params):
+def start_two_moons_run(run_name, batch_sizes, model_params, train_params):
     with mlflow.start_run(run_name=run_name):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         mlflow.log_param("device", device)
@@ -264,35 +258,3 @@ def start_run(run_name, batch_sizes, model_params, train_params):
         plt.colorbar(pcm, ax=ax)
         plt.title("Dempster Shafer, SPN Model")
         mlflow.log_figure(fig, "dempster_shafer.png")
-
-
-batch_sizes = dict(resnet=512)
-model_params = dict(
-    input_dim=2,
-    output_dim=2,
-    num_layers=3,
-    num_hidden=32,
-    spec_norm_bound=0.9,
-    einet_depth=3,
-    einet_num_sums=20,
-    einet_num_leaves=20,
-    einet_num_repetitions=1,
-    einet_leaf_type="Normal",
-    einet_dropout=0.0,
-)
-train_params = dict(
-    learning_rate_warmup=0.05,
-    learning_rate=0.05,
-    lambda_v=0.995,
-    warmup_epochs=50,
-    num_epochs=100,
-    deactivate_resnet=True,
-    lr_schedule_warmup_step_size=10,
-    lr_schedule_warmup_gamma=0.5,
-    lr_schedule_step_size=10,
-    lr_schedule_gamma=0.5,
-    early_stop=10,
-)
-
-run_name = "end_to_end"
-start_run(run_name, batch_sizes, model_params, train_params)

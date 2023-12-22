@@ -4,60 +4,50 @@ from torchvision import datasets, transforms
 import os
 import mlflow
 
-torch.manual_seed(0)
 
-mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
+def get_datasets():
+    data_dir = "/data_docker/datasets/"
 
-mlflow.set_experiment("mnist-expl")
+    # load data
+    mnist_transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,)),
+            # transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
+        ]
+    )
 
-data_dir = "/data_docker/datasets/"
+    # load mnist
+    train_ds = datasets.MNIST(
+        data_dir + "mnist",
+        train=True,
+        transform=mnist_transform,
+        download=True,
+    )
 
-# load data
-mnist_transform = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)),
-        # transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
-    ]
-)
+    test_ds = datasets.MNIST(
+        data_dir + "mnist",
+        train=False,
+        transform=mnist_transform,
+        download=True,
+    )
 
-# load mnist
-train_ds = datasets.MNIST(
-    data_dir + "mnist",
-    train=True,
-    transform=mnist_transform,
-    download=True,
-)
-valid_ds = datasets.MNIST(
-    data_dir + "mnist",
-    train=True,
-    transform=mnist_transform,
-    download=True,
-)
+    ood_ds = datasets.FashionMNIST(
+        data_dir + "fashionmnist", train=False, download=True, transform=mnist_transform
+    )
 
-test_ds = datasets.MNIST(
-    data_dir + "mnist",
-    train=False,
-    transform=mnist_transform,
-    download=True,
-)
-
-ood_ds = datasets.FashionMNIST(
-    data_dir + "fashionmnist", train=False, download=True, transform=mnist_transform
-)
-
-print("manipulating images")
-severity_levels = 5
-
-# if we have 5k images, 1k per severity level
-index_1 = len(test_ds) // severity_levels
-index_2 = index_1 * 2
-index_3 = index_1 * 3
-index_4 = index_1 * 4
-index_5 = index_1 * 5
+    return train_ds, test_ds, ood_ds
 
 
-def get_severity(i):
+def get_severity(test_ds, i):
+    severity_levels = 5
+
+    # if we have 5k images, 1k per severity level
+    index_1 = len(test_ds) // severity_levels
+    index_2 = index_1 * 2
+    index_3 = index_1 * 3
+    index_4 = index_1 * 4
+
     return (
         1
         if i < index_1
@@ -74,11 +64,9 @@ def get_severity(i):
 def get_manipulations(ds, highest_severity=None):
     if highest_severity:
         # choose randomly between 0 and highest_severity
-        rotations = torch.randint(0, highest_severity + 1, (len(ds),)) * 20
+        rotations = torch.randint(0, highest_severity + 1, (len(ds),))
         cutoffs = torch.randint(0, highest_severity + 1, (len(ds),))
-        for i, r in enumerate(cutoffs):
-            cutoffs[i] = 2 if r == 1 else r**2
-        noises = torch.randint(0, highest_severity + 1, (len(ds),)) * 10
+        noises = torch.randint(0, highest_severity + 1, (len(ds),))
         return rotations, cutoffs, noises
 
     rotations = torch.zeros((len(ds),))
@@ -86,18 +74,15 @@ def get_manipulations(ds, highest_severity=None):
     noises = torch.zeros((len(ds),))
     # 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 degrees
     for i, r in enumerate(rotations):
-        severity = get_severity(i)
-        rotations[i] = severity * 20
+        rotations[i] = get_severity(ds, i)
 
     # 1: 2, 2: 4, 3: 9, 4: 16, 5: 25 pixels
     for i, r in enumerate(cutoffs):
-        severity = get_severity(i)
-        cutoffs[i] = 2 if severity == 1 else severity**2
+        cutoffs[i] = get_severity(ds, i)
 
     # 0: 10, 1: 20, 2: 30, 3: 40, 4: 50 noise
     for i, r in enumerate(noises):
-        severity = get_severity(i)
-        noises[i] = severity * 10
+        noises[i] = get_severity(ds, i)
     return rotations, cutoffs, noises
 
 
@@ -111,7 +96,7 @@ def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
     for i, img in enumerate(data):
         image = img.reshape(28, 28, 1)
 
-        this_noise = torch.randn((28, 28, 1)) * noises[i]
+        this_noise = torch.randn((28, 28, 1)) * noises[i] * 10
         img_noise = torch.clamp(image.clone() + this_noise, 0, 255).to(
             dtype=torch.uint8
         )
@@ -123,8 +108,10 @@ def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
             image_cutoff = image.clone()
         else:
             image_cutoff = img_noise
+
         # cutoff rows
-        image_cutoff[: int(cutoffs[i]), ...] = 0
+        cutoff = int(2 if cutoffs[i] == 1 else cutoffs[i] ** 2)
+        image_cutoff[:cutoff, ...] = 0
         if seperated:
             image_cutoff_done = transforms.ToTensor()(image_cutoff.numpy())
             cut_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
@@ -133,9 +120,10 @@ def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
             image_rot = image.clone()
         else:
             image_rot = image_cutoff
+
         image_rot = transforms.ToTensor()(image_rot.numpy())
         image_rot = transforms.functional.rotate(
-            img=image_rot, angle=int(rotations[i])  # , fill=-mean / std
+            img=image_rot, angle=int(rotations[i] * 20)  # , fill=-mean / std
         )
         if seperated:
             rot_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(image_rot).flatten()
@@ -143,11 +131,12 @@ def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
             manip_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
                 image_rot
             ).flatten()
-            return manip_ds
-    return rot_ds, cut_ds, noise_ds
+    if seperated:
+        return rot_ds, cut_ds, noise_ds
+    return manip_ds
 
 
-def start_run(run_name, batch_sizes, model_name, model_params, train_params):
+def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params):
     with mlflow.start_run(run_name=run_name):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
@@ -161,16 +150,34 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         mlflow.log_params(model_params)
         mlflow.log_params(train_params)
 
+        # load data
+        mnist_ds, test_ds, ood_ds = get_datasets()
+
         # for train, manipulate all randomly until highest severity
         # we can also have multiple manipulations per image
-        mnist_ds = datasets.MNIST(
-            data_dir + "mnist",
-            train=True,
-            transform=mnist_transform,
-            download=True,
-        )
+
         rot, cut, nois = get_manipulations(mnist_ds, highest_severity=2)
         train_ds = manipulate_data(mnist_ds.data, rot, cut, nois, seperated=False)
+
+        # # plot original
+        # import matplotlib.pyplot as plt
+
+        # image = mnist_ds.data[0].reshape(28, 28)
+        # fig, ax = plt.subplots()
+        # ax.imshow(image, cmap="gray")
+        # ax.set_title(f"label: {mnist_ds.targets[0]}")
+        # mlflow.log_figure(fig, "original.png")
+
+        # # show first image
+
+        # image = train_ds[0].reshape(28, 28)
+        # fig, ax = plt.subplots()
+        # ax.imshow(image, cmap="gray")
+        # ax.set_title(
+        #     f"label: {mnist_ds.targets[0]}, rot: {rot[0]}, cut: {cut[0]}, noise: {nois[0]}"
+        # )
+        # mlflow.log_figure(fig, "manipulated.png")
+
         manipulations = torch.stack([rot, cut, nois], dim=1)
         # add rot, cut, noise in front of each image in train_ds
         train_ds = torch.cat([manipulations, train_ds], dim=1)
@@ -196,7 +203,20 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             num_workers=2,
         )
 
+        # plot first 5 images
+        import matplotlib.pyplot as plt
+
+        for i in range(5):
+            fig, ax = plt.subplots()
+            ax.imshow(train_ds[i][0][3:].reshape(28, 28), cmap="gray")
+            ax.set_title(
+                f"label: {train_ds[i][1]}, rot: {train_ds[i][0][0]}, cut: {train_ds[i][0][1]}, noise: {train_ds[i][0][2]}"
+            )
+            mlflow.log_figure(fig, f"manipulated_{i}.png")
+
         # create model
+        model_name = model_params["model"]
+        del model_params["model"]
         if model_name == "ConvResNetSPN":
             from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
 
@@ -271,22 +291,14 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         del valid_dl
 
         # for test, manipulate all separately
-        mnist_test_ds = datasets.MNIST(
-            data_dir + "mnist",
-            train=False,
-            transform=mnist_transform,
-            download=True,
-        )
-        rot, cut, nois = get_manipulations(mnist_test_ds)
+        rot, cut, nois = get_manipulations(test_ds)
         rot_ds, cut_ds, noise_ds = manipulate_data(
-            mnist_test_ds.data, rot, cut, nois, seperated=True
+            test_ds.data, rot, cut, nois, seperated=True
         )
-        print(rot_ds.shape)
         rot = rot.unsqueeze(1)
-        print(rot.shape)
         # add rot, cut, noise in front of each image in each test_ds
         rot_ds = torch.cat(
-            [torch.zeros(len(rot_ds), 1), torch.zeros(len(rot_ds), 1), rot, rot_ds],
+            [rot, torch.zeros(len(rot_ds), 1), torch.zeros(len(rot_ds), 1), rot_ds],
             dim=1,
         )
         cut = cut.unsqueeze(1)
@@ -297,9 +309,9 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         nois = nois.unsqueeze(1)
         noise_ds = torch.cat(
             [
+                torch.zeros(len(noise_ds), 1),
+                torch.zeros(len(noise_ds), 1),
                 nois,
-                torch.zeros(len(noise_ds), 1),
-                torch.zeros(len(noise_ds), 1),
                 noise_ds,
             ],
             dim=1,
@@ -309,13 +321,22 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
 
         # calibration test
         eval_dict = {}
+        severity_levels = 5
+
+        # if we have 5k images, 1k per severity level
+        index_1 = len(test_ds) // severity_levels
+        index_2 = index_1 * 2
+        index_3 = index_1 * 3
+        index_4 = index_1 * 4
+        index_5 = index_1 * 5
         severity_indices = [index_1, index_2, index_3, index_4, index_5]
+        prev_s = 0
         for s in tqdm(severity_indices):
-            test_ds_rot_s = TensorDataset(rot_ds[:s], test_ds.targets[:s])
+            test_ds_rot_s = TensorDataset(rot_ds[prev_s:s], test_ds.targets[prev_s:s])
             test_dl_rot = DataLoader(
                 test_ds_rot_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
-            severity = get_severity(s - 1)
+            severity = get_severity(test_ds, s - 1)
             acc = resnet_spn.eval_acc(test_dl_rot, device)
             ll = resnet_spn.eval_ll(test_dl_rot, device)
             expl_ll = resnet_spn.explain_ll(test_dl_rot, device)
@@ -328,12 +349,30 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
                 "expl_ll": expl_ll[0],
                 "expl_mpe": expl_mpe[0].item(),
             }
+            # plot first image
+            image = test_ds_rot_s[0][0][3:].reshape(28, 28)
+            fig, ax = plt.subplots()
+            ax.imshow(image, cmap="gray")
+            ax.set_title(
+                f"label: {test_ds_rot_s[0][1]}, rot: {test_ds_rot_s[0][0][0]}, cut: {test_ds_rot_s[0][0][1]}, noise: {test_ds_rot_s[0][0][2]}"
+            )
+            mlflow.log_figure(fig, f"rotation_{severity}.png")
 
-            test_ds_cutoff_s = TensorDataset(cut_ds[:s], test_ds.targets[:s])
+            test_ds_cutoff_s = TensorDataset(
+                cut_ds[prev_s:s], test_ds.targets[prev_s:s]
+            )
             test_dl_cutoff = DataLoader(
                 test_ds_cutoff_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
-            severity = get_severity(s - 1)
+            # plot first image
+            image = test_ds_cutoff_s[0][0][3:].reshape(28, 28)
+            fig, ax = plt.subplots()
+            ax.imshow(image, cmap="gray")
+            ax.set_title(
+                f"label: {test_ds_cutoff_s[0][1]}, rot: {test_ds_cutoff_s[0][0][0]}, cut: {test_ds_cutoff_s[0][0][1]}, noise: {test_ds_cutoff_s[0][0][2]}"
+            )
+            mlflow.log_figure(fig, f"cutoff_{severity}.png")
+
             acc = resnet_spn.eval_acc(test_dl_cutoff, device)
             ll = resnet_spn.eval_ll(test_dl_cutoff, device)
             expl_ll = resnet_spn.explain_ll(test_dl_cutoff, device)
@@ -347,11 +386,22 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
                 "expl_mpe": expl_mpe[1].item(),
             }
 
-            test_ds_noise_s = TensorDataset(noise_ds[:s], test_ds.targets[:s])
+            test_ds_noise_s = TensorDataset(
+                noise_ds[prev_s:s], test_ds.targets[prev_s:s]
+            )
             test_dl_noise = DataLoader(
                 test_ds_noise_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
-            severity = get_severity(s - 1)
+
+            # plot first image
+            image = test_ds_noise_s[0][0][3:].reshape(28, 28)
+            fig, ax = plt.subplots()
+            ax.imshow(image, cmap="gray")
+            ax.set_title(
+                f"label: {test_ds_noise_s[0][1]}, rot: {test_ds_noise_s[0][0][0]}, cut: {test_ds_noise_s[0][0][1]}, noise: {test_ds_noise_s[0][0][2]}"
+            )
+            mlflow.log_figure(fig, f"noise_{severity}.png")
+
             acc = resnet_spn.eval_acc(test_dl_noise, device)
             ll = resnet_spn.eval_ll(test_dl_noise, device)
             expl_ll = resnet_spn.explain_ll(test_dl_noise, device)
@@ -364,6 +414,7 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
                 "expl_ll": expl_ll[2],
                 "expl_mpe": expl_mpe[2].item(),
             }
+            prev_s = s
 
         mlflow.log_dict(eval_dict, "eval_dict")
 
@@ -435,39 +486,3 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{m}.png")
-
-
-model_params = dict(
-    block="bottleneck",
-    layers=[2, 2, 2, 2],
-    num_classes=10,
-    image_shape=(1, 28, 28),
-    explaining_vars=[0, 1, 2],  # rotations, cutoffs, noises
-    einet_depth=3,
-    einet_num_sums=20,
-    einet_num_leaves=20,
-    einet_num_repetitions=1,
-    einet_leaf_type="Normal",
-    einet_dropout=0.0,
-    spec_norm_bound=0.9,  # only for ConvResNetSPN
-    spectral_normalization=True,  # only for ConvResNetDDU
-    mod=True,  # only for ConvResNetDDU
-)
-train_params = dict(
-    learning_rate_warmup=0.001,
-    learning_rate=0.001,
-    lambda_v=0.995,
-    warmup_epochs=3,
-    num_epochs=3,
-    deactivate_resnet=True,
-    lr_schedule_warmup_step_size=10,
-    lr_schedule_warmup_gamma=0.5,
-    lr_schedule_step_size=10,
-    lr_schedule_gamma=0.5,
-    early_stop=10,
-)
-run_name = "seperate"
-batch_sizes = dict(resnet=512)
-model_name = "ConvResNetSPN"
-# model_name = "ConvResNetDDU"
-start_run(run_name, batch_sizes, model_name, model_params, train_params)
