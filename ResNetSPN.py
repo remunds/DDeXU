@@ -215,7 +215,7 @@ class EinetUtils:
                 index += len(ll)
         if return_all:
             return lls
-        return torch.mean(lls)
+        return torch.mean(lls).item()
 
     def eval_pred_variance(self, dl, device, return_all=False):
         self.eval()
@@ -232,7 +232,7 @@ class EinetUtils:
                 index += len(pred_var)
         if return_all:
             return pred_vars
-        return torch.mean(pred_vars)
+        return torch.mean(pred_vars).item()
 
     def eval_pred_entropy(self, dl, device, return_all=False):
         self.eval()
@@ -248,7 +248,7 @@ class EinetUtils:
                 index += len(pred_entropy)
         if return_all:
             return pred_entropies
-        return torch.mean(pred_entropies)
+        return torch.mean(pred_entropies).item()
 
     def eval_dempster_shafer(self, dl, device, return_all=False):
         """
@@ -278,7 +278,7 @@ class EinetUtils:
                 index += len(uncertainty)
         if return_all:
             return uncertainties
-        return torch.mean(uncertainties)
+        return torch.mean(uncertainties).item()
 
     def explain_ll(self, dl, device):
         """
@@ -291,7 +291,7 @@ class EinetUtils:
         for i in self.explaining_vars:
             self.marginalized_scopes = [i]
             ll_marg = self.eval_ll(dl, device)
-            explanations.append(ll_default - ll_marg)
+            explanations.append((ll_marg - ll_default))
         self.marginalized_scopes = None
         return explanations
 

@@ -204,30 +204,27 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         test_ll = resnet_spn.eval_ll(test_dl, device)
         mlflow.log_metric("test ll", test_ll)
 
-        ood_ds_flat = ood_ds.data.reshape(-1, 28 * 28).to(dtype=torch.float32)
-        ood_ds_flat = TensorDataset(ood_ds_flat, ood_ds.targets)
-        ood_dl = DataLoader(ood_ds_flat, batch_size=batch_sizes["resnet"], shuffle=True)
-        # TODO!
-        print("accuracy ood: ", resnet_spn.eval_acc(ood_dl, device))
-        print("ll ood: ", resnet_spn.eval_ll(ood_dl, device))
-
         # create dataloaders
         mnist_dl = DataLoader(
             mnist_ds_test,
-            batch_size=batchsize,
+            batch_size=batch_sizes["resnet"],
             shuffle=False,
             pin_memory=False,
             num_workers=0,
         )
         ambiguous_dl = DataLoader(
             ambiguous_ds_test,
-            batch_size=batchsize,
+            batch_size=batch_sizes["resnet"],
             shuffle=False,
             pin_memory=False,
             num_workers=0,
         )
         ood_dl = DataLoader(
-            ood_ds, batch_size=batchsize, shuffle=False, pin_memory=False, num_workers=0
+            ood_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=False,
+            num_workers=0,
         )
 
         # plot as in DDU paper
@@ -237,37 +234,41 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
         # get log-likelihoods for all datasets
         with torch.no_grad():
             lls_mnist = resnet_spn.eval_ll(mnist_dl, device, return_all=True)
+            mlflow.log_metric("mnist ll", torch.mean(lls_mnist).item())
             pred_var_mnist = resnet_spn.eval_pred_variance(
                 mnist_dl, device, return_all=True
             )
+            mlflow.log_metric("mnist pred var", torch.mean(pred_var_mnist).item())
             pred_entropy_mnist = resnet_spn.eval_pred_entropy(
                 mnist_dl, device, return_all=True
             )
-            print("lls_mnist: ", torch.mean(lls_mnist))
-            print("pred_var mnist: ", torch.mean(pred_var_mnist))
-            print("pred_entropy mnist: ", torch.mean(pred_entropy_mnist))
+            mlflow.log_metric(
+                "mnist pred entropy", torch.mean(pred_entropy_mnist).item()
+            )
 
             lls_amb = resnet_spn.eval_ll(ambiguous_dl, device, return_all=True)
+            mlflow.log_metric("ambiguous ll", torch.mean(lls_amb).item())
             pred_var_amb = resnet_spn.eval_pred_variance(
                 ambiguous_dl, device, return_all=True
             )
+            mlflow.log_metric("ambiguous pred var", torch.mean(pred_var_amb).item())
             pred_entropy_amb = resnet_spn.eval_pred_entropy(
                 ambiguous_dl, device, return_all=True
             )
-            print("lls_ambiguous: ", torch.mean(lls_amb))
-            print("pred_var ambiguous: ", torch.mean(pred_var_amb))
-            print("pred_entropy ambiguous: ", torch.mean(pred_entropy_amb))
+            mlflow.log_metric(
+                "ambiguous pred entropy", torch.mean(pred_entropy_amb).item()
+            )
 
             lls_ood = resnet_spn.eval_ll(ood_dl, device, return_all=True)
+            mlflow.log_metric("ood ll", torch.mean(lls_ood).item())
             pred_var_ood = resnet_spn.eval_pred_variance(
                 ood_dl, device, return_all=True
             )
+            mlflow.log_metric("ood pred var", torch.mean(pred_var_ood).item())
             pred_entropy_ood = resnet_spn.eval_pred_entropy(
                 ood_dl, device, return_all=True
             )
-            print("lls_ood: ", torch.mean(lls_ood))
-            print("pred_var ood: ", torch.mean(pred_var_ood))
-            print("pred_entropy ood: ", torch.mean(pred_entropy_ood))
+            mlflow.log_metric("ood pred entropy", torch.mean(pred_entropy_ood).item())
 
         # plot
         def hist_plot(data_mnist, data_amb, data_ood, xlabel, ylabel, filename):
@@ -277,27 +278,27 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             sns.set_style("whitegrid")
             sns.set_context("paper", font_scale=1.5)
             # plot mnist
-            plt.figure(figsize=(8, 6))
+            fig, ax = plt.subplots()
             sns.histplot(
                 data_mnist.cpu().numpy(),
                 stat="probability",
                 label="MNIST",
+                ax=ax,
                 bins=30,
                 # binrange=(min, max),
             )
-            plt.xlabel(xlabel)
-            plt.ylabel(ylabel)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
 
             # plot ambiguous mnist
             sns.histplot(
                 data_amb.cpu().numpy(),
                 stat="probability",
                 label="Ambiguous MNIST",
+                ax=ax,
                 bins=30,
                 # binrange=(min, max),
             )
-            plt.xlabel(xlabel)
-            plt.ylabel(ylabel)
 
             # plot ood
             sns.histplot(
@@ -305,14 +306,13 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
                 stat="probability",
                 label="Fashion MNIST",
                 bins=30,
+                ax=ax,
                 # binrange=(min, max),
             )
-            plt.xlabel(xlabel)
-            plt.ylabel(ylabel)
 
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(result_dir + filename)
+            fig.legend()
+            fig.tight_layout()
+            mlflow.log_figure(fig, filename)
 
         # Likelihood plot
         hist_plot(
@@ -343,3 +343,38 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             "Fraction of data",
             "mnist_amb_ood_pred_entropy.png",
         )
+
+
+model_params = dict(
+    block="basic",
+    layers=[2, 2, 2, 2],
+    num_classes=10,
+    image_shape=(1, 28, 28),
+    einet_depth=3,
+    einet_num_sums=20,
+    einet_num_leaves=20,
+    einet_num_repetitions=1,
+    einet_leaf_type="Normal",
+    einet_dropout=0.0,
+    spec_norm_bound=0.9,  # only for ConvResNetSPN
+    spectral_normalization=True,  # only for ConvResNetDDU
+    mod=True,  # only for ConvResNetDDU
+)
+train_params = dict(
+    learning_rate_warmup=0.05,
+    learning_rate=0.05,
+    lambda_v=0.995,
+    warmup_epochs=3,
+    num_epochs=3,
+    deactivate_resnet=True,
+    lr_schedule_warmup_step_size=10,
+    lr_schedule_warmup_gamma=0.5,
+    lr_schedule_step_size=10,
+    lr_schedule_gamma=0.5,
+    early_stop=10,
+)
+run_name = "seperate"
+batch_sizes = dict(resnet=512)
+model_name = "ConvResNetSPN"
+# model_name = "ConvResNetDDU"
+start_run(run_name, batch_sizes, model_name, model_params, train_params)

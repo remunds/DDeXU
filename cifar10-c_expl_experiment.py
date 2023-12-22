@@ -2,15 +2,15 @@ import os
 import numpy as np
 from torch.utils.data import DataLoader
 import torch
+import mlflow
 
 torch.manual_seed(0)
 
-newExp = True
-# newExp = False
+mlflow.set_tracking_uri("file:/data_docker/mlruns")
 
-batch_size = 512
+mlflow.set_experiment("cifar10-c_expl")
+
 dataset_dir = "/data_docker/datasets/"
-device = "cuda" if torch.cuda.is_available() else "cpu"
 
 cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
 cifar10_c_path = "CIFAR-10-C"
@@ -30,10 +30,22 @@ if not os.path.exists(cifar10_c_path_complete + ".tar"):
 from torchvision.datasets import CIFAR10
 from torchvision import transforms
 
-cifar10_transformer = transforms.Compose(
+train_transformer = transforms.Compose(
+    [
+        # transforms.ToTensor(),
+        # transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        # transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+    ]
+)
+test_transformer = transforms.Compose(
     [
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        # transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
     ]
 )
 
@@ -49,7 +61,7 @@ corruptions = [
     "contrast",
     "defocus_blur",
     "elastic_transform",
-    # "fog", # was broken -> reload?
+    "fog",  # was broken -> reload?
     "frost",
     "gaussian_blur",
     "gaussian_noise",
@@ -65,8 +77,10 @@ corruptions = [
     "speckle_noise",
     "zoom_blur",
 ]
-# now add one zero for each corruption level
-train_data = [cifar10_transformer(img).flatten() for img in train_ds.data]
+
+# train_data contains default cifar10 data, no corruptions
+# for explanation variables: add one zero for each corruption level
+train_data = [train_transformer(img).flatten() for img, _ in train_ds]
 train_data = torch.concat(
     [
         torch.zeros((train_ds.data.shape[0], len(corruptions))),
@@ -76,7 +90,8 @@ train_data = torch.concat(
 )
 train_data = list(zip(train_data, train_ds.targets))
 
-test_data = [cifar10_transformer(img).flatten() for img in test_ds.data]
+# same for test data
+test_data = [test_transformer(img).flatten() for img, _ in test_ds]
 test_data = torch.concat(
     [
         torch.zeros((test_ds.data.shape[0], len(corruptions))),
@@ -85,13 +100,6 @@ test_data = torch.concat(
     dim=1,
 )
 test_data = list(zip(test_data, test_ds.targets))
-
-# train_dl = DataLoader(
-#     train_data, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=1
-# )
-test_dl = DataLoader(
-    test_data, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=1
-)
 
 
 def get_corrupted_cifar10(
@@ -108,7 +116,8 @@ def get_corrupted_cifar10(
         (datasets_length, all_corruption_len), dtype=np.uint8
     )
     train_corrupt_labels = np.zeros((datasets_length), dtype=np.uint8)
-    test_corrupt_labels = np.zeros((datasets_length) + 5000, dtype=np.uint8)
+    # test_corrupt_labels = np.zeros((datasets_length) + 5000, dtype=np.uint8)
+    test_corrupt_labels = np.zeros((datasets_length), dtype=np.uint8)
     train_idx = 0
     test_idx = 0
     for corr_idx, c in enumerate(corruptions):
@@ -146,129 +155,294 @@ def get_corrupted_cifar10(
     )
 
 
-print("loading corrupted data")
-(
-    train_corrupt_data,
-    train_corrupt_levels,
-    train_corrupt_labels,
-    test_corrupt_data,
-    test_corrupt_levels,
-    test_corrupt_labels,
-) = get_corrupted_cifar10(
-    len(corruptions), ["gaussian_noise", "snow"], np.array(test_ds.targets), [1, 2]
-)
-train_corrupt_data = [cifar10_transformer(img).flatten() for img in train_corrupt_data]
-train_corrupt_data = torch.concat(
-    [
-        torch.from_numpy(train_corrupt_levels).to(dtype=torch.int32),
-        torch.stack(train_corrupt_data, dim=0).to(dtype=torch.float32),
-    ],
-    dim=1,
-)
-train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
-# We want to train on some of the corrupted data, s.t. explanations are possible
-train_data_combined = train_data + train_corrupt_data
-train_dl = DataLoader(
-    train_data_combined,
-    batch_size=batch_size,
-    shuffle=True,
-    pin_memory=True,
-    num_workers=1,
-)
+def start_run(run_name, batch_sizes, model_name, model_params, train_params):
+    with mlflow.start_run(run_name=run_name) as run:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        mlflow.log_param("device", device)
 
-print("done loading data")
-###############################################################################
-from ResNetSPN import ConvResNetSPN, ResidualBlockSN
+        ckpt_dir = f"/data_docker/ckpts/cifar10-c_expl/{run_name}/"
+        mlflow.log_param("ckpt_dir", ckpt_dir)
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+        # log all params
+        mlflow.log_params(batch_sizes)
+        mlflow.log_params(model_params)
+        mlflow.log_params(train_params)
 
-resnet_spn = ConvResNetSPN(
-    ResidualBlockSN,
-    [2, 2, 2, 2],
+        levels = train_params["corruption_levels"]
+        del train_params["corruption_levels"]
+        if type(levels) != list:
+            raise ValueError("corruption_levels must be a list")
+
+        print("loading train corruption data")
+        (
+            train_corrupt_data,
+            train_corrupt_levels,
+            train_corrupt_labels,
+            _,
+            _,
+            _,
+        ) = get_corrupted_cifar10(
+            len(corruptions), corruptions, np.array(test_ds.targets), levels
+        )
+        print("done loading corrupted data")
+        # use the test_transformer -> no augmentation
+        train_corrupt_data = [
+            test_transformer(img).flatten() for img in train_corrupt_data
+        ]
+        train_corrupt_data = torch.concat(
+            [
+                torch.from_numpy(train_corrupt_levels).to(dtype=torch.int32),
+                torch.stack(train_corrupt_data, dim=0).to(dtype=torch.float32),
+            ],
+            dim=1,
+        )
+        train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
+        # We want to train on some of the corrupted data, s.t. explanations are possible
+        train_data_combined = train_data + train_corrupt_data
+
+        train_ds, valid_ds = torch.utils.data.random_split(
+            train_data_combined, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
+        )
+        train_dl = DataLoader(
+            train_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=4,
+        )
+        valid_dl = DataLoader(
+            valid_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=1,
+        )
+
+        print("done loading data")
+
+        # Create model
+        if model_name == "ConvResNetSPN":
+            from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
+
+            if model_params["block"] == "basic":
+                block = ResidualBlockSN
+            elif model_params["block"] == "bottleneck":
+                block = BottleNeckSN
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spectral_normalization"]
+            del model_params["mod"]
+
+            resnet_spn = ConvResNetSPN(
+                block,
+                layers,
+                **model_params,
+            )
+        elif model_name == "ConvResNetDDU":
+            from ResNetSPN import ConvResnetDDU
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            resnet_spn = ConvResnetDDU(
+                block,
+                layers,
+                **model_params,
+            )
+        else:
+            raise NotImplementedError
+        mlflow.set_tag("model", resnet_spn.__class__.__name__)
+        resnet_spn = resnet_spn.to(device)
+
+        print("training resnet_spn")
+        # train model
+        resnet_spn.start_train(
+            train_dl,
+            valid_dl,
+            device,
+            checkpoint_dir=ckpt_dir,
+            **train_params,
+        )
+        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
+        # Evaluate
+        resnet_spn.eval()
+
+        # eval accuracy
+        resnet_spn.einet_active = False
+        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc_resnet", valid_acc)
+        resnet_spn.einet_active = True
+        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+
+        valid_ll = resnet_spn.eval_ll(valid_dl, device)
+        mlflow.log_metric("valid_ll", valid_ll)
+
+        del train_dl
+        del valid_dl
+
+        # test with all corruption-levels
+        test_levels = [0, 1, 2, 3, 4]
+        print("loading test corrupted data")
+        (
+            _,
+            _,
+            _,
+            test_corrupt_data,
+            test_corrupt_levels,
+            test_corrupt_labels,
+        ) = get_corrupted_cifar10(
+            len(corruptions), corruptions, np.array(test_ds.targets), test_levels
+        )
+        print("done loading test corrupted data")
+
+        test_corrupt_data = [
+            test_transformer(img).flatten() for img in test_corrupt_data
+        ]
+        test_corrupt_data = torch.concat(
+            [
+                torch.from_numpy(test_corrupt_levels).to(dtype=torch.int32),
+                torch.stack(test_corrupt_data, dim=0).to(dtype=torch.float32),
+            ],
+            dim=1,
+        )
+        # test_corrupt_levels.shape = [num_data_points, num_corruptions]
+        from tqdm import tqdm
+
+        eval_dict = {}
+
+        for corr_idx, corruption in tqdm(enumerate(corruptions)):
+            eval_dict[corruption] = {}
+            for corr_level in test_levels:
+                eval_dict[corruption][corr_level] = {}
+                data_idxs = test_corrupt_levels[:, corr_idx] == corr_level + 1
+                data = test_corrupt_data[data_idxs]
+                labels = test_corrupt_labels[data_idxs]
+
+                ds = list(zip(data, labels))
+                dl = DataLoader(
+                    ds,
+                    batch_size=batch_sizes["resnet"],
+                    shuffle=False,
+                    pin_memory=False,
+                    # pin_memory=True,
+                    # num_workers=1,
+                )
+                acc = resnet_spn.eval_acc(dl, device)
+                eval_dict[corruption][corr_level]["acc"] = acc
+                ll = resnet_spn.eval_ll(dl, device)
+                eval_dict[corruption][corr_level]["ll"] = ll
+                expl_ll = resnet_spn.explain_ll(dl, device)
+                eval_dict[corruption][corr_level]["expl_ll"] = expl_ll[corr_idx]
+                expl_mpe = resnet_spn.explain_mpe(dl, device)
+                eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe[
+                    corr_idx
+                ].item()
+        mlflow.log_dict(eval_dict, "eval_dict")
+
+        overall_acc = np.mean(
+            [eval_dict[c][l]["acc"] for c in eval_dict for l in eval_dict[c]]
+        )
+        mlflow.log_metric("manip_acc", overall_acc)
+        overall_ll = np.mean(
+            [eval_dict[c][l]["ll"] for c in eval_dict for l in eval_dict[c]]
+        )
+        mlflow.log_metric("manip_ll", overall_ll)
+
+        import matplotlib.pyplot as plt
+
+        # plot showing that with each corruption increase, acc and ll decrease
+        # x-axis: corruption level, y-axis: acc/ll
+        # as in calib_experiment
+        for corruption in eval_dict:
+            accs = [eval_dict[corruption][l]["acc"] for l in eval_dict[corruption]]
+            lls = [eval_dict[corruption][l]["ll"] for l in eval_dict[corruption]]
+            # get corruption index
+            corr_idx = corruptions.index(corruption)
+            expl_ll = [
+                eval_dict[corruption][l]["expl_ll"] for l in eval_dict[corruption]
+            ]
+            expl_mpe = [
+                eval_dict[corruption][l]["expl_mpe"] for l in eval_dict[corruption]
+            ]
+
+            fig, ax = plt.subplots()
+            ax.set_xlabel("severity")
+            ax.set_xticks(np.array(list(range(5))) + 1)
+
+            ax.plot(accs, label="acc", color="red")
+            ax.set_ylabel("accuracy", color="red")
+            ax.tick_params(axis="y", labelcolor="red")
+            ax.set_ylim([0, 1])
+
+            ax2 = ax.twinx()
+            ax2.plot(lls, label="ll", color="blue")
+            # ax2.set_ylabel("log-likelihood", color="blue")
+            ax2.tick_params(axis="y", labelcolor="blue")
+
+            ax3 = ax.twinx()
+            ax3.plot(expl_ll, label="expl_ll", color="green")
+            # ax3.set_ylabel("expl_ll", color="green")
+            ax3.tick_params(axis="y", labelcolor="green")
+
+            ax4 = ax.twinx()
+            ax4.plot(expl_mpe, label="expl_mpe", color="orange")
+            # ax4.set_ylabel("expl_mpe", color="orange")
+            ax4.tick_params(axis="y", labelcolor="orange")
+
+            fig.tight_layout()
+            fig.legend()
+            mlflow.log_figure(fig, f"{corruption}.png")
+
+        # plot showing corruption levels on x-axis and expl-ll/mpe of
+        # current corruption on y-axis
+
+
+model_params = dict(
+    block="basic",
+    layers=[2, 2, 2, 2],
     num_classes=10,
     image_shape=(3, 32, 32),
     explaining_vars=list(range(len(corruptions))),
-    spec_norm_bound=6,
-    seperate_training=True,
+    einet_depth=3,
+    einet_num_sums=20,
+    einet_num_leaves=20,
+    einet_num_repetitions=1,
+    einet_leaf_type="Normal",
+    einet_dropout=0.0,
+    spec_norm_bound=0.9,  # only for ConvResNetSPN
+    spectral_normalization=True,  # only for ConvResNetDDU
+    mod=True,  # only for ConvResNetDDU
 )
-
-resnet_spn = resnet_spn.to(device)
-
-exists = os.path.isfile("resnet_spn_cifar.pt")
-if newExp or not exists:
-    print("training resnet_spn")
-    optimizer = torch.optim.Adam(resnet_spn.parameters(), lr=0.01)
-    lr_schedule = torch.optim.lr_scheduler.StepLR(optimizer, 5, gamma=0.5)
-    # probably requires ~35 epochs
-    # with 25 epochs, we get 0.77 train acc, 0.68 test acc
-    resnet_spn.start_train(
-        train_dl,
-        device,
-        optimizer,
-        lambda_v=0.3,
-        num_epochs=30,
-        activate_einet_after=10,
-        deactivate_resnet_with_einet_train=True,
-        lr_schedule=lr_schedule,
-    )
-    resnet_spn.save("resnet_spn_cifar.pt")
-else:
-    resnet_spn.load("resnet_spn_cifar.pt")
-    print("loaded resnet_spn.pt")
-
-
-# eval accuracies
-print("train acc: ", resnet_spn.eval_acc(train_dl, device))
-print("train ll: ", resnet_spn.eval_ll(train_dl, device))
-
-print("test acc: ", resnet_spn.eval_acc(test_dl, device))
-print("test ll: ", resnet_spn.eval_ll(test_dl, device))
-
-del train_dl
-del test_dl
-
-train_corrupt_dl = DataLoader(
-    train_corrupt_data,
-    batch_size=batch_size,
-    shuffle=True,
-    pin_memory=True,
-    num_workers=1,
+train_params = dict(
+    corruption_levels=[0, 1],  # , 1, 2],
+    learning_rate_warmup=0.05,
+    learning_rate=0.05,
+    lambda_v=0.995,
+    warmup_epochs=0,
+    num_epochs=0,
+    deactivate_resnet=True,
+    lr_schedule_warmup_step_size=10,
+    lr_schedule_warmup_gamma=0.5,
+    lr_schedule_step_size=10,
+    lr_schedule_gamma=0.5,
+    early_stop=10,
 )
-print("train corrupt acc: ", resnet_spn.eval_acc(train_corrupt_dl, device))
-print("train corrupt ll: ", resnet_spn.eval_ll(train_corrupt_dl, device))
-del train_corrupt_dl
-
-print("loading more corrupted data")
-(
-    train_corrupt_data,
-    train_corrupt_levels,
-    train_corrupt_labels,
-    test_corrupt_data,
-    test_corrupt_levels,
-    test_corrupt_labels,
-) = get_corrupted_cifar10(
-    len(corruptions), ["gaussian_noise", "snow"], np.array(test_ds.targets), [5]
-)
-test_corrupt_data = [cifar10_transformer(img).flatten() for img in test_corrupt_data]
-test_corrupt_data = torch.concat(
-    [
-        # torch.from_numpy(test_corrupt_levels).to(dtype=torch.int32),
-        torch.zeros_like(torch.from_numpy(test_corrupt_levels)).to(dtype=torch.int32),
-        torch.stack(test_corrupt_data, dim=0).to(dtype=torch.float32),
-    ],
-    dim=1,
-)
-test_corrupt_data = list(zip(test_corrupt_data, test_corrupt_labels))
-test_corrupt_dl = DataLoader(
-    test_corrupt_data,
-    batch_size=batch_size,
-    shuffle=True,
-    pin_memory=True,
-    num_workers=1,
-)
-
-print("test corrupt acc: ", resnet_spn.eval_acc(test_corrupt_dl, device))
-print("test corrupt ll: ", resnet_spn.eval_ll(test_corrupt_dl, device))
-
-print("explain corrupt ll: ", resnet_spn.explain_ll(test_corrupt_dl, device))
-print("explain corrupt mpe: ", resnet_spn.explain_mpe(test_corrupt_dl, device))
+run_name = "seperate"
+batch_sizes = dict(resnet=512)
+model_name = "ConvResNetSPN"
+# model_name = "ConvResNetDDU"
+start_run(run_name, batch_sizes, model_name, model_params, train_params)

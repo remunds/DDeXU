@@ -162,7 +162,7 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
             checkpoint_dir=ckpt_dir,
             **train_params,
         )
-
+        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
         # Evaluate
         resnet_spn.eval()
         eval_dict = {}
@@ -279,7 +279,7 @@ def start_run(run_name, batch_sizes, model_name, model_params, train_params):
                     "var": test_pred_var,
                     "entropy": test_pred_entropy,
                 }
-
+        print(eval_dict)
         mlflow.log_dict(eval_dict, "eval_dict")
 
         overall_acc = np.mean(
