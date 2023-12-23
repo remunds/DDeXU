@@ -155,8 +155,9 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params):
 
         # for train, manipulate all randomly until highest severity
         # we can also have multiple manipulations per image
-
-        rot, cut, nois = get_manipulations(mnist_ds, highest_severity=2)
+        highest_severity = train_params["highest_severity_train"]
+        del train_params["highest_severity_train"]
+        rot, cut, nois = get_manipulations(mnist_ds, highest_severity=highest_severity)
         train_ds = manipulate_data(mnist_ds.data, rot, cut, nois, seperated=False)
 
         # # plot original
