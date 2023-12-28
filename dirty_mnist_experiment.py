@@ -4,6 +4,7 @@ from torchvision import datasets, transforms
 import os
 import ddu_dirty_mnist
 import mlflow
+import optuna
 
 
 def get_datasets():
@@ -75,7 +76,7 @@ def get_datasets():
     return train_ds, valid_ds, test_ds, ambiguous_ds_test, mnist_ds_test, ood_ds
 
 
-def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params):
+def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name) as run:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
@@ -175,13 +176,16 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params):
 
         print("training resnet_spn")
         # train model
-        resnet_spn.start_train(
+        lowest_val_loss = resnet_spn.start_train(
             train_dl,
             valid_dl,
             device,
             checkpoint_dir=ckpt_dir,
             **train_params,
         )
+        trial.report(lowest_val_loss, 1)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
         mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
 
         # evaluate
@@ -342,3 +346,5 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params):
             "Fraction of data",
             "mnist_amb_ood_pred_entropy.png",
         )
+
+        return lowest_val_loss

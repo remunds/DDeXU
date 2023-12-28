@@ -51,9 +51,9 @@ class EinetUtils:
         lowest_val_loss = torch.inf
         epoch = 0
         # warmup by only training resnet
-        for epoch in range(warmup_epochs):
+        for epoch in tqdm(range(warmup_epochs)):
             loss = 0.0
-            for data, target in tqdm(dl_train):
+            for data, target in dl_train:
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
@@ -67,7 +67,7 @@ class EinetUtils:
 
             val_loss = 0.0
             with torch.no_grad():
-                for data, target in tqdm(dl_valid):
+                for data, target in dl_valid:
                     optimizer.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
@@ -118,9 +118,9 @@ class EinetUtils:
         lowest_val_loss = torch.inf
         val_increase = 0
         warmup_epochs_performed = epoch + 1
-        for epoch in range(num_epochs):
+        for epoch in tqdm(range(num_epochs)):
             loss = 0.0
-            for data, target in tqdm(dl_train):
+            for data, target in dl_train:
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
@@ -137,7 +137,7 @@ class EinetUtils:
 
             val_loss = 0.0
             with torch.no_grad():
-                for data, target in tqdm(dl_valid):
+                for data, target in dl_valid:
                     optimizer.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
@@ -176,6 +176,7 @@ class EinetUtils:
         if checkpoint_dir is not None:
             # load best
             self.load(checkpoint_dir + "checkpoint.pt")
+        return lowest_val_loss
 
     def save(self, path):
         # create path if not exists

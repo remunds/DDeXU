@@ -8,6 +8,7 @@ import sklearn.datasets
 from torch.utils.data import DataLoader
 import os
 import mlflow
+import optuna
 
 ### data and stuff from here: https://www.tensorflow.org/tutorials/understanding/sngp
 ### visualization macros
@@ -120,7 +121,8 @@ def make_ood_data(sample_size=500, means=(2.5, -1.75), vars=(0.01, 0.01)):
     ).astype(np.float32)
 
 
-def start_two_moons_run(run_name, batch_sizes, model_params, train_params):
+def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial):
+    print("starting new two-moons run: ", run_name)
     with mlflow.start_run(run_name=run_name):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         mlflow.log_param("device", device)
@@ -166,27 +168,31 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params):
         print(resnet)
         resnet.to(device)
         # it is interesting to play with lambda_v, dropout, repetition and depth
-        resnet.start_train(
+        lowest_val_loss = resnet.start_train(
             train_dl,
             valid_dl,
             device,
             checkpoint_dir=ckpt_dir,
             **train_params,
         )
+        trial.report(lowest_val_loss, 1)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+
         mlflow.pytorch.log_model(resnet, "resnet_spn")
         # evaluate
         resnet.eval()
-        train_acc = resnet.eval_acc(train_dl, device)
-        print("train accuracy: ", train_acc)
-        mlflow.log_metric("train accuracy", train_acc)
+        valid_acc = resnet.eval_acc(valid_dl, device)
+        print("valid accuracy: ", valid_acc)
+        mlflow.log_metric("valid accuracy", valid_acc)
 
-        # get LL's of first 5 training examples
+        # get LL's
         pos_ll = resnet(torch.from_numpy(pos_examples).to(device)).mean()
         mlflow.log_metric("pos_ll", pos_ll)
         neg_ll = resnet(torch.from_numpy(neg_examples).to(device)).mean()
         mlflow.log_metric("neg_ll", neg_ll)
 
-        # get LL's 5 ood examples
+        # get LL's
         ood_ll = resnet(torch.from_numpy(ood_examples).to(device)).mean()
         mlflow.log_metric("ood_ll", ood_ll)
 
@@ -236,7 +242,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params):
         plt.title("LL Uncertainty, SPN Model")
         mlflow.log_figure(fig, "ll_uncertainty_no_train.png")
 
-        print(test_examples.shape)
         test_dl = DataLoader(
             test_examples,
             batch_size=batch_sizes["resnet"],
@@ -249,8 +254,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params):
             .detach()
             .numpy()
         )
-        print(resnet_uncertainty.shape)
-        print(resnet_uncertainty[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
@@ -258,3 +261,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params):
         plt.colorbar(pcm, ax=ax)
         plt.title("Dempster Shafer, SPN Model")
         mlflow.log_figure(fig, "dempster_shafer.png")
+
+        # return train_acc
+        return lowest_val_loss
