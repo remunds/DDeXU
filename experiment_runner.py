@@ -81,9 +81,9 @@ def suggest_hps(trial, train_params, model_params):
 
 def tune_two_moons(loss, training):
     print("New tuning run of two moons")
+    run_name = f"{loss}_{training}"
 
     def objective(trial):
-        run_name = f"{loss}_{training}"
         batch_sizes = dict(resnet=512)
         train_params = dict(
             warmup_epochs=100,
@@ -135,17 +135,28 @@ def tune_two_moons(loss, training):
             run_name, batch_sizes, model_params_dense, train_params, trial
         )
 
-    mlflow.set_experiment("two-moons")
-    # study = optuna.create_study(direction="maximize")
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=10)
+    dataset = "two-moons"
+    exp = mlflow.get_experiment_by_name(dataset)
+    query = f"attributes.run_name = '{run_name}'"
+    runs = mlflow.search_runs([exp.experiment_id], query)
+    n_trials = 10
+    # only run experiment, if it wasnt run fully
+    if len(runs) < n_trials:
+        mlflow.set_experiment(dataset)
+        study = optuna.create_study(
+            direction="minimize",
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=3,  # requires at least 3 results to start pruning
+            ),
+        )
+        study.optimize(objective, n_trials=n_trials)
 
 
 def tune_conv(dataset, loss, training, model):
     print(f"New tuning run of {dataset} with {loss} and {training}")
+    run_name = f"{loss}_{training}"
 
     def objective(trial):
-        run_name = f"{loss}_{training}"
         batch_sizes = dict(resnet=512)
         train_params = dict(
             warmup_epochs=100,
@@ -210,8 +221,13 @@ def tune_conv(dataset, loss, training, model):
         elif dataset == "mnist-expl":
             model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
             train_params["highest_severity_train"] = 2
+            # copy here, since some params are changed in the experiment
             val_loss_2 = start_mnist_expl_run(
-                run_name, batch_sizes, model_params, train_params, trial
+                run_name,
+                batch_sizes.copy(),
+                model_params.copy(),
+                train_params.copy(),
+                trial,
             )
             train_params["highest_severity_train"] = 4
             val_loss_4 = start_mnist_expl_run(
@@ -230,7 +246,11 @@ def tune_conv(dataset, loss, training, model):
             model_params["explaining_vars"] = list(range(19))
             train_params["highest_severity_train"] = 2
             val_loss_2 = start_cifar10_expl_run(
-                run_name, batch_sizes, model_params, train_params, trial
+                run_name,
+                batch_sizes.copy(),
+                model_params.copy(),
+                train_params.copy(),
+                trial,
             )
             train_params["highest_severity_train"] = 4
             val_loss_4 = start_cifar10_expl_run(
@@ -242,15 +262,20 @@ def tune_conv(dataset, loss, training, model):
                 "dataset must be mnist-calib, mnist-expl, dirty-mnist, cifar10-c or cifar10-c_expl"
             )
 
-    mlflow.set_experiment(dataset)
-    study = optuna.create_study(
-        direction="minimize",
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=3,  # requires at least 3 results to start pruning
-        ),
-    )
-    study.optimize(objective, n_trials=10)
-    study.metric_names
+    exp = mlflow.get_experiment_by_name(dataset)
+    query = f"attributes.run_name = '{run_name}'"
+    runs = mlflow.search_runs([exp.experiment_id], query)
+    n_trials = 10
+    # only run experiment, if it wasnt run fully
+    if len(runs) < n_trials:
+        mlflow.set_experiment(dataset)
+        study = optuna.create_study(
+            direction="minimize",
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=3,  # requires at least 3 results to start pruning
+            ),
+        )
+        study.optimize(objective, n_trials=n_trials)
 
 
 loss = ["discriminative", "generative", "hybrid_low", "hybrid_high", "hybrid"]
