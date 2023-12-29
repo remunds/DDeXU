@@ -13,6 +13,7 @@ from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
 import mlflow
+import optuna
 
 
 class EinetUtils:
@@ -33,7 +34,10 @@ class EinetUtils:
         lr_schedule_gamma=None,
         early_stop=3,
         checkpoint_dir=None,
+        trial=None,
     ):
+        if trial == None:
+            raise ValueError("trial needs to be specified")
         self.train()
         self.deactivate_einet()
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
@@ -97,12 +101,20 @@ class EinetUtils:
                 if checkpoint_dir is not None:
                     self.save(checkpoint_dir + "checkpoint.pt")
 
-        if checkpoint_dir is not None and warmup_epochs > 0:
+        if warmup_epochs > 0:
+            # allow to stop experiment if worse than previous runs
+            trial.report(lowest_val_loss, 0)
+            if trial.should_prune():
+                # also delete the checkpoint
+                if checkpoint_dir:
+                    os.remove(checkpoint_dir + "checkpoint.pt")
+                raise optuna.TrialPruned()
+
             # load best
-            self.load(checkpoint_dir + "checkpoint.pt")
+            if checkpoint_dir:
+                self.load(checkpoint_dir + "checkpoint.pt")
 
         # train einet (and optionally resnet jointly)
-
         self.activate_einet(deactivate_resnet)
         if deactivate_resnet:
             optimizer = torch.optim.Adam(self.einet.parameters(), lr=learning_rate)

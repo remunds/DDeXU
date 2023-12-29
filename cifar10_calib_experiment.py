@@ -156,6 +156,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             valid_dl,
             device,
             checkpoint_dir=ckpt_dir,
+            trial=trial,
             **train_params,
         )
         trial.report(lowest_val_loss, 1)

@@ -81,7 +81,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
 
-        ckpt_dir = f"/data_docker/ckpt/dirty_mnist/{run_name}/"
+        ckpt_dir = f"/data_docker/ckpts/dirty_mnist/{run_name}/"
         os.makedirs(ckpt_dir, exist_ok=True)
         mlflow.log_param("ckpt_dir", ckpt_dir)
 
@@ -181,6 +181,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             valid_dl,
             device,
             checkpoint_dir=ckpt_dir,
+            trial=trial,
             **train_params,
         )
         trial.report(lowest_val_loss, 1)

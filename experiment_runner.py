@@ -137,8 +137,10 @@ def tune_two_moons(loss, training):
 
     dataset = "two-moons"
     exp = mlflow.get_experiment_by_name(dataset)
-    query = f"attributes.run_name = '{run_name}'"
-    runs = mlflow.search_runs([exp.experiment_id], query)
+    runs = []
+    if exp:
+        query = f"attributes.run_name = '{run_name}'"
+        runs = mlflow.search_runs([exp.experiment_id], query)
     n_trials = 10
     # only run experiment, if it wasnt run fully
     if len(runs) < n_trials:
@@ -153,8 +155,8 @@ def tune_two_moons(loss, training):
 
 
 def tune_conv(dataset, loss, training, model):
-    print(f"New tuning run of {dataset} with {loss} and {training}")
-    run_name = f"{loss}_{training}"
+    print(f"New tuning run of {dataset} with {loss} and {training} and {model}")
+    run_name = f"{loss}_{training}_{model}"
 
     def objective(trial):
         batch_sizes = dict(resnet=512)
@@ -263,11 +265,14 @@ def tune_conv(dataset, loss, training, model):
             )
 
     exp = mlflow.get_experiment_by_name(dataset)
-    query = f"attributes.run_name = '{run_name}'"
-    runs = mlflow.search_runs([exp.experiment_id], query)
+    runs = []
+    if exp:
+        query = f"attributes.run_name = '{run_name}'"
+        runs = mlflow.search_runs([exp.experiment_id], query)
     n_trials = 10
+    trial_multiplier = 2 if "expl" in dataset else 1
     # only run experiment, if it wasnt run fully
-    if len(runs) < n_trials:
+    if len(runs) < n_trials * trial_multiplier:
         mlflow.set_experiment(dataset)
         study = optuna.create_study(
             direction="minimize",
