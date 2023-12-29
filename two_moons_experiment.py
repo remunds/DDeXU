@@ -178,6 +178,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         trial.report(lowest_val_loss, 1)
         if trial.should_prune():
+            mlflow.set_tag("pruned", "after both")
             raise optuna.TrialPruned()
 
         mlflow.pytorch.log_model(resnet, "resnet_spn")

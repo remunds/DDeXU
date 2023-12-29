@@ -105,6 +105,7 @@ class EinetUtils:
             # allow to stop experiment if worse than previous runs
             trial.report(lowest_val_loss, 0)
             if trial.should_prune():
+                mlflow.set_tag("pruned", "after resnet")
                 # also delete the checkpoint
                 if checkpoint_dir:
                     os.remove(checkpoint_dir + "checkpoint.pt")
