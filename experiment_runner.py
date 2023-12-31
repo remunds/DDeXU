@@ -131,9 +131,14 @@ def tune_two_moons(loss, training):
         train_params, model_params_dense = suggest_hps(
             trial, train_params, model_params_dense
         )
-        return start_two_moons_run(
-            run_name, batch_sizes, model_params_dense, train_params, trial
-        )
+        try:
+            return start_two_moons_run(
+                run_name, batch_sizes, model_params_dense, train_params, trial
+            )
+        except Exception as e:
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+            raise optuna.TrialPruned()
 
     dataset = "two-moons"
     exp = mlflow.get_experiment_by_name(dataset)
@@ -217,48 +222,73 @@ def tune_conv(dataset, loss, training, model):
 
         train_params, model_params = suggest_hps(trial, train_params, model_params)
         if dataset == "mnist-calib":
-            return start_mnist_calib_run(
-                run_name, batch_sizes, model_params, train_params, trial
-            )
+            try:
+                return start_mnist_calib_run(
+                    run_name, batch_sizes, model_params, train_params, trial
+                )
+            except Exception as e:
+                mlflow.set_tag("pruned", e)
+                mlflow.end_run()
+                raise optuna.TrialPruned()
         elif dataset == "mnist-expl":
             model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
             train_params["highest_severity_train"] = 2
             # copy here, since some params are changed in the experiment
-            val_loss_2 = start_mnist_expl_run(
-                run_name,
-                batch_sizes.copy(),
-                model_params.copy(),
-                train_params.copy(),
-                trial,
-            )
-            train_params["highest_severity_train"] = 4
-            val_loss_4 = start_mnist_expl_run(
-                run_name, batch_sizes, model_params, train_params, trial
-            )
-            return (val_loss_2 + val_loss_4) / 2
+            try:
+                val_loss_2 = start_mnist_expl_run(
+                    run_name,
+                    batch_sizes.copy(),
+                    model_params.copy(),
+                    train_params.copy(),
+                    trial,
+                )
+                train_params["highest_severity_train"] = 4
+                val_loss_4 = start_mnist_expl_run(
+                    run_name, batch_sizes, model_params, train_params, trial
+                )
+                return (val_loss_2 + val_loss_4) / 2
+            except Exception as e:
+                mlflow.set_tag("pruned", e)
+                mlflow.end_run()
+                raise optuna.TrialPruned()
         elif dataset == "dirty-mnist":
-            return start_dirty_mnist_run(
-                run_name, batch_sizes, model_params, train_params, trial
-            )
+            try:
+                return start_dirty_mnist_run(
+                    run_name, batch_sizes, model_params, train_params, trial
+                )
+            except Exception as e:
+                mlflow.set_tag("pruned", e)
+                mlflow.end_run()
+                raise optuna.TrialPruned()
         elif dataset == "cifar10-c":
-            return start_cifar10_calib_run(
-                run_name, batch_sizes, model_params, train_params, trial
-            )
+            try:
+                return start_cifar10_calib_run(
+                    run_name, batch_sizes, model_params, train_params, trial
+                )
+            except Exception as e:
+                mlflow.set_tag("pruned", e)
+                mlflow.end_run()
+                raise optuna.TrialPruned()
         elif dataset == "cifar10-c_expl":
             model_params["explaining_vars"] = list(range(19))
-            train_params["highest_severity_train"] = 2
-            val_loss_2 = start_cifar10_expl_run(
-                run_name,
-                batch_sizes.copy(),
-                model_params.copy(),
-                train_params.copy(),
-                trial,
-            )
-            train_params["highest_severity_train"] = 4
-            val_loss_4 = start_cifar10_expl_run(
-                run_name, batch_sizes, model_params, train_params, trial
-            )
-            return (val_loss_2 + val_loss_4) / 2
+            train_params["corruption_levels_train"] = [0, 1]
+            try:
+                val_loss_2 = start_cifar10_expl_run(
+                    run_name,
+                    batch_sizes.copy(),
+                    model_params.copy(),
+                    train_params.copy(),
+                    trial,
+                )
+                train_params["corruption_levels_train"] = [0, 1, 2, 3]
+                val_loss_4 = start_cifar10_expl_run(
+                    run_name, batch_sizes, model_params, train_params, trial
+                )
+                return (val_loss_2 + val_loss_4) / 2
+            except Exception as e:
+                mlflow.set_tag("pruned", e)
+                mlflow.end_run()
+                raise optuna.TrialPruned()
         else:
             raise ValueError(
                 "dataset must be mnist-calib, mnist-expl, dirty-mnist, cifar10-c or cifar10-c_expl"
