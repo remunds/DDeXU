@@ -1,17 +1,17 @@
 import torch
 from torchvision import datasets, transforms
 
-
 batchsize = 512
 data_dir = "/data_docker/datasets/"
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cpu"
 
 # load data
 mnist_transform = transforms.Compose(
     [
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),
-        # transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
+        transforms.Lambda(lambda x: x.reshape(-1, 28 * 28).squeeze()),
     ]
 )
 
@@ -71,68 +71,78 @@ from tqdm import tqdm
 autoenc = AutoEncoderSPN()
 autoenc.to(device)
 
-optimizer = torch.optim.Adam(autoenc.parameters(), lr=0.0005)
-for epoch in range(30):
-    for x, y in tqdm(train_dl):
-        optimizer.zero_grad()
-        x, y = x.to(device), y.to(device)
-        lls = autoenc(x)
-        ce_loss = torch.nn.CrossEntropyLoss()(lls, y)
-        # get 64 random numbers between 0 and 128, no duplicates
-        marginalized_scope = torch.randperm(128)[:32].tolist()
-        sample = autoenc.einet.sample(
-            evidence=autoenc.latent,
-            marginalized_scopes=marginalized_scope,
-            is_differentiable=True,
-            is_mpe=True,
-        )
-        # mpe = autoenc.einet.sample(x.shape[0], is_mpe=True, is_differentiable=True)
-        # reconstruct image
-        recon = autoenc.decode(sample)
-        # compute loss
-        loss_recon = torch.nn.MSELoss()(recon, x)
-        loss = ce_loss + loss_recon
-        loss.backward()
-        optimizer.step()
+# optimizer = torch.optim.Adam(autoenc.parameters(), lr=0.0005)
+# for epoch in range(30):
+#     for x, y in tqdm(train_dl):
+#         optimizer.zero_grad()
+#         x, y = x.to(device), y.to(device)
+#         lls = autoenc(x)
+#         ce_loss = torch.nn.CrossEntropyLoss()(lls, y)
+#         # get 64 random numbers between 0 and 128, no duplicates
+#         marginalized_scope = torch.randperm(128)[:32].tolist()
+#         sample = autoenc.einet.sample(
+#             evidence=autoenc.latent,
+#             marginalized_scopes=marginalized_scope,
+#             is_differentiable=True,
+#             is_mpe=True,
+#         )
+#         # mpe = autoenc.einet.sample(x.shape[0], is_mpe=True, is_differentiable=True)
+#         # reconstruct image
+#         recon = autoenc.decode(sample)
+#         # compute loss
+#         loss_recon = torch.nn.MSELoss()(recon, x)
+#         loss = ce_loss + loss_recon
+#         loss.backward()
+#         optimizer.step()
 
-    # print accuracy
-    autoenc.eval()
-    with torch.no_grad():
-        acc = 0
-        for x, y in tqdm(valid_dl):
-            x, y = x.to(device), y.to(device)
-            lls = autoenc(x)
-            pred = torch.argmax(lls, dim=1)
-            acc += (pred == y).float().mean()
-        print(f"epoch {epoch} acc: {acc / len(valid_dl)}")
+#     # print accuracy
+#     autoenc.eval()
+#     with torch.no_grad():
+#         acc = 0
+#         for x, y in tqdm(valid_dl):
+#             x, y = x.to(device), y.to(device)
+#             lls = autoenc(x)
+#             pred = torch.argmax(lls, dim=1)
+#             acc += (pred == y).float().mean()
+#         print(f"epoch {epoch} acc: {acc / len(valid_dl)}")
 
-    # show 1 reconstructed image
-    with torch.no_grad():
-        x, y = next(iter(valid_dl))
-        x, y = x.to(device), y.to(device)
-        lls = autoenc(x)
-        marginalized_scope = torch.randperm(128)[:32].tolist()
-        sample = autoenc.einet.sample(
-            evidence=autoenc.latent,
-            marginalized_scopes=marginalized_scope,
-            is_differentiable=True,
-            is_mpe=True,
-        )
-        recon_mpe = autoenc.decode(sample)
-        recon = autoenc.decode(autoenc.latent)
-        import matplotlib.pyplot as plt
-        import numpy as np
+#     # show 1 reconstructed image
+#     with torch.no_grad():
+#         x, y = next(iter(valid_dl))
+#         x, y = x.to(device), y.to(device)
+#         lls = autoenc(x)
+#         marginalized_scope = torch.randperm(128)[:32].tolist()
+#         sample = autoenc.einet.sample(
+#             evidence=autoenc.latent,
+#             marginalized_scopes=marginalized_scope,
+#             is_differentiable=True,
+#             is_mpe=True,
+#         )
+#         recon_mpe = autoenc.decode(sample)
+#         recon = autoenc.decode(autoenc.latent)
+#         import matplotlib.pyplot as plt
+#         import numpy as np
 
-        plt.imshow(np.transpose(x[0].cpu().numpy(), (1, 2, 0)))
-        plt.savefig("original.png")
-        plt.imshow(np.transpose(recon_mpe[0].cpu().numpy(), (1, 2, 0)))
-        plt.savefig("recon_mpe.png")
-        plt.imshow(np.transpose(recon[0].cpu().numpy(), (1, 2, 0)))
-        plt.savefig("recon.png")
+#         plt.imshow(np.transpose(x[0].cpu().numpy(), (1, 2, 0)))
+#         plt.savefig("original.png")
+#         plt.imshow(np.transpose(recon_mpe[0].cpu().numpy(), (1, 2, 0)))
+#         plt.savefig("recon_mpe.png")
+#         plt.imshow(np.transpose(recon[0].cpu().numpy(), (1, 2, 0)))
+#         plt.savefig("recon.png")
 
-    print(f"epoch {epoch} loss: {loss.item()}")
+#     print(f"epoch {epoch} loss: {loss.item()}")
 
-del train_dl, valid_dl
+autoenc.start_train(
+    train_dl,
+    valid_dl,
+    device,
+    learning_rate=0.0005,
+    lambda_v=1.0,
+    warmup_epochs=0,
+    num_epochs=30,
+)
+
+# del train_dl, valid_dl
 # print likelihoods of iD and OOD
 autoenc.eval()
 ll = 0

@@ -34,7 +34,7 @@ mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 #     lambda_v=0.995,
 #     warmup_epochs=100,
 #     num_epochs=100,
-#     deactivate_resnet=True,
+#     deactivate_backbone=True,
 #     lr_schedule_warmup_step_size=10,
 #     lr_schedule_warmup_gamma=0.5,
 #     lr_schedule_step_size=10,
@@ -118,13 +118,13 @@ def tune_two_moons(loss, training):
 
         if training == "end-to-end":
             train_params["warmup_epochs"] = 0
-            train_params["deactivate_resnet"] = False
+            train_params["deactivate_backbone"] = False
         elif training == "seperate":
             train_params["warmup_epochs"] = 100
-            train_params["deactivate_resnet"] = True
+            train_params["deactivate_backbone"] = True
         elif training == "warmup":
             train_params["warmup_epochs"] = 100
-            train_params["deactivate_resnet"] = False
+            train_params["deactivate_backbone"] = False
         else:
             raise ValueError("training must be end-to-end, seperate or warmup")
 
@@ -210,13 +210,13 @@ def tune_conv(dataset, loss, training, model):
 
         if training == "end-to-end":
             train_params["warmup_epochs"] = 0
-            train_params["deactivate_resnet"] = False
+            train_params["deactivate_backbone"] = False
         elif training == "seperate":
             train_params["warmup_epochs"] = 100
-            train_params["deactivate_resnet"] = True
+            train_params["deactivate_backbone"] = True
         elif training == "warmup":
             train_params["warmup_epochs"] = 100
-            train_params["deactivate_resnet"] = False
+            train_params["deactivate_backbone"] = False
         else:
             raise ValueError("training must be end-to-end, seperate or warmup")
 

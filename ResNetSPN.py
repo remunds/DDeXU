@@ -1,4 +1,5 @@
 import os
+from typing import Any
 import torch
 
 from torchvision.models.resnet import ResNet, BasicBlock, Bottleneck
@@ -14,6 +15,7 @@ import numpy as np
 import torch.nn.functional as F
 import mlflow
 import optuna
+import matplotlib.pyplot as plt
 
 
 class EinetUtils:
@@ -27,7 +29,7 @@ class EinetUtils:
         lambda_v,
         warmup_epochs,
         num_epochs,
-        deactivate_resnet=True,
+        deactivate_backbone=True,
         lr_schedule_warmup_step_size=None,
         lr_schedule_warmup_gamma=None,
         lr_schedule_step_size=None,
@@ -36,8 +38,6 @@ class EinetUtils:
         checkpoint_dir=None,
         trial=None,
     ):
-        if trial == None:
-            raise ValueError("trial needs to be specified")
         self.train()
         self.deactivate_einet()
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
@@ -54,7 +54,7 @@ class EinetUtils:
         val_increase = 0
         lowest_val_loss = torch.inf
         epoch = 0
-        # warmup by only training resnet
+        # warmup by only training backbone
         for epoch in tqdm(range(warmup_epochs)):
             loss = 0.0
             for data, target in dl_train:
@@ -103,21 +103,22 @@ class EinetUtils:
 
         if warmup_epochs > 0:
             # allow to stop experiment if worse than previous runs
-            trial.report(lowest_val_loss, 0)
-            if trial.should_prune():
-                mlflow.set_tag("pruned", "after resnet")
-                # also delete the checkpoint
-                if checkpoint_dir:
-                    os.remove(checkpoint_dir + "checkpoint.pt")
-                raise optuna.TrialPruned()
+            if trial:
+                trial.report(lowest_val_loss, 0)
+                if trial.should_prune():
+                    mlflow.set_tag("pruned", "after resnet")
+                    # also delete the checkpoint
+                    if checkpoint_dir:
+                        os.remove(checkpoint_dir + "checkpoint.pt")
+                    raise optuna.TrialPruned()
 
             # load best
             if checkpoint_dir:
                 self.load(checkpoint_dir + "checkpoint.pt")
 
         # train einet (and optionally resnet jointly)
-        self.activate_einet(deactivate_resnet)
-        if deactivate_resnet:
+        self.activate_einet(deactivate_backbone)
+        if deactivate_backbone:
             optimizer = torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
         else:
             optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
@@ -144,6 +145,7 @@ class EinetUtils:
                 )
                 loss += loss_v.item()
                 loss_v.backward()
+                print(loss_v.item())
                 optimizer.step()
             if lr_schedule_einet:
                 lr_schedule_einet.step()
@@ -196,9 +198,9 @@ class EinetUtils:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.state_dict(), path)
 
-    def load(self, path, resnet_only=False):
+    def load(self, path, backbone_only=False):
         self.load_state_dict(torch.load(path))
-        if resnet_only:
+        if backbone_only:
             # reinitialize einet
             for param in self.einet.parameters():
                 torch.nn.init.normal_(param, mean=0.0, std=0.01)
@@ -317,7 +319,7 @@ class EinetUtils:
             # extract explaining vars
             exp_vars = data[:, self.explaining_vars]
             expl_var_vals.append(exp_vars)
-            # mask out explaining vars for resnet
+            # mask out explaining vars for backbone
             mask = torch.ones_like(data, dtype=torch.bool)
             mask[:, self.explaining_vars] = False
             data = data[mask]
@@ -431,12 +433,12 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         super().__init__(**kwargs)
         self.einet = self.make_einet_output_layer()
 
-    def activate_einet(self, deactivate_resnet=True):
+    def activate_einet(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
         self.einet_active = True
-        if deactivate_resnet:
+        if deactivate_backbone:
             for param in self.parameters():
                 param.requires_grad = False
         else:
@@ -497,7 +499,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
     def forward(self, inputs):
         # extract explaining vars
         exp_vars = inputs[:, self.explaining_vars]
-        # mask out explaining vars for resnet
+        # mask out explaining vars for bakcbone
         mask = torch.ones_like(inputs, dtype=torch.bool)
         mask[:, self.explaining_vars] = False
         inputs = inputs[mask]
@@ -559,7 +561,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         einet_num_sums=20,
         einet_num_leaves=20,
         einet_num_repetitions=1,
-        einet_leaf_type="normal",
+        einet_leaf_type="Normal",
         einet_dropout=0.0,
         **kwargs,
     ):
@@ -590,12 +592,12 @@ class ConvResNetSPN(ResNet, EinetUtils):
             512 * block.expansion + len(explaining_vars), num_classes
         )
 
-    def activate_einet(self, deactivate_resnet=True):
+    def activate_einet(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
         self.einet_active = True
-        if deactivate_resnet:
+        if deactivate_backbone:
             for param in self.parameters():
                 param.requires_grad = False
         else:
@@ -648,7 +650,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         # x is flattened
         # extract explaining vars
         exp_vars = x[:, self.explaining_vars]
-        # mask out explaining vars for resnet
+        # mask out explaining vars for backbone
         mask = torch.ones_like(x, dtype=torch.bool)
         mask[:, self.explaining_vars] = False
         x = x[mask]
@@ -719,12 +721,12 @@ class ConvResnetDDU(ResNet, EinetUtils):
             512 * block.expansion + len(explaining_vars), num_classes
         )
 
-    def activate_einet(self, deactivate_resnet=True):
+    def activate_einet(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
         self.einet_active = True
-        if deactivate_resnet:
+        if deactivate_backbone:
             for param in self.parameters():
                 param.requires_grad = False
         else:
@@ -798,8 +800,17 @@ class AutoEncoderSPN(nn.Module):
     Lastly, uses stochastically conditioned MPE of SPN and DeConvolution to reconstruct the original image.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        explaining_vars=[],
+        image_shape=(1, 28, 28),  # (C, H, W)
+        marginalized_scopes=None,
+        **kwargs,
+    ):
         super(AutoEncoderSPN, self).__init__()
+        self.explaining_vars = explaining_vars
+        self.image_shape = image_shape
+        self.marginalized_scopes = marginalized_scopes
         # specify encoder
         self.conv1 = nn.Conv2d(1, 32, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
@@ -817,7 +828,6 @@ class AutoEncoderSPN(nn.Module):
         self.deconv3 = nn.ConvTranspose2d(32, 1, 3, padding=1)
         self.latent = None
 
-        # specify SPN
         self.einet = self.make_einet_layer(128, 10)
 
     def make_einet_layer(self, in_features, out_features):
@@ -838,6 +848,16 @@ class AutoEncoderSPN(nn.Module):
         return model
 
     def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for backbone
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
         # encode
         x = self.conv1(x)
         x = self.bn1(x)
@@ -851,10 +871,10 @@ class AutoEncoderSPN(nn.Module):
         x = x.view(-1, 128 * 28 * 28)
         x = self.fc(x)
         self.latent = x
-        # SPN
-        lls = self.einet(x)
 
-        return lls
+        # classifier is einet, so we need to concatenate the explaining vars
+        x = torch.cat([x, exp_vars], dim=1)
+        return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
     def decode(self, x):
         # decode
@@ -870,3 +890,303 @@ class AutoEncoderSPN(nn.Module):
         x = self.deconv3(x)
         x = torch.sigmoid(x)
         return x
+
+    def start_train(
+        self,
+        dl_train,
+        dl_valid,
+        device,
+        learning_rate,
+        lambda_v,
+        warmup_epochs,
+        num_epochs,
+        lr_schedule_step_size=None,
+        lr_schedule_gamma=None,
+        early_stop=3,
+        checkpoint_dir=None,
+        marginal_divisor=4,
+        gamma_v=0.5,
+    ):
+        # due to its entirely different architecture,
+        # the autoencoder needs its own training function
+
+        self.train()
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
+            lr_schedule_resnet = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=lr_schedule_step_size,
+                gamma=lr_schedule_gamma,
+            )
+
+        val_increase = 0
+        lowest_val_loss = torch.inf
+        epoch = 0
+
+        for epoch in tqdm(range(warmup_epochs + num_epochs)):
+            loss = 0.0
+            for data, target in dl_train:
+                print("train")
+                optimizer.zero_grad()
+                target = target.type(torch.LongTensor)
+                data, target = data.to(device), target.to(device)
+                output = self(data)  # get LL's
+                loss_ce = (
+                    lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                    + (1 - lambda_v) * -output.mean()
+                )
+                sample = self.latent
+                if epoch >= warmup_epochs:
+                    # stochastic regularization -> marginalize 1/x variables to reconstruct
+                    marginalized_scope = torch.randperm(128)[
+                        : (128 // marginal_divisor)
+                    ]
+                    # reconstruct latent space via MPE
+                    sample = self.einet.sample(
+                        evidence=self.latent,
+                        marginalized_scopes=marginalized_scope,
+                        is_differentiable=True,
+                        is_mpe=True,
+                    )
+                # decode on (reconstructed) latent space
+                recon = self.decode(sample)
+                # mask out explaining vars
+                mask = torch.ones_like(data, dtype=torch.bool)
+                mask[:, self.explaining_vars] = False
+                data = data[mask].reshape(
+                    -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
+                )
+                loss_recon = torch.nn.MSELoss()(recon, data)
+                loss_v = gamma_v * loss_ce + (1 - gamma_v) * loss_recon
+                loss += loss_v.item()
+                loss_v.backward()
+                optimizer.step()
+            if lr_schedule_resnet:
+                lr_schedule_resnet.step()
+
+            val_loss = 0.0
+            with torch.no_grad():
+                for data, target in dl_valid:
+                    optimizer.zero_grad()
+                    target = target.type(torch.LongTensor)
+                    data, target = data.to(device), target.to(device)
+                    output = self(data)
+                    loss_ce = (
+                        lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                        + (1 - lambda_v) * -output.mean()
+                    )
+                    sample = self.latent
+                    if epoch >= warmup_epochs:
+                        # stochastic regularization -> marginalize 1/x variables to reconstruct
+                        marginalized_scope = torch.randperm(128)[
+                            : (128 // marginal_divisor)
+                        ]
+                        # reconstruct latent space via MPE
+                        sample = self.einet.sample(
+                            evidence=self.latent,
+                            marginalized_scopes=marginalized_scope,
+                            is_differentiable=True,
+                            is_mpe=True,
+                        )
+                    # decode on (reconstructed) latent space
+                    recon = self.decode(sample)
+                    loss_recon = torch.nn.MSELoss()(recon, data)
+                    loss_v = gamma_v * loss_ce + (1 - gamma_v) * loss_recon
+                    val_loss += loss_v.item()
+            print(
+                f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+            )
+            mlflow.log_metric(
+                key="train_loss", value=loss / len(dl_train.dataset), step=epoch
+            )
+            mlflow.log_metric(
+                key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
+            )
+            # early stopping
+            if val_loss > lowest_val_loss:
+                val_increase += 1
+                if val_increase >= early_stop:
+                    print(
+                        f"Stopping Resnet early, val loss increased for the last {early_stop} epochs."
+                    )
+                    break
+            else:
+                val_increase = 0
+                lowest_val_loss = val_loss
+                if checkpoint_dir is not None:
+                    self.save(checkpoint_dir + "checkpoint.pt")
+
+        if checkpoint_dir is not None:
+            # load best
+            self.load(checkpoint_dir + "checkpoint.pt")
+
+        # log reconstruction of first 2 images
+        with torch.no_grad:
+            x, y = next(iter(dl_valid))
+            x, y = x.to(device), y.to(device)
+            output = self(x)
+            marginalized_scope = torch.randperm(128)[: (128 // marginal_divisor)]
+            sample = self.einet.sample(
+                evidence=self.latent,
+                marginalized_scopes=marginalized_scope,
+                is_differentiable=True,
+                is_mpe=True,
+            )
+            recon = self.decode(self.latent)
+            recon_mpe = self.decode(sample)
+            # mask out explaining vars
+            mask = torch.ones_like(x, dtype=torch.bool)
+            mask[:, self.explaining_vars] = False
+            x = x[mask]
+            # reshape to image
+            x = x.reshape(
+                -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
+            )
+            plt.imshow(np.transpose(x[0].cpu().numpy(), (1, 2, 0)))
+            mlflow.log_figure(plt.gcf(), "original.png")
+            plt.imshow(np.transpose(recon[0].cpu().numpy(), (1, 2, 0)))
+            mlflow.log_figure(plt.gcf(), "recon.png")
+            plt.imshow(np.transpose(recon_mpe[0].cpu().numpy(), (1, 2, 0)))
+            mlflow.log_figure(plt.gcf(), "recon_mpe.png")
+            plt.close("all")
+
+        return lowest_val_loss
+
+
+from torchvision.models import efficientnet_v2_s
+from torch.nn.utils.parametrizations import spectral_norm
+
+
+class EfficientNetSPN(nn.Module, EinetUtils):
+    """
+    Spectral normalized EfficientNetV2-S with einet as the output layer.
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        image_shape,  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        einet_depth=3,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=1,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
+        **kwargs,
+    ):
+        super(EfficientNetSPN, self).__init__()
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.spec_norm_bound = spec_norm_bound
+        self.einet_depth = einet_depth
+        self.einet_num_sums = einet_num_sums
+        self.einet_num_leaves = einet_num_leaves
+        self.einet_num_repetitions = einet_num_repetitions
+        if einet_leaf_type == "Normal":
+            self.einet_leaf_type = Normal
+        else:
+            raise NotImplementedError
+        self.einet_dropout = einet_dropout
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.backbone = self.make_efficientnet()
+        self.einet = self.make_einet_output_layer(
+            1280 + len(explaining_vars), num_classes
+        )
+
+    def make_efficientnet(self):
+        def replace_layers_rec(layer):
+            """Recursively apply spectral normalization to Conv and Linear layers."""
+            if len(list(layer.children())) == 0:
+                if isinstance(layer, torch.nn.Conv2d):
+                    layer = spectral_norm(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torch.nn.Linear):
+                    layer = spectral_norm(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+            else:
+                for child in list(layer.children()):
+                    replace_layers_rec(child)
+
+        model = efficientnet_v2_s()
+        model.features[0][0] = torch.nn.Conv2d(
+            self.image_shape[0],
+            24,
+            kernel_size=(3, 3),
+            stride=(2, 2),
+            padding=(1, 1),
+            bias=False,
+        )
+        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        # apply spectral normalization
+        replace_layers_rec(model)
+        return model
+
+    def activate_einet(self, deactivate_backbone=True):
+        """
+        Activates the einet output layer for second stage training and inference.
+        """
+        self.einet_active = True
+        if deactivate_backbone:
+            for param in self.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.parameters():
+                param.requires_grad = True
+        for param in self.einet.parameters():
+            param.requires_grad = True
+
+    def deactivate_einet(self):
+        """
+        Deactivates the einet output layer for first stage training.
+        """
+        self.einet_active = False
+        for param in self.einet.parameters():
+            param.requires_grad = False
+            pass
+
+    def make_einet_output_layer(self, in_features, out_features):
+        """Uses einet as the output layer."""
+        cfg = EinetConfig(
+            num_features=in_features,
+            num_channels=1,
+            depth=self.einet_depth,
+            num_sums=self.einet_num_sums,
+            num_leaves=self.einet_num_leaves,
+            num_repetitions=self.einet_num_repetitions,
+            num_classes=out_features,
+            leaf_type=self.einet_leaf_type,
+            layer_type="einsum",
+            dropout=self.einet_dropout,
+        )
+        model = Einet(cfg)
+        return model
+
+    def forward_hidden(self, x):
+        x = self.backbone.features(x)
+        x = self.backbone.avgpool(x)
+        x = torch.flatten(x, 1)
+        return x
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+
+        if self.einet_active:
+            # classifier is einet, so we need to concatenate the explaining vars
+            x = torch.cat([x, exp_vars], dim=1)
+            return self.einet(x, marginalized_scopes=self.marginalized_scopes)
+
+        return self.backbone.classifier(x)  # default classifier
