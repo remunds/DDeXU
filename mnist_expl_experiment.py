@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
 import os
 import mlflow
-import optuna
 
 
 def get_datasets():
@@ -235,7 +234,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             del model_params["spectral_normalization"]
             del model_params["mod"]
 
-            resnet_spn = ConvResNetSPN(
+            model = ConvResNetSPN(
                 block,
                 layers,
                 **model_params,
@@ -255,19 +254,31 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             layers = model_params["layers"]
             del model_params["layers"]
             del model_params["spec_norm_bound"]
-            resnet_spn = ConvResnetDDU(
+            model = ConvResnetDDU(
                 block,
                 layers,
                 **model_params,
             )
+        elif model_name == "AutoEncoderSPN":
+            from ResNetSPN import AutoEncoderSPN
+
+            model = AutoEncoderSPN(
+                **model_params,
+            )
+        elif model_name == "EfficientNetSPN":
+            from ResNetSPN import EfficientNetSPN
+
+            model = EfficientNetSPN(
+                **model_params,
+            )
         else:
             raise NotImplementedError
-        mlflow.set_tag("model", resnet_spn.__class__.__name__)
-        resnet_spn = resnet_spn.to(device)
+        mlflow.set_tag("model", model.__class__.__name__)
+        model = model.to(device)
 
-        print("training resnet_spn")
+        print("training model")
         # train model
-        lowest_val_loss = resnet_spn.start_train(
+        lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
             device,
@@ -275,23 +286,19 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
-        trial.report(lowest_val_loss, 1)
-        if trial.should_prune():
-            mlflow.set_tag("pruned", "after both")
-            raise optuna.TrialPruned()
-        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
         # evaluate
-        resnet_spn.eval()
+        model.eval()
 
         # eval accuracy
-        resnet_spn.einet_active = False
-        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        model.einet_active = False
+        valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc_resnet", valid_acc)
-        resnet_spn.einet_active = True
-        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        model.einet_active = True
+        valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
 
-        valid_ll = resnet_spn.eval_ll(valid_dl, device)
+        valid_ll = model.eval_ll(valid_dl, device)
         mlflow.log_metric("valid_ll", valid_ll)
 
         del train_dl
@@ -344,10 +351,10 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 test_ds_rot_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
             severity = get_severity(test_ds, s - 1)
-            acc = resnet_spn.eval_acc(test_dl_rot, device)
-            ll = resnet_spn.eval_ll(test_dl_rot, device)
-            expl_ll = resnet_spn.explain_ll(test_dl_rot, device)
-            expl_mpe = resnet_spn.explain_mpe(test_dl_rot, device)
+            acc = model.eval_acc(test_dl_rot, device)
+            ll = model.eval_ll(test_dl_rot, device)
+            expl_ll = model.explain_ll(test_dl_rot, device)
+            expl_mpe = model.explain_mpe(test_dl_rot, device)
             if "rotation" not in eval_dict:
                 eval_dict["rotation"] = {}
             eval_dict["rotation"][severity] = {
@@ -380,10 +387,10 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             )
             mlflow.log_figure(fig, f"cutoff_{severity}.png")
 
-            acc = resnet_spn.eval_acc(test_dl_cutoff, device)
-            ll = resnet_spn.eval_ll(test_dl_cutoff, device)
-            expl_ll = resnet_spn.explain_ll(test_dl_cutoff, device)
-            expl_mpe = resnet_spn.explain_mpe(test_dl_cutoff, device)
+            acc = model.eval_acc(test_dl_cutoff, device)
+            ll = model.eval_ll(test_dl_cutoff, device)
+            expl_ll = model.explain_ll(test_dl_cutoff, device)
+            expl_mpe = model.explain_mpe(test_dl_cutoff, device)
             if "cutoff" not in eval_dict:
                 eval_dict["cutoff"] = {}
             eval_dict["cutoff"][severity] = {
@@ -409,10 +416,10 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             )
             mlflow.log_figure(fig, f"noise_{severity}.png")
 
-            acc = resnet_spn.eval_acc(test_dl_noise, device)
-            ll = resnet_spn.eval_ll(test_dl_noise, device)
-            expl_ll = resnet_spn.explain_ll(test_dl_noise, device)
-            expl_mpe = resnet_spn.explain_mpe(test_dl_noise, device)
+            acc = model.eval_acc(test_dl_noise, device)
+            ll = model.eval_ll(test_dl_noise, device)
+            expl_ll = model.explain_ll(test_dl_noise, device)
+            expl_mpe = model.explain_mpe(test_dl_noise, device)
             if "noise" not in eval_dict:
                 eval_dict["noise"] = {}
             eval_dict["noise"][severity] = {

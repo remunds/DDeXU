@@ -8,20 +8,9 @@ import sklearn.datasets
 from torch.utils.data import DataLoader
 import os
 import mlflow
-import optuna
 
 ### data and stuff from here: https://www.tensorflow.org/tutorials/understanding/sngp
 ### visualization macros
-plt.rcParams["figure.dpi"] = 140
-
-DEFAULT_X_RANGE = (-3.5, 3.5)
-DEFAULT_Y_RANGE = (-2.5, 2.5)
-DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00"])
-DEFAULT_NORM = colors.Normalize(
-    vmin=0,
-    vmax=1,
-)
-DEFAULT_N_GRID = 100
 
 
 def plot_uncertainty_surface(
@@ -51,6 +40,15 @@ def plot_uncertainty_surface(
         pcm: A matplotlib PathCollection object that contains the palette
         information of the uncertainty plot.
     """
+    plt.rcParams["figure.dpi"] = 140
+    DEFAULT_X_RANGE = (-3.5, 3.5)
+    DEFAULT_Y_RANGE = (-2.5, 2.5)
+    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00"])
+    DEFAULT_NORM = colors.Normalize(
+        vmin=0,
+        vmax=1,
+    )
+    DEFAULT_N_GRID = 100
     # Normalize uncertainty for better visualization.
     # 1. all positive
     # if np.min(test_uncertainty) > 0:
@@ -104,10 +102,15 @@ def make_training_data(sample_size=500):
     return train_examples.astype(np.float32), train_labels.astype(np.int32)
 
 
-def make_testing_data(
-    x_range=DEFAULT_X_RANGE, y_range=DEFAULT_Y_RANGE, n_grid=DEFAULT_N_GRID
-):
+def make_testing_data():
     """Create a mesh grid in 2D space."""
+    plt.rcParams["figure.dpi"] = 140
+    DEFAULT_X_RANGE = (-3.5, 3.5)
+    DEFAULT_Y_RANGE = (-2.5, 2.5)
+    DEFAULT_N_GRID = 100
+    x_range = DEFAULT_X_RANGE
+    y_range = DEFAULT_Y_RANGE
+    n_grid = DEFAULT_N_GRID
     # testing data (mesh grid over data space)
     x = np.linspace(x_range[0], x_range[1], n_grid).astype(np.float32)
     y = np.linspace(y_range[0], y_range[1], n_grid).astype(np.float32)
@@ -176,11 +179,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             trial=trial,
             **train_params,
         )
-        trial.report(lowest_val_loss, 1)
-        if trial.should_prune():
-            mlflow.set_tag("pruned", "after both")
-            raise optuna.TrialPruned()
-
         mlflow.pytorch.log_model(resnet, "resnet_spn")
         # evaluate
         resnet.eval()

@@ -3,7 +3,6 @@ import numpy as np
 from torch.utils.data import DataLoader
 import torch
 import mlflow
-import optuna
 
 
 dataset_dir = "/data_docker/datasets/"
@@ -155,7 +154,8 @@ def get_corrupted_cifar10(
 
 def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name) as run:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = "cpu"
         mlflow.log_param("device", device)
 
         ckpt_dir = f"/data_docker/ckpts/cifar10-c_expl/{run_name}/"
@@ -244,7 +244,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             del model_params["spectral_normalization"]
             del model_params["mod"]
 
-            resnet_spn = ConvResNetSPN(
+            model = ConvResNetSPN(
                 block,
                 layers,
                 **model_params,
@@ -264,19 +264,31 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             layers = model_params["layers"]
             del model_params["layers"]
             del model_params["spec_norm_bound"]
-            resnet_spn = ConvResnetDDU(
+            model = ConvResnetDDU(
                 block,
                 layers,
                 **model_params,
             )
+        elif model_name == "AutoEncoderSPN":
+            from ResNetSPN import AutoEncoderSPN
+
+            model = AutoEncoderSPN(
+                **model_params,
+            )
+        elif model_name == "EfficientNetSPN":
+            from ResNetSPN import EfficientNetSPN
+
+            model = EfficientNetSPN(
+                **model_params,
+            )
         else:
             raise NotImplementedError
-        mlflow.set_tag("model", resnet_spn.__class__.__name__)
-        resnet_spn = resnet_spn.to(device)
+        mlflow.set_tag("model", model.__class__.__name__)
+        model = model.to(device)
 
-        print("training resnet_spn")
+        print("training model")
         # train model
-        lowest_val_loss = resnet_spn.start_train(
+        lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
             device,
@@ -284,23 +296,19 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             trial=trial,
             **train_params,
         )
-        trial.report(lowest_val_loss, 1)
-        if trial.should_prune():
-            mlflow.set_tag("pruned", "after both")
-            raise optuna.TrialPruned()
-        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
         # Evaluate
-        resnet_spn.eval()
+        model.eval()
 
         # eval accuracy
-        resnet_spn.einet_active = False
-        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        model.einet_active = False
+        valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc_resnet", valid_acc)
-        resnet_spn.einet_active = True
-        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        model.einet_active = True
+        valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
 
-        valid_ll = resnet_spn.eval_ll(valid_dl, device)
+        valid_ll = model.eval_ll(valid_dl, device)
         mlflow.log_metric("valid_ll", valid_ll)
 
         del train_dl
@@ -353,13 +361,13 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
                     # pin_memory=True,
                     # num_workers=1,
                 )
-                acc = resnet_spn.eval_acc(dl, device)
+                acc = model.eval_acc(dl, device)
                 eval_dict[corruption][corr_level]["acc"] = acc
-                ll = resnet_spn.eval_ll(dl, device)
+                ll = model.eval_ll(dl, device)
                 eval_dict[corruption][corr_level]["ll"] = ll
-                expl_ll = resnet_spn.explain_ll(dl, device)
+                expl_ll = model.explain_ll(dl, device)
                 eval_dict[corruption][corr_level]["expl_ll"] = expl_ll[corr_idx]
-                expl_mpe = resnet_spn.explain_mpe(dl, device)
+                expl_mpe = model.explain_mpe(dl, device)
                 eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe[
                     corr_idx
                 ].item()

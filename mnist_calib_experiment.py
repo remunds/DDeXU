@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
 import os
 import mlflow
-import optuna
 
 
 def get_severity(test_ds, i):
@@ -192,7 +191,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             del model_params["spectral_normalization"]
             del model_params["mod"]
 
-            resnet_spn = ConvResNetSPN(
+            model = ConvResNetSPN(
                 block,
                 layers,
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
@@ -213,20 +212,34 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             layers = model_params["layers"]
             del model_params["layers"]
             del model_params["spec_norm_bound"]
-            resnet_spn = ConvResnetDDU(
+            model = ConvResnetDDU(
                 block,
                 layers,
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "AutoEncoderSPN":
+            from ResNetSPN import AutoEncoderSPN
+
+            model = AutoEncoderSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "EfficientNetSPN":
+            from ResNetSPN import EfficientNetSPN
+
+            model = EfficientNetSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
-        mlflow.set_tag("model", resnet_spn.__class__.__name__)
-        resnet_spn = resnet_spn.to(device)
+        mlflow.set_tag("model", model.__class__.__name__)
+        model = model.to(device)
 
-        print("training resnet_spn")
+        print("training model")
         # train model
-        lowest_val_loss = resnet_spn.start_train(
+        lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
             device,
@@ -234,36 +247,32 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
-        trial.report(lowest_val_loss, 1)
-        if trial.should_prune():
-            mlflow.set_tag("pruned", "after both")
-            raise optuna.TrialPruned()
-        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
         # evaluate
-        resnet_spn.eval()
-        resnet_spn.einet_active = False
-        train_acc = resnet_spn.eval_acc(train_dl, device)
+        model.eval()
+        model.einet_active = False
+        train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy resnet", train_acc)
-        test_acc = resnet_spn.eval_acc(test_dl, device)
+        test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy resnet", test_acc)
 
-        resnet_spn.einet_active = True
-        train_acc = resnet_spn.eval_acc(train_dl, device)
+        model.einet_active = True
+        train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy", train_acc)
-        test_acc = resnet_spn.eval_acc(test_dl, device)
+        test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy", test_acc)
 
-        train_ll = resnet_spn.eval_ll(train_dl, device)
+        train_ll = model.eval_ll(train_dl, device)
         mlflow.log_metric("train ll", train_ll)
-        test_ll = resnet_spn.eval_ll(test_dl, device)
+        test_ll = model.eval_ll(test_dl, device)
         mlflow.log_metric("test ll", test_ll)
 
         ood_ds_flat = ood_ds.data.reshape(-1, 28 * 28).to(dtype=torch.float32)
         ood_ds_flat = TensorDataset(ood_ds_flat, ood_ds.targets)
         ood_dl = DataLoader(ood_ds_flat, batch_size=batch_sizes["resnet"], shuffle=True)
-        ood_acc = resnet_spn.eval_acc(ood_dl, device)
+        ood_acc = model.eval_acc(ood_dl, device)
         mlflow.log_metric("ood accuracy", ood_acc)
-        ood_ll = resnet_spn.eval_ll(ood_dl, device)
+        ood_ll = model.eval_ll(ood_dl, device)
         mlflow.log_metric("ood ll", ood_ll)
 
         from tqdm import tqdm
@@ -308,10 +317,10 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             mlflow.log_figure(fig, f"rotation_{s}_last.png")
 
             severity = get_severity(test_ds, s - 1)
-            acc = resnet_spn.eval_acc(test_dl_rot, device)
-            ll = resnet_spn.eval_ll(test_dl_rot, device)
-            pred_var = resnet_spn.eval_pred_variance(test_dl_rot, device)
-            pred_ent = resnet_spn.eval_pred_entropy(test_dl_rot, device)
+            acc = model.eval_acc(test_dl_rot, device)
+            ll = model.eval_ll(test_dl_rot, device)
+            pred_var = model.eval_pred_variance(test_dl_rot, device)
+            pred_ent = model.eval_pred_entropy(test_dl_rot, device)
             if "rotation" not in eval_dict:
                 eval_dict["rotation"] = {}
             eval_dict["rotation"][severity] = {
@@ -328,10 +337,10 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 test_ds_cutoff_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
             severity = get_severity(test_ds, s - 1)
-            acc = resnet_spn.eval_acc(test_dl_cutoff, device)
-            ll = resnet_spn.eval_ll(test_dl_cutoff, device)
-            pred_var = resnet_spn.eval_pred_variance(test_dl_cutoff, device)
-            pred_ent = resnet_spn.eval_pred_entropy(test_dl_cutoff, device)
+            acc = model.eval_acc(test_dl_cutoff, device)
+            ll = model.eval_ll(test_dl_cutoff, device)
+            pred_var = model.eval_pred_variance(test_dl_cutoff, device)
+            pred_ent = model.eval_pred_entropy(test_dl_cutoff, device)
             if "cutoff" not in eval_dict:
                 eval_dict["cutoff"] = {}
             eval_dict["cutoff"][severity] = {
@@ -360,10 +369,10 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 test_ds_noise_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
             severity = get_severity(test_ds, s - 1)
-            acc = resnet_spn.eval_acc(test_dl_noise, device)
-            ll = resnet_spn.eval_ll(test_dl_noise, device)
-            pred_var = resnet_spn.eval_pred_variance(test_dl_noise, device)
-            pred_ent = resnet_spn.eval_pred_entropy(test_dl_noise, device)
+            acc = model.eval_acc(test_dl_noise, device)
+            ll = model.eval_ll(test_dl_noise, device)
+            pred_var = model.eval_pred_variance(test_dl_noise, device)
+            pred_ent = model.eval_pred_entropy(test_dl_noise, device)
             if "noise" not in eval_dict:
                 eval_dict["noise"] = {}
             eval_dict["noise"][severity] = {

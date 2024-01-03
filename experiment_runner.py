@@ -1,3 +1,4 @@
+import traceback
 import torch
 import mlflow
 import optuna
@@ -88,7 +89,7 @@ def tune_two_moons(loss, training):
         train_params = dict(
             warmup_epochs=100,
             num_epochs=100,
-            early_stop=10,
+            early_stop=5,
         )
         model_params_dense = dict(
             input_dim=2,
@@ -136,6 +137,8 @@ def tune_two_moons(loss, training):
                 run_name, batch_sizes, model_params_dense, train_params, trial
             )
         except Exception as e:
+            print(e)
+            traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
             raise optuna.TrialPruned()
@@ -154,6 +157,7 @@ def tune_two_moons(loss, training):
             direction="minimize",
             pruner=optuna.pruners.MedianPruner(
                 n_startup_trials=3,  # requires at least 3 results to start pruning
+                n_warmup_steps=10,  # trial needs to log at least 10 steps before pruning
             ),
         )
         study.optimize(objective, n_trials=n_trials)
@@ -168,7 +172,7 @@ def tune_conv(dataset, loss, training, model):
         train_params = dict(
             warmup_epochs=100,
             num_epochs=100,
-            early_stop=10,
+            early_stop=5,
         )
         if "mnist" in dataset:
             image_shape = (1, 28, 28)
@@ -227,6 +231,8 @@ def tune_conv(dataset, loss, training, model):
                     run_name, batch_sizes, model_params, train_params, trial
                 )
             except Exception as e:
+                print(e)
+                traceback.print_exc()
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
@@ -248,6 +254,8 @@ def tune_conv(dataset, loss, training, model):
                 )
                 return (val_loss_2 + val_loss_4) / 2
             except Exception as e:
+                print(e)
+                traceback.print_exc()
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
@@ -257,6 +265,8 @@ def tune_conv(dataset, loss, training, model):
                     run_name, batch_sizes, model_params, train_params, trial
                 )
             except Exception as e:
+                print(e)
+                traceback.print_exc()
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
@@ -266,6 +276,8 @@ def tune_conv(dataset, loss, training, model):
                     run_name, batch_sizes, model_params, train_params, trial
                 )
             except Exception as e:
+                print(e)
+                traceback.print_exc()
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
@@ -286,6 +298,8 @@ def tune_conv(dataset, loss, training, model):
                 )
                 return (val_loss_2 + val_loss_4) / 2
             except Exception as e:
+                print(e)
+                traceback.print_exc()
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
@@ -308,6 +322,7 @@ def tune_conv(dataset, loss, training, model):
             direction="minimize",
             pruner=optuna.pruners.MedianPruner(
                 n_startup_trials=3,  # requires at least 3 results to start pruning
+                n_warmup_steps=10,  # trial needs to log at least 10 steps before pruning
             ),
         )
         study.optimize(objective, n_trials=n_trials)
@@ -324,11 +339,13 @@ dataset = [
     "cifar10-c_expl",
 ]
 
-for l in loss:
-    for t in training:
-        for d in dataset:
-            if d == "two-moons":
-                tune_two_moons(l, t)
-            else:
-                tune_conv(d, l, t, "ConvResNetSPN")
-                tune_conv(d, l, t, "ConvResNetDDU")
+# for l in loss:
+#     for t in training:
+#         for d in dataset:
+#             if d == "two-moons":
+#                 tune_two_moons(l, t)
+#             else:
+#                 tune_conv(d, l, t, "ConvResNetSPN")
+#                 tune_conv(d, l, t, "ConvResNetDDU")
+
+tune_conv("cifar10-c_expl", "hybrid", "end-to-end", "AutoEncoderSPN")

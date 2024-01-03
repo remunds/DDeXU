@@ -53,9 +53,11 @@ class EinetUtils:
 
         val_increase = 0
         lowest_val_loss = torch.inf
-        epoch = 0
+        epoch = -1
         # warmup by only training backbone
-        for epoch in tqdm(range(warmup_epochs)):
+        t = tqdm(range(warmup_epochs))
+        for epoch in t:
+            t.set_description(f"Epoch {epoch}")
             loss = 0.0
             for data, target in dl_train:
                 optimizer.zero_grad()
@@ -78,8 +80,11 @@ class EinetUtils:
                     output = self(data)
                     loss_v = torch.nn.CrossEntropyLoss()(output, target)
                     val_loss += loss_v.item()
-            print(
-                f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+            t.set_postfix(
+                dict(
+                    train_loss=loss / len(dl_train.dataset),
+                    val_loss=val_loss / len(dl_valid.dataset),
+                )
             )
             mlflow.log_metric(
                 key="train_loss", value=loss / len(dl_train.dataset), step=epoch
@@ -87,34 +92,30 @@ class EinetUtils:
             mlflow.log_metric(
                 key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
             )
-            # early stopping
-            if val_loss > lowest_val_loss:
+            # early stopping via optuna
+            if trial:
+                trial.report(val_loss, epoch)
+                if trial.should_prune():
+                    mlflow.set_tag("pruned", f"backbone: {epoch}")
+                    raise optuna.TrialPruned()
+            if val_loss <= lowest_val_loss:
+                lowest_val_loss = val_loss
+                val_increase = 0
+                if checkpoint_dir:
+                    self.save(checkpoint_dir + "checkpoint.pt")
+            else:
+                # early stopping when val increases
                 val_increase += 1
                 if val_increase >= early_stop:
                     print(
-                        f"Stopping Resnet early, val loss increased for the last {early_stop} epochs."
+                        f"Stopping Backbone early, val loss increased for the last {early_stop} epochs."
                     )
                     break
-            else:
-                val_increase = 0
-                lowest_val_loss = val_loss
-                if checkpoint_dir is not None:
-                    self.save(checkpoint_dir + "checkpoint.pt")
 
-        if warmup_epochs > 0:
-            # allow to stop experiment if worse than previous runs
-            if trial:
-                trial.report(lowest_val_loss, 0)
-                if trial.should_prune():
-                    mlflow.set_tag("pruned", "after resnet")
-                    # also delete the checkpoint
-                    if checkpoint_dir:
-                        os.remove(checkpoint_dir + "checkpoint.pt")
-                    raise optuna.TrialPruned()
-
-            # load best
-            if checkpoint_dir:
-                self.load(checkpoint_dir + "checkpoint.pt")
+        warmup_epochs_performed = epoch + 1
+        # load best
+        if checkpoint_dir and warmup_epochs_performed > 0:
+            self.load(checkpoint_dir + "checkpoint.pt")
 
         # train einet (and optionally resnet jointly)
         self.activate_einet(deactivate_backbone)
@@ -131,8 +132,9 @@ class EinetUtils:
             )
         lowest_val_loss = torch.inf
         val_increase = 0
-        warmup_epochs_performed = epoch + 1
-        for epoch in tqdm(range(num_epochs)):
+        t = tqdm(range(num_epochs))
+        for epoch in t:
+            t.set_description(f"Epoch {warmup_epochs_performed + epoch}")
             loss = 0.0
             for data, target in dl_train:
                 optimizer.zero_grad()
@@ -145,7 +147,6 @@ class EinetUtils:
                 )
                 loss += loss_v.item()
                 loss_v.backward()
-                print(loss_v.item())
                 optimizer.step()
             if lr_schedule_einet:
                 lr_schedule_einet.step()
@@ -162,8 +163,11 @@ class EinetUtils:
                         + (1 - lambda_v) * -output.mean()
                     )
                     val_loss += loss_v.item()
-                print(
-                    f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+                t.set_postfix(
+                    dict(
+                        train_loss=loss / len(dl_train.dataset),
+                        val_loss=val_loss / len(dl_valid.dataset),
+                    )
                 )
                 mlflow.log_metric(
                     key="train_loss",
@@ -175,21 +179,27 @@ class EinetUtils:
                     value=val_loss / len(dl_valid.dataset),
                     step=warmup_epochs_performed + epoch,
                 )
-                # early stopping
-                if val_loss > lowest_val_loss:
+                # early stopping via optuna
+                if trial:
+                    trial.report(val_loss, warmup_epochs + epoch)
+                    if trial.should_prune():
+                        mlflow.set_tag("pruned", f"einet: {epoch}")
+                        raise optuna.TrialPruned()
+                if val_loss <= lowest_val_loss:
+                    lowest_val_loss = val_loss
+                    val_increase = 0
+                    if checkpoint_dir:
+                        self.save(checkpoint_dir + "checkpoint.pt")
+                else:
+                    # early stopping when val increases
                     val_increase += 1
                     if val_increase >= early_stop:
                         print(
                             f"Stopping Einet early, val loss increased for the last {early_stop} epochs."
                         )
                         break
-                else:
-                    val_increase = 0
-                    lowest_val_loss = val_loss
-                    if checkpoint_dir is not None:
-                        self.save(checkpoint_dir + "checkpoint.pt")
+        # load best (with einet active)
         if checkpoint_dir is not None:
-            # load best
             self.load(checkpoint_dir + "checkpoint.pt")
         return lowest_val_loss
 
@@ -794,7 +804,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
         return self.fc(x) / self.temp
 
 
-class AutoEncoderSPN(nn.Module):
+class AutoEncoderSPN(nn.Module, EinetUtils):
     """
     Performs some Convolutions to get latent embeddings, then trains SPN on those for downstream tasks.
     Lastly, uses stochastically conditioned MPE of SPN and DeConvolution to reconstruct the original image.
@@ -803,7 +813,14 @@ class AutoEncoderSPN(nn.Module):
     def __init__(
         self,
         explaining_vars=[],
+        num_classes=10,
         image_shape=(1, 28, 28),  # (C, H, W)
+        einet_depth=3,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=1,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
         marginalized_scopes=None,
         **kwargs,
     ):
@@ -811,38 +828,48 @@ class AutoEncoderSPN(nn.Module):
         self.explaining_vars = explaining_vars
         self.image_shape = image_shape
         self.marginalized_scopes = marginalized_scopes
+        self.einet_depth = einet_depth
+        self.einet_num_sums = einet_num_sums
+        self.einet_num_leaves = einet_num_leaves
+        self.einet_num_repetitions = einet_num_repetitions
+        if einet_leaf_type == "Normal":
+            self.einet_leaf_type = Normal
+        else:
+            raise NotImplementedError
+        self.einet_dropout = einet_dropout
+
         # specify encoder
-        self.conv1 = nn.Conv2d(1, 32, 3, padding=1)
+        self.conv1 = nn.Conv2d(image_shape[0], 32, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         self.activation = nn.ReLU()
         self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
         self.bn3 = nn.BatchNorm2d(128)
-        self.fc = nn.Linear(128 * 28 * 28, 128)
+        self.fc = nn.Linear(128 * image_shape[1] * image_shape[2], 128)
 
         # specify decoder
-        self.fc2 = nn.Linear(128, 128 * 28 * 28)
+        self.fc2 = nn.Linear(128, 128 * image_shape[1] * image_shape[2])
         self.deconv1 = nn.ConvTranspose2d(128, 64, 3, padding=1)
         self.deconv2 = nn.ConvTranspose2d(64, 32, 3, padding=1)
-        self.deconv3 = nn.ConvTranspose2d(32, 1, 3, padding=1)
+        self.deconv3 = nn.ConvTranspose2d(32, image_shape[0], 3, padding=1)
         self.latent = None
 
-        self.einet = self.make_einet_layer(128, 10)
+        self.einet = self.make_einet_layer(128 + len(explaining_vars), num_classes)
 
     def make_einet_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
-            depth=3,
-            num_sums=20,
-            num_leaves=20,
-            num_repetitions=1,
+            depth=self.einet_depth,
+            num_sums=self.einet_num_sums,
+            num_leaves=self.einet_num_leaves,
+            num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
             leaf_type=Normal,
             layer_type="einsum",
-            dropout=0.0,
+            dropout=self.einet_dropout,
         )
         model = Einet(cfg)
         return model
@@ -868,7 +895,7 @@ class AutoEncoderSPN(nn.Module):
         x = self.conv3(x)
         x = self.bn3(x)
         x = self.activation(x)
-        x = x.view(-1, 128 * 28 * 28)
+        x = x.view(-1, 128 * self.image_shape[1] * self.image_shape[2])
         x = self.fc(x)
         self.latent = x
 
@@ -879,7 +906,7 @@ class AutoEncoderSPN(nn.Module):
     def decode(self, x):
         # decode
         x = self.fc2(x)
-        x = x.view(-1, 128, 28, 28)
+        x = x.view(-1, 128, self.image_shape[1], self.image_shape[2])
         x = self.bn3(x)
         x = self.deconv1(x)
         x = self.activation(x)
@@ -904,8 +931,10 @@ class AutoEncoderSPN(nn.Module):
         lr_schedule_gamma=None,
         early_stop=3,
         checkpoint_dir=None,
+        trial=None,
         marginal_divisor=4,
         gamma_v=0.5,
+        **kwargs,  # ignore additional arguments
     ):
         # due to its entirely different architecture,
         # the autoencoder needs its own training function
@@ -922,8 +951,9 @@ class AutoEncoderSPN(nn.Module):
         val_increase = 0
         lowest_val_loss = torch.inf
         epoch = 0
-
-        for epoch in tqdm(range(warmup_epochs + num_epochs)):
+        t = tqdm(range(warmup_epochs + num_epochs))
+        for epoch in t:
+            t.set_description(f"Epoch {epoch}")
             loss = 0.0
             for data, target in dl_train:
                 print("train")
@@ -938,17 +968,28 @@ class AutoEncoderSPN(nn.Module):
                 sample = self.latent
                 if epoch >= warmup_epochs:
                     # stochastic regularization -> marginalize 1/x variables to reconstruct
-                    marginalized_scope = torch.randperm(128)[
-                        : (128 // marginal_divisor)
-                    ]
+                    marginalized_scope = torch.randperm(
+                        128 + len(self.explaining_vars)
+                    )[: ((128 + len(self.explaining_vars)) // marginal_divisor)]
+                    # enlargen sample with explaining vars
+                    # Note: this currently assumes all explaining vars to be in front
+                    sample = torch.cat(
+                        [
+                            data[:, self.explaining_vars],
+                            sample,
+                        ],
+                        dim=1,
+                    )
                     # reconstruct latent space via MPE
                     sample = self.einet.sample(
-                        evidence=self.latent,
+                        evidence=sample,
                         marginalized_scopes=marginalized_scope,
                         is_differentiable=True,
                         is_mpe=True,
                     )
-                # decode on (reconstructed) latent space
+                    # remove explaining vars from sample
+                    sample = sample[:, len(self.explaining_vars) :]
+                # decode on (reconstructed) latent space (without explaining vars)
                 recon = self.decode(sample)
                 # mask out explaining vars
                 mask = torch.ones_like(data, dtype=torch.bool)
@@ -961,12 +1002,14 @@ class AutoEncoderSPN(nn.Module):
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
+                break
             if lr_schedule_resnet:
                 lr_schedule_resnet.step()
 
             val_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
+                    print("val")
                     optimizer.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
@@ -978,62 +1021,109 @@ class AutoEncoderSPN(nn.Module):
                     sample = self.latent
                     if epoch >= warmup_epochs:
                         # stochastic regularization -> marginalize 1/x variables to reconstruct
-                        marginalized_scope = torch.randperm(128)[
-                            : (128 // marginal_divisor)
-                        ]
+                        marginalized_scope = torch.randperm(
+                            128 + len(self.explaining_vars)
+                        )[: ((128 + len(self.explaining_vars)) // marginal_divisor)]
+                        # enlargen sample with explaining vars
+                        # Note: this currently assumes all explaining vars to be in front
+                        sample = torch.cat(
+                            [
+                                data[:, self.explaining_vars],
+                                sample,
+                            ],
+                            dim=1,
+                        )
                         # reconstruct latent space via MPE
                         sample = self.einet.sample(
-                            evidence=self.latent,
+                            evidence=sample,
                             marginalized_scopes=marginalized_scope,
                             is_differentiable=True,
                             is_mpe=True,
                         )
+                        # remove explaining vars from sample
+                        sample = sample[:, len(self.explaining_vars) :]
                     # decode on (reconstructed) latent space
                     recon = self.decode(sample)
+                    # mask out explaining vars
+                    mask = torch.ones_like(data, dtype=torch.bool)
+                    mask[:, self.explaining_vars] = False
+                    data = data[mask].reshape(
+                        -1,
+                        self.image_shape[0],
+                        self.image_shape[1],
+                        self.image_shape[2],
+                    )
                     loss_recon = torch.nn.MSELoss()(recon, data)
                     loss_v = gamma_v * loss_ce + (1 - gamma_v) * loss_recon
                     val_loss += loss_v.item()
-            print(
-                f"Epoch {epoch}, train loss {loss / len(dl_train.dataset)}, val loss {val_loss / len(dl_valid.dataset)}"
+                    break
+            t.set_postfix(
+                dict(
+                    train_loss=loss / len(dl_train.dataset),
+                    val_loss=val_loss / len(dl_valid.dataset),
+                )
             )
+
             mlflow.log_metric(
                 key="train_loss", value=loss / len(dl_train.dataset), step=epoch
             )
             mlflow.log_metric(
                 key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
             )
-            # early stopping
-            if val_loss > lowest_val_loss:
+            # early stopping via optuna
+            if trial:
+                trial.report(val_loss, warmup_epochs + epoch)
+                if trial.should_prune():
+                    mlflow.set_tag("pruned", f"einet: {epoch}")
+                    raise optuna.TrialPruned()
+            if val_loss <= lowest_val_loss:
+                lowest_val_loss = val_loss
+                val_increase = 0
+                if checkpoint_dir:
+                    self.save(checkpoint_dir + "checkpoint.pt")
+            else:
+                # early stopping when val increases
                 val_increase += 1
                 if val_increase >= early_stop:
                     print(
-                        f"Stopping Resnet early, val loss increased for the last {early_stop} epochs."
+                        f"Stopping early, val loss increased for the last {early_stop} epochs."
                     )
                     break
-            else:
-                val_increase = 0
-                lowest_val_loss = val_loss
-                if checkpoint_dir is not None:
-                    self.save(checkpoint_dir + "checkpoint.pt")
+            break
 
         if checkpoint_dir is not None:
             # load best
             self.load(checkpoint_dir + "checkpoint.pt")
-
         # log reconstruction of first 2 images
-        with torch.no_grad:
+        with torch.no_grad():
             x, y = next(iter(dl_valid))
             x, y = x.to(device), y.to(device)
             output = self(x)
-            marginalized_scope = torch.randperm(128)[: (128 // marginal_divisor)]
+            marginalized_scope = torch.randperm(128 + len(self.explaining_vars))[
+                : ((128 + len(self.explaining_vars)) // marginal_divisor)
+            ]
+            # enlargen sample with explaining vars
+            # Note: this currently assumes all explaining vars to be in front
+            sample = torch.cat(
+                [
+                    x[:, self.explaining_vars],
+                    sample,
+                ],
+                dim=1,
+            )
+            # reconstruct latent space via MPE
             sample = self.einet.sample(
-                evidence=self.latent,
+                evidence=sample,
                 marginalized_scopes=marginalized_scope,
                 is_differentiable=True,
                 is_mpe=True,
             )
+            # remove explaining vars from sample
+            sample = sample[:, len(self.explaining_vars) :]
+
             recon = self.decode(self.latent)
             recon_mpe = self.decode(sample)
+
             # mask out explaining vars
             mask = torch.ones_like(x, dtype=torch.bool)
             mask[:, self.explaining_vars] = False
@@ -1049,7 +1139,7 @@ class AutoEncoderSPN(nn.Module):
             plt.imshow(np.transpose(recon_mpe[0].cpu().numpy(), (1, 2, 0)))
             mlflow.log_figure(plt.gcf(), "recon_mpe.png")
             plt.close("all")
-
+        print("Done")
         return lowest_val_loss
 
 

@@ -4,7 +4,6 @@ from torchvision import datasets, transforms
 import os
 import ddu_dirty_mnist
 import mlflow
-import optuna
 
 
 def get_datasets():
@@ -142,7 +141,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             del model_params["spectral_normalization"]
             del model_params["mod"]
 
-            resnet_spn = ConvResNetSPN(
+            model = ConvResNetSPN(
                 block,
                 layers,
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
@@ -163,20 +162,34 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             layers = model_params["layers"]
             del model_params["layers"]
             del model_params["spec_norm_bound"]
-            resnet_spn = ConvResnetDDU(
+            model = ConvResnetDDU(
                 block,
                 layers,
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "AutoEncoderSPN":
+            from ResNetSPN import AutoEncoderSPN
+
+            model = AutoEncoderSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "EfficientNetSPN":
+            from ResNetSPN import EfficientNetSPN
+
+            model = EfficientNetSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
-        mlflow.set_tag("model", resnet_spn.__class__.__name__)
-        resnet_spn = resnet_spn.to(device)
+        mlflow.set_tag("model", model.__class__.__name__)
+        model = model.to(device)
 
-        print("training resnet_spn")
+        print("training model")
         # train model
-        lowest_val_loss = resnet_spn.start_train(
+        lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
             device,
@@ -184,29 +197,25 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
-        trial.report(lowest_val_loss, 1)
-        if trial.should_prune():
-            mlflow.set_tag("pruned", "after both")
-            raise optuna.TrialPruned()
-        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # evaluate
-        resnet_spn.eval()
-        resnet_spn.einet_active = False
-        train_acc = resnet_spn.eval_acc(train_dl, device)
+        model.eval()
+        model.einet_active = False
+        train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy resnet", train_acc)
-        test_acc = resnet_spn.eval_acc(test_dl, device)
+        test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy resnet", test_acc)
 
-        resnet_spn.einet_active = True
-        train_acc = resnet_spn.eval_acc(train_dl, device)
+        model.einet_active = True
+        train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy", train_acc)
-        test_acc = resnet_spn.eval_acc(test_dl, device)
+        test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy", test_acc)
 
-        train_ll = resnet_spn.eval_ll(train_dl, device)
+        train_ll = model.eval_ll(train_dl, device)
         mlflow.log_metric("train ll", train_ll)
-        test_ll = resnet_spn.eval_ll(test_dl, device)
+        test_ll = model.eval_ll(test_dl, device)
         mlflow.log_metric("test ll", test_ll)
 
         # create dataloaders
@@ -238,41 +247,35 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
 
         # get log-likelihoods for all datasets
         with torch.no_grad():
-            lls_mnist = resnet_spn.eval_ll(mnist_dl, device, return_all=True)
+            lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
             mlflow.log_metric("mnist ll", torch.mean(lls_mnist).item())
-            pred_var_mnist = resnet_spn.eval_pred_variance(
-                mnist_dl, device, return_all=True
-            )
+            pred_var_mnist = model.eval_pred_variance(mnist_dl, device, return_all=True)
             mlflow.log_metric("mnist pred var", torch.mean(pred_var_mnist).item())
-            pred_entropy_mnist = resnet_spn.eval_pred_entropy(
+            pred_entropy_mnist = model.eval_pred_entropy(
                 mnist_dl, device, return_all=True
             )
             mlflow.log_metric(
                 "mnist pred entropy", torch.mean(pred_entropy_mnist).item()
             )
 
-            lls_amb = resnet_spn.eval_ll(ambiguous_dl, device, return_all=True)
+            lls_amb = model.eval_ll(ambiguous_dl, device, return_all=True)
             mlflow.log_metric("ambiguous ll", torch.mean(lls_amb).item())
-            pred_var_amb = resnet_spn.eval_pred_variance(
+            pred_var_amb = model.eval_pred_variance(
                 ambiguous_dl, device, return_all=True
             )
             mlflow.log_metric("ambiguous pred var", torch.mean(pred_var_amb).item())
-            pred_entropy_amb = resnet_spn.eval_pred_entropy(
+            pred_entropy_amb = model.eval_pred_entropy(
                 ambiguous_dl, device, return_all=True
             )
             mlflow.log_metric(
                 "ambiguous pred entropy", torch.mean(pred_entropy_amb).item()
             )
 
-            lls_ood = resnet_spn.eval_ll(ood_dl, device, return_all=True)
+            lls_ood = model.eval_ll(ood_dl, device, return_all=True)
             mlflow.log_metric("ood ll", torch.mean(lls_ood).item())
-            pred_var_ood = resnet_spn.eval_pred_variance(
-                ood_dl, device, return_all=True
-            )
+            pred_var_ood = model.eval_pred_variance(ood_dl, device, return_all=True)
             mlflow.log_metric("ood pred var", torch.mean(pred_var_ood).item())
-            pred_entropy_ood = resnet_spn.eval_pred_entropy(
-                ood_dl, device, return_all=True
-            )
+            pred_entropy_ood = model.eval_pred_entropy(ood_dl, device, return_all=True)
             mlflow.log_metric("ood pred entropy", torch.mean(pred_entropy_ood).item())
 
         # plot

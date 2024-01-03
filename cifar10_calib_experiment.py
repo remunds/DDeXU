@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 import mlflow
-import optuna
 
 
 dataset_dir = "/data_docker/datasets/"
@@ -117,7 +116,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             del model_params["spectral_normalization"]
             del model_params["mod"]
 
-            resnet_spn = ConvResNetSPN(
+            model = ConvResNetSPN(
                 block,
                 layers,
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
@@ -138,20 +137,34 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             layers = model_params["layers"]
             del model_params["layers"]
             del model_params["spec_norm_bound"]
-            resnet_spn = ConvResnetDDU(
+            model = ConvResnetDDU(
                 block,
                 layers,
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "AutoEncoderSPN":
+            from ResNetSPN import AutoEncoderSPN
+
+            model = AutoEncoderSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "EfficientNetSPN":
+            from ResNetSPN import EfficientNetSPN
+
+            model = EfficientNetSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
-        mlflow.set_tag("model", resnet_spn.__class__.__name__)
-        resnet_spn = resnet_spn.to(device)
+        mlflow.set_tag("model", model.__class__.__name__)
+        model = model.to(device)
 
-        print("training resnet_spn")
+        print("training model")
         # train model
-        lowest_val_loss = resnet_spn.start_train(
+        lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
             device,
@@ -159,40 +172,36 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             trial=trial,
             **train_params,
         )
-        trial.report(lowest_val_loss, 1)
-        if trial.should_prune():
-            mlflow.set_tag("pruned", "after both")
-            raise optuna.TrialPruned()
-        mlflow.pytorch.log_model(resnet_spn, "resnet_spn")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
         # Evaluate
-        resnet_spn.eval()
+        model.eval()
         eval_dict = {}
 
         # eval resnet
-        resnet_spn.einet_active = False
-        train_acc = resnet_spn.eval_acc(train_dl, device)
+        model.einet_active = False
+        train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy resnet", train_acc)
-        test_acc = resnet_spn.eval_acc(test_dl, device)
+        test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy resnet", test_acc)
 
         # eval einet
-        resnet_spn.einet_active = True
-        train_acc = resnet_spn.eval_acc(train_dl, device)
+        model.einet_active = True
+        train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy", train_acc)
-        train_ll = resnet_spn.eval_ll(train_dl, device)
+        train_ll = model.eval_ll(train_dl, device)
         mlflow.log_metric("train ll", train_ll)
-        train_pred_var = resnet_spn.eval_pred_variance(train_dl, device)
+        train_pred_var = model.eval_pred_variance(train_dl, device)
         mlflow.log_metric("train pred var", train_pred_var)
-        train_pred_entropy = resnet_spn.eval_pred_entropy(train_dl, device)
+        train_pred_entropy = model.eval_pred_entropy(train_dl, device)
         mlflow.log_metric("train pred entropy", train_pred_entropy)
 
-        test_acc = resnet_spn.eval_acc(test_dl, device)
+        test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy", test_acc)
-        orig_test_ll = resnet_spn.eval_ll(test_dl, device)
+        orig_test_ll = model.eval_ll(test_dl, device)
         mlflow.log_metric("test ll", orig_test_ll)
-        orig_test_pred_var = resnet_spn.eval_pred_variance(test_dl, device)
+        orig_test_pred_var = model.eval_pred_variance(test_dl, device)
         mlflow.log_metric("test pred var", orig_test_pred_var)
-        orig_test_pred_entropy = resnet_spn.eval_pred_entropy(test_dl, device)
+        orig_test_pred_entropy = model.eval_pred_entropy(test_dl, device)
         mlflow.log_metric("test pred entropy", orig_test_pred_entropy)
 
         # random noise baseline
@@ -206,13 +215,13 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             pin_memory=True,
             num_workers=1,
         )
-        random_acc = resnet_spn.eval_acc(random_dl, device)
+        random_acc = model.eval_acc(random_dl, device)
         mlflow.log_metric("random accuracy", random_acc)
-        random_ll = resnet_spn.eval_ll(random_dl, device)
+        random_ll = model.eval_ll(random_dl, device)
         mlflow.log_metric("random ll", random_ll)
-        random_pred_var = resnet_spn.eval_pred_variance(random_dl, device)
+        random_pred_var = model.eval_pred_variance(random_dl, device)
         mlflow.log_metric("random pred var", random_pred_var)
-        random_pred_entropy = resnet_spn.eval_pred_entropy(random_dl, device)
+        random_pred_entropy = model.eval_pred_entropy(random_dl, device)
         mlflow.log_metric("random pred entropy", random_pred_entropy)
 
         # train: 50k, 32, 32, 3
@@ -269,10 +278,10 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 )
 
                 # evaluate
-                test_acc = resnet_spn.eval_acc(test_dl, device)
-                test_ll = resnet_spn.eval_ll(test_dl, device)
-                test_pred_var = resnet_spn.eval_pred_variance(test_dl, device)
-                test_pred_entropy = resnet_spn.eval_pred_entropy(test_dl, device)
+                test_acc = model.eval_acc(test_dl, device)
+                test_ll = model.eval_ll(test_dl, device)
+                test_pred_var = model.eval_pred_variance(test_dl, device)
+                test_pred_entropy = model.eval_pred_entropy(test_dl, device)
 
                 eval_dict[corruption][severity] = {
                     "acc": test_acc,
