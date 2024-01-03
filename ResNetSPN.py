@@ -956,7 +956,6 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
             t.set_description(f"Epoch {epoch}")
             loss = 0.0
             for data, target in dl_train:
-                print("train")
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
@@ -1002,14 +1001,12 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-                break
             if lr_schedule_resnet:
                 lr_schedule_resnet.step()
 
             val_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
-                    print("val")
                     optimizer.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
@@ -1056,7 +1053,6 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
                     loss_recon = torch.nn.MSELoss()(recon, data)
                     loss_v = gamma_v * loss_ce + (1 - gamma_v) * loss_recon
                     val_loss += loss_v.item()
-                    break
             t.set_postfix(
                 dict(
                     train_loss=loss / len(dl_train.dataset),
@@ -1089,7 +1085,6 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
                         f"Stopping early, val loss increased for the last {early_stop} epochs."
                     )
                     break
-            break
 
         if checkpoint_dir is not None:
             # load best
@@ -1104,6 +1099,8 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
             ]
             # enlargen sample with explaining vars
             # Note: this currently assumes all explaining vars to be in front
+            # RuntimeError: Sizes of tensors must match except in dimension 1. Expected size 512 but got size 224 for tensor number 1 in the list.
+            sample = self.latent
             sample = torch.cat(
                 [
                     x[:, self.explaining_vars],
@@ -1139,7 +1136,6 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
             plt.imshow(np.transpose(recon_mpe[0].cpu().numpy(), (1, 2, 0)))
             mlflow.log_figure(plt.gcf(), "recon_mpe.png")
             plt.close("all")
-        print("Done")
         return lowest_val_loss
 
 

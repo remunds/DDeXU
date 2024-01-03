@@ -338,14 +338,18 @@ dataset = [
     "cifar10-c",
     "cifar10-c_expl",
 ]
+models = [
+    "ConvResNetSPN",
+    "ConvResNetDDU",
+    "AutoEncoderSPN",
+    "EfficientNetSPN",
+]
 
-# for l in loss:
-#     for t in training:
-#         for d in dataset:
-#             if d == "two-moons":
-#                 tune_two_moons(l, t)
-#             else:
-#                 tune_conv(d, l, t, "ConvResNetSPN")
-#                 tune_conv(d, l, t, "ConvResNetDDU")
-
-tune_conv("cifar10-c_expl", "hybrid", "end-to-end", "AutoEncoderSPN")
+for l in loss:
+    for t in training:
+        for d in dataset:
+            if d == "two-moons":
+                tune_two_moons(l, t)
+            else:
+                for m in models:
+                    tune_conv(d, l, t, m)

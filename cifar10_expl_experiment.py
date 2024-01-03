@@ -154,8 +154,7 @@ def get_corrupted_cifar10(
 
 def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name) as run:
-        # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        device = "cpu"
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
 
         ckpt_dir = f"/data_docker/ckpts/cifar10-c_expl/{run_name}/"
