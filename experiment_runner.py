@@ -80,6 +80,15 @@ def suggest_hps(trial, train_params, model_params):
     return train_params, model_params
 
 
+def suggest_hps_backbone_only(trial, train_params, model_params):
+    train_params["learning_rate"] = 1  # irrelevant
+    train_params["learning_rate_warmup"] = trial.suggest_float(
+        "lr_warmup", 1e-4, 1e-1, log=True
+    )
+
+    return train_params, model_params
+
+
 def tune_two_moons(loss, training):
     print("New tuning run of two moons")
     run_name = f"{loss}_{training}"
@@ -96,11 +105,11 @@ def tune_two_moons(loss, training):
             output_dim=2,
             num_layers=3,
             num_hidden=32,
-            spec_norm_bound=0.9,
-            # einet_depth=3,
+            spec_norm_bound=0.95,
+            einet_depth=3,  # might be overwritten by optuna
             einet_num_sums=20,
             einet_num_leaves=20,
-            # einet_num_repetitions=1,
+            einet_num_repetitions=1,  # might be overwritten by optuna
             einet_leaf_type="Normal",
             einet_dropout=0.0,
         )
@@ -126,17 +135,29 @@ def tune_two_moons(loss, training):
         elif training == "warmup":
             train_params["warmup_epochs"] = 100
             train_params["deactivate_backbone"] = False
+        elif training == "backbone_only":
+            train_params["warmup_epochs"] = 50
+            train_params["deactivate_backbone"] = False
+            train_params["num_epochs"] = 0
         else:
-            raise ValueError("training must be end-to-end, seperate or warmup")
-
-        train_params, model_params_dense = suggest_hps(
-            trial, train_params, model_params_dense
-        )
+            raise ValueError(
+                "training must be end-to-end, seperate, warmup or backbone_only"
+            )
+        if training == "backbone_only":
+            train_params, model_params_dense = suggest_hps_backbone_only(
+                trial, train_params, model_params_dense
+            )
+        else:
+            train_params, model_params_dense = suggest_hps(
+                trial, train_params, model_params_dense
+            )
         try:
             return start_two_moons_run(
                 run_name, batch_sizes, model_params_dense, train_params, trial
             )
         except Exception as e:
+            if type(e) == optuna.exceptions.TrialPruned:
+                raise e
             print(e)
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
@@ -149,7 +170,7 @@ def tune_two_moons(loss, training):
     if exp:
         query = f"attributes.run_name = '{run_name}'"
         runs = mlflow.search_runs([exp.experiment_id], query)
-    n_trials = 10
+    n_trials = 15
     # only run experiment, if it wasnt run fully
     if len(runs) < n_trials:
         mlflow.set_experiment(dataset)
@@ -189,13 +210,13 @@ def tune_conv(dataset, loss, training, model):
             layers=[2, 2, 2, 2],
             num_classes=10,
             image_shape=image_shape,
-            # einet_depth=3,
+            einet_depth=3,  # might be overwritten by optuna
             einet_num_sums=20,
             einet_num_leaves=20,
-            # einet_num_repetitions=1,
+            einet_num_repetitions=1,  # might be overwritten by optuna
             einet_leaf_type="Normal",
             einet_dropout=0.0,
-            spec_norm_bound=0.9,  # only for ConvResNetSPN
+            spec_norm_bound=0.95,  # only for ConvResNetSPN
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
         )
@@ -207,6 +228,8 @@ def tune_conv(dataset, loss, training, model):
             train_params["lambda_v"] = 0.5
         elif loss == "hybrid_low":
             train_params["lambda_v"] = 0.1
+        elif loss == "hybrid_very_low":
+            train_params["lambda_v"] = 0.01
         elif loss == "hybrid_high":
             train_params["lambda_v"] = 0.9
         else:
@@ -221,16 +244,28 @@ def tune_conv(dataset, loss, training, model):
         elif training == "warmup":
             train_params["warmup_epochs"] = 100
             train_params["deactivate_backbone"] = False
+        elif training == "backbone_only":
+            train_params["warmup_epochs"] = 50
+            train_params["deactivate_backbone"] = False
+            train_params["num_epochs"] = 0
         else:
-            raise ValueError("training must be end-to-end, seperate or warmup")
-
-        train_params, model_params = suggest_hps(trial, train_params, model_params)
+            raise ValueError(
+                "training must be end-to-end, seperate, warmup or backbone_only"
+            )
+        if training == "backbone_only":
+            train_params, model_params = suggest_hps_backbone_only(
+                trial, train_params, model_params
+            )
+        else:
+            train_params, model_params = suggest_hps(trial, train_params, model_params)
         if dataset == "mnist-calib":
             try:
                 return start_mnist_calib_run(
                     run_name, batch_sizes, model_params, train_params, trial
                 )
             except Exception as e:
+                if type(e) == optuna.exceptions.TrialPruned:
+                    raise e
                 print(e)
                 traceback.print_exc()
                 mlflow.set_tag("pruned", e)
@@ -254,6 +289,8 @@ def tune_conv(dataset, loss, training, model):
                 )
                 return (val_loss_2 + val_loss_4) / 2
             except Exception as e:
+                if type(e) == optuna.exceptions.TrialPruned:
+                    raise e
                 print(e)
                 traceback.print_exc()
                 mlflow.set_tag("pruned", e)
@@ -265,6 +302,8 @@ def tune_conv(dataset, loss, training, model):
                     run_name, batch_sizes, model_params, train_params, trial
                 )
             except Exception as e:
+                if type(e) == optuna.exceptions.TrialPruned:
+                    raise e
                 print(e)
                 traceback.print_exc()
                 mlflow.set_tag("pruned", e)
@@ -276,6 +315,8 @@ def tune_conv(dataset, loss, training, model):
                     run_name, batch_sizes, model_params, train_params, trial
                 )
             except Exception as e:
+                if type(e) == optuna.exceptions.TrialPruned:
+                    raise e
                 print(e)
                 traceback.print_exc()
                 mlflow.set_tag("pruned", e)
@@ -298,6 +339,8 @@ def tune_conv(dataset, loss, training, model):
                 )
                 return (val_loss_2 + val_loss_4) / 2
             except Exception as e:
+                if type(e) == optuna.exceptions.TrialPruned:
+                    raise e
                 print(e)
                 traceback.print_exc()
                 mlflow.set_tag("pruned", e)
@@ -313,7 +356,7 @@ def tune_conv(dataset, loss, training, model):
     if exp:
         query = f"attributes.run_name = '{run_name}'"
         runs = mlflow.search_runs([exp.experiment_id], query)
-    n_trials = 10
+    n_trials = 15
     trial_multiplier = 2 if "expl" in dataset else 1
     # only run experiment, if it wasnt run fully
     if len(runs) < n_trials * trial_multiplier:
@@ -328,28 +371,71 @@ def tune_conv(dataset, loss, training, model):
         study.optimize(objective, n_trials=n_trials)
 
 
-loss = ["discriminative", "generative", "hybrid_low", "hybrid_high", "hybrid"]
-training = ["end-to-end", "seperate", "warmup"]
+# Ziel vom Tuning: Testen, ob und wie gut Idee mit Einet funktioniert -> End-to-End training kann man spaeter herausfinden
+# Nach Gespraech mit Christian neue Idee fuer schnelleres tuning:
+# Erstes Tuning:
+# - training schedule nur seperate
+# - einmal backbones (DenseRes, ConvRes, ConvResDDU, Efficient) optimieren (Heute)
+#    - dafuer nur LR (log) optimieren fuer jedes experiment (specnorm=0.95)
+#    - maximal 50 epochs, 15 trials
+#    - keine auswertung noetig
+# - Ergebnis: 1 (twomoons) + 3 (mnist) + 3 (dirty) + 3 (cifar) = 10 models
+# - Idealerweise bis morgen / heute abend fertig.
+#
+# Zweites Tuning:
+# - Beste backbones raussuchen und accuracy berechnen und notieren(!)
+# - Fuer jedes experiment:
+#   - Lade passendes Backbone
+#   - Nur seperate training (frozen backbone) (==ideal) -> end-to-end/warmup kann spaeter optimiert werden
+#   - Optimiere einet_depth, einet_rep, einet_dropout (jeweils 2-3 werte), lr (log)
+# - Alle losses, datasets und backbones (5 + 5 * 5 * 3) = 80 runs a 15 trials = 1200 trials
+
+# AutoEncoder spaeter extra optimieren
+
+# loss = ["discriminative", "generative", "hybrid_low", "hybrid_high", "hybrid", "hybrid_very_low"]
+# training = ["end-to-end", "seperate", "warmup"]
+# dataset = [
+#     "two-moons",
+#     "mnist-calib",
+#     "mnist-expl",
+#     "dirty-mnist",
+#     "cifar10-c",
+#     "cifar10-c_expl",
+# ]
+# models = [
+#     "ConvResNetSPN",
+#     "ConvResNetDDU",
+#     "AutoEncoderSPN",
+#     "EfficientNetSPN",
+# ]
+
+# for l in loss:
+#     for t in training:
+#         for d in dataset:
+#             if d == "two-moons":
+#                 tune_two_moons(l, t)
+#             else:
+#                 for m in models:
+#                     tune_conv(d, l, t, m)
+
+# Erstes Tuning
 dataset = [
     "two-moons",
     "mnist-calib",
-    "mnist-expl",
+    # "mnist-expl",
     "dirty-mnist",
     "cifar10-c",
-    "cifar10-c_expl",
+    # "cifar10-c_expl",
 ]
 models = [
     "ConvResNetSPN",
     "ConvResNetDDU",
-    "AutoEncoderSPN",
+    # "AutoEncoderSPN",
     "EfficientNetSPN",
 ]
-
-for l in loss:
-    for t in training:
-        for d in dataset:
-            if d == "two-moons":
-                tune_two_moons(l, t)
-            else:
-                for m in models:
-                    tune_conv(d, l, t, m)
+for d in dataset:
+    if d == "two-moons":
+        tune_two_moons("discriminative", "backbone_only")
+        continue
+    for m in models:
+        tune_conv(d, "discriminative", "backbone_only", m)

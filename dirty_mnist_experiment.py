@@ -199,6 +199,9 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
         )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
+        if train_params["num_epochs"] == 0:
+            return lowest_val_loss
+
         # evaluate
         model.eval()
         model.einet_active = False

@@ -34,18 +34,19 @@ class EinetUtils:
         lr_schedule_warmup_gamma=None,
         lr_schedule_step_size=None,
         lr_schedule_gamma=None,
-        early_stop=3,
+        early_stop=5,
         checkpoint_dir=None,
         trial=None,
     ):
         self.train()
         self.deactivate_einet()
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
+        lr_schedule_backbone = None
         if (
             lr_schedule_warmup_step_size is not None
             and lr_schedule_warmup_gamma is not None
         ):
-            lr_schedule_resnet = torch.optim.lr_scheduler.StepLR(
+            lr_schedule_backbone = torch.optim.lr_scheduler.StepLR(
                 optimizer,
                 step_size=lr_schedule_warmup_step_size,
                 gamma=lr_schedule_warmup_gamma,
@@ -68,8 +69,8 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule_resnet:
-                lr_schedule_resnet.step()
+            if lr_schedule_backbone is not None:
+                lr_schedule_backbone.step()
 
             val_loss = 0.0
             with torch.no_grad():
@@ -93,7 +94,7 @@ class EinetUtils:
                 key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
             )
             # early stopping via optuna
-            if trial:
+            if trial is not None:
                 trial.report(val_loss, epoch)
                 if trial.should_prune():
                     mlflow.set_tag("pruned", f"backbone: {epoch}")
@@ -101,7 +102,7 @@ class EinetUtils:
             if val_loss <= lowest_val_loss:
                 lowest_val_loss = val_loss
                 val_increase = 0
-                if checkpoint_dir:
+                if checkpoint_dir is not None:
                     self.save(checkpoint_dir + "checkpoint.pt")
             else:
                 # early stopping when val increases
@@ -124,13 +125,14 @@ class EinetUtils:
         else:
             optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
+        lr_schedule_einet = None
         if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
             lr_schedule_einet = torch.optim.lr_scheduler.StepLR(
                 optimizer,
                 step_size=lr_schedule_step_size,
                 gamma=lr_schedule_gamma,
             )
-        lowest_val_loss = torch.inf
+        lowest_val_loss = torch.inf if num_epochs > 0 else lowest_val_loss
         val_increase = 0
         t = tqdm(range(num_epochs))
         for epoch in t:
@@ -148,7 +150,7 @@ class EinetUtils:
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule_einet:
+            if lr_schedule_einet is not None:
                 lr_schedule_einet.step()
 
             val_loss = 0.0
@@ -180,7 +182,7 @@ class EinetUtils:
                     step=warmup_epochs_performed + epoch,
                 )
                 # early stopping via optuna
-                if trial:
+                if trial is not None:
                     trial.report(val_loss, warmup_epochs + epoch)
                     if trial.should_prune():
                         mlflow.set_tag("pruned", f"einet: {epoch}")
@@ -188,7 +190,7 @@ class EinetUtils:
                 if val_loss <= lowest_val_loss:
                     lowest_val_loss = val_loss
                     val_increase = 0
-                    if checkpoint_dir:
+                    if checkpoint_dir is not None:
                         self.save(checkpoint_dir + "checkpoint.pt")
                 else:
                     # early stopping when val increases
@@ -941,8 +943,9 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
 
         self.train()
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        lr_schedule_backbone = None
         if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
-            lr_schedule_resnet = torch.optim.lr_scheduler.StepLR(
+            lr_schedule_backbone = torch.optim.lr_scheduler.StepLR(
                 optimizer,
                 step_size=lr_schedule_step_size,
                 gamma=lr_schedule_gamma,
@@ -1001,8 +1004,8 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
-            if lr_schedule_resnet:
-                lr_schedule_resnet.step()
+            if lr_schedule_backbone is not None:
+                lr_schedule_backbone.step()
 
             val_loss = 0.0
             with torch.no_grad():
@@ -1067,7 +1070,7 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
                 key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
             )
             # early stopping via optuna
-            if trial:
+            if trial is not None:
                 trial.report(val_loss, warmup_epochs + epoch)
                 if trial.should_prune():
                     mlflow.set_tag("pruned", f"einet: {epoch}")
@@ -1075,7 +1078,7 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
             if val_loss <= lowest_val_loss:
                 lowest_val_loss = val_loss
                 val_increase = 0
-                if checkpoint_dir:
+                if checkpoint_dir is not None:
                     self.save(checkpoint_dir + "checkpoint.pt")
             else:
                 # early stopping when val increases
@@ -1140,7 +1143,7 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
 
 
 from torchvision.models import efficientnet_v2_s
-from torch.nn.utils.parametrizations import spectral_norm
+from torch.nn.utils.parametrizations import spectral_norm as spectral_norm_torch
 
 
 class EfficientNetSPN(nn.Module, EinetUtils):
@@ -1187,10 +1190,10 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    layer = spectral_norm(layer)
+                    layer = spectral_norm_torch(layer)
                     # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    layer = spectral_norm(layer)
+                    layer = spectral_norm_torch(layer)
                     # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):

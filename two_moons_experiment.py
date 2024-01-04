@@ -179,7 +179,10 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_model(resnet, "resnet_spn")
+        mlflow.pytorch.log_state_dict(resnet.state_dict(), "model")
+
+        if train_params["num_epochs"] == 0:
+            return lowest_val_loss
         # evaluate
         resnet.eval()
         valid_acc = resnet.eval_acc(valid_dl, device)

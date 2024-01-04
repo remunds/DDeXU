@@ -287,6 +287,9 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             **train_params,
         )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+
+        if train_params["num_epochs"] == 0:
+            return lowest_val_loss
         # evaluate
         model.eval()
 

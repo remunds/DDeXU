@@ -296,6 +296,9 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             **train_params,
         )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+
+        if train_params["num_epochs"] == 0:
+            return lowest_val_loss
         # Evaluate
         model.eval()
 
