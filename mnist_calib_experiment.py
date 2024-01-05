@@ -473,5 +473,6 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{m}.png")
+            plt.close()
 
         return lowest_val_loss

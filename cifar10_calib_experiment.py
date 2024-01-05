@@ -383,5 +383,6 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{corruption}.png")
+            plt.close()
 
         return lowest_val_loss

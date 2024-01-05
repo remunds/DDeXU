@@ -89,7 +89,23 @@ def suggest_hps_backbone_only(trial, train_params, model_params):
     return train_params, model_params
 
 
-def tune_two_moons(loss, training):
+def suggest_hps_einet_only(trial, train_params, model_params):
+    train_params["learning_rate_warmup"] = 1  # irrelevant
+    train_params["learning_rate"] = trial.suggest_float(
+        "lr_warmup", 1e-4, 1e-1, log=True
+    )
+    model_params["einet_depth"] = trial.suggest_categorical("einet_depth", [3, 5])
+    model_params["einet_num_repetitions"] = trial.suggest_categorical(
+        "einet_rep", [1, 5]
+    )
+    model_params["einet_dropout"] = trial.suggest_categorical(
+        "einet_dropout", [0.0, 0.2]
+    )
+
+    return train_params, model_params
+
+
+def tune_two_moons(loss, training, pretrained_path=None):
     print("New tuning run of two moons")
     run_name = f"{loss}_{training}"
 
@@ -113,7 +129,7 @@ def tune_two_moons(loss, training):
             einet_leaf_type="Normal",
             einet_dropout=0.0,
         )
-        if loss == "discriminative":
+        if loss == "discriminative" or loss == "noloss":
             train_params["lambda_v"] = 1.0
         elif loss == "generative":
             train_params["lambda_v"] = 0.0
@@ -121,10 +137,14 @@ def tune_two_moons(loss, training):
             train_params["lambda_v"] = 0.5
         elif loss == "hybrid_low":
             train_params["lambda_v"] = 0.1
+        elif loss == "hybrid_very_low":
+            train_params["lambda_v"] = 0.01
         elif loss == "hybrid_high":
             train_params["lambda_v"] = 0.9
         else:
-            raise ValueError("loss must be discriminative, generative or hybrid")
+            raise ValueError(
+                "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
+            )
 
         if training == "end-to-end":
             train_params["warmup_epochs"] = 0
@@ -139,12 +159,22 @@ def tune_two_moons(loss, training):
             train_params["warmup_epochs"] = 50
             train_params["deactivate_backbone"] = False
             train_params["num_epochs"] = 0
+        elif training == "einet_only":
+            train_params["warmup_epochs"] = 0
+            train_params["deactivate_backbone"] = True
+            train_params["num_epochs"] = 100
         else:
             raise ValueError(
-                "training must be end-to-end, seperate, warmup or backbone_only"
+                "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
             )
+        if pretrained_path is not None:
+            train_params["pretrained_path"] = pretrained_path
         if training == "backbone_only":
             train_params, model_params_dense = suggest_hps_backbone_only(
+                trial, train_params, model_params_dense
+            )
+        elif training == "einet_only":
+            train_params, model_params_dense = suggest_hps_einet_only(
                 trial, train_params, model_params_dense
             )
         else:
@@ -184,7 +214,7 @@ def tune_two_moons(loss, training):
         study.optimize(objective, n_trials=n_trials)
 
 
-def tune_conv(dataset, loss, training, model):
+def tune_conv(dataset, loss, training, model, pretrained_path=None):
     print(f"New tuning run of {dataset} with {loss} and {training} and {model}")
     run_name = f"{loss}_{training}_{model}"
 
@@ -220,7 +250,7 @@ def tune_conv(dataset, loss, training, model):
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
         )
-        if loss == "discriminative":
+        if loss == "discriminative" or loss == "noloss":
             train_params["lambda_v"] = 1.0
         elif loss == "generative":
             train_params["lambda_v"] = 0.0
@@ -233,7 +263,9 @@ def tune_conv(dataset, loss, training, model):
         elif loss == "hybrid_high":
             train_params["lambda_v"] = 0.9
         else:
-            raise ValueError("loss must be discriminative, generative or hybrid")
+            raise ValueError(
+                "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
+            )
 
         if training == "end-to-end":
             train_params["warmup_epochs"] = 0
@@ -248,12 +280,22 @@ def tune_conv(dataset, loss, training, model):
             train_params["warmup_epochs"] = 50
             train_params["deactivate_backbone"] = False
             train_params["num_epochs"] = 0
+        elif training == "einet_only":
+            train_params["warmup_epochs"] = 0
+            train_params["deactivate_backbone"] = True
+            train_params["num_epochs"] = 100
         else:
             raise ValueError(
-                "training must be end-to-end, seperate, warmup or backbone_only"
+                "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
             )
+        if pretrained_path is not None:
+            train_params["pretrained_path"] = pretrained_path
         if training == "backbone_only":
             train_params, model_params = suggest_hps_backbone_only(
+                trial, train_params, model_params
+            )
+        elif training == "einet_only":
+            train_params, model_params = suggest_hps_einet_only(
                 trial, train_params, model_params
             )
         else:
@@ -392,6 +434,7 @@ def tune_conv(dataset, loss, training, model):
 
 # AutoEncoder spaeter extra optimieren
 
+# Alter tuning-versuch
 # loss = ["discriminative", "generative", "hybrid_low", "hybrid_high", "hybrid", "hybrid_very_low"]
 # training = ["end-to-end", "seperate", "warmup"]
 # dataset = [
@@ -419,23 +462,102 @@ def tune_conv(dataset, loss, training, model):
 #                     tune_conv(d, l, t, m)
 
 # Erstes Tuning
+# dataset = [
+#     "two-moons",
+#     "mnist-calib",
+#     # "mnist-expl",
+#     "dirty-mnist",
+#     "cifar10-c",
+#     # "cifar10-c_expl",
+# ]
+# models = [
+#     "ConvResNetSPN",
+#     "ConvResNetDDU",
+#     # "AutoEncoderSPN",
+#     "EfficientNetSPN",
+# ]
+# for d in dataset:
+#     if d == "two-moons":
+#         tune_two_moons("discriminative", "backbone_only")
+#         continue
+#     for m in models:
+#         tune_conv(d, "discriminative", "backbone_only", m)
+
+# Zweites Tuning
+loss = [
+    "discriminative",
+    "generative",
+    "hybrid_low",
+    "hybrid_high",
+    "hybrid",
+    "hybrid_very_low",
+]
 dataset = [
     "two-moons",
     "mnist-calib",
-    # "mnist-expl",
+    "mnist-expl",
     "dirty-mnist",
     "cifar10-c",
-    # "cifar10-c_expl",
+    "cifar10-c_expl",
 ]
 models = [
     "ConvResNetSPN",
     "ConvResNetDDU",
-    # "AutoEncoderSPN",
     "EfficientNetSPN",
 ]
+pretrained_backbones = {
+    # acc: 1
+    "two-moons": "814351535813234998/48fe608aa28642968dfcaad0201a47e0/artifacts/model",
+    "mnist-calib": {
+        # val-acc: 0.9919
+        "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
+        # val-acc: 0.9953
+        "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
+        # val-acc: 0.9918
+        "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+    },
+    # same as calib
+    "mnist-expl": {
+        "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
+        "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
+        "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+    },
+    "dirty-mnist": {
+        # val-acc: 0.8954
+        "ConvResNetSPN": "958692786192727381/1cd3bd7d4f974190a078c7e3c3362cb0/artifacts/model",
+        # val-acc: 0.8973
+        "ConvResNetDDU": "958692786192727381/6b5c21c4f3da4506b85bb63cd9683e39/artifacts/model",
+        # val-acc: 0.8944
+        "EfficientNetSPN": "958692786192727381/54bb623d51ac41b0b4c19717c39b75d1/artifacts/model",
+    },
+    "cifar10-c": {
+        # val-acc: 0.8188
+        "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
+        # val-acc: 0.8850
+        "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
+        # val-acc: 0.8496
+        "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+    },
+    # same as calib
+    "cifar10-c_expl": {
+        "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
+        "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
+        "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+    },
+}
+
 for d in dataset:
-    if d == "two-moons":
-        tune_two_moons("discriminative", "backbone_only")
-        continue
-    for m in models:
-        tune_conv(d, "discriminative", "backbone_only", m)
+    for l in loss:
+        if d == "two-moons":
+            pretrained_path = pretrained_backbones[d]
+            pretrained_path = (
+                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            )
+            tune_two_moons(l, "einet_only", pretrained_path)
+            continue
+        for m in models:
+            pretrained_path = pretrained_backbones[d][m]
+            pretrained_path = (
+                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            )
+            tune_conv(d, l, "einet_only", m, pretrained_path)

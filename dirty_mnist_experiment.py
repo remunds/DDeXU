@@ -324,6 +324,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             fig.legend()
             fig.tight_layout()
             mlflow.log_figure(fig, filename)
+            plt.close()
 
         # Likelihood plot
         hist_plot(

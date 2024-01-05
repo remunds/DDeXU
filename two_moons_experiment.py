@@ -264,6 +264,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         plt.colorbar(pcm, ax=ax)
         plt.title("Dempster Shafer, SPN Model")
         mlflow.log_figure(fig, "dempster_shafer.png")
-
+        plt.close()
         # return train_acc
         return lowest_val_loss

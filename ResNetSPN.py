@@ -37,7 +37,16 @@ class EinetUtils:
         early_stop=5,
         checkpoint_dir=None,
         trial=None,
+        pretrained_path=None,
     ):
+        if pretrained_path is not None:
+            print(f"loading pretrained model from {pretrained_path}")
+            self.load(pretrained_path, backbone_only=True)
+            self.deactivate_einet()
+            val_acc = self.eval_acc(dl_valid, device)
+            print(f"pretrained model validation accuracy: {val_acc}")
+            mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
+
         self.train()
         self.deactivate_einet()
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
@@ -116,6 +125,7 @@ class EinetUtils:
         warmup_epochs_performed = epoch + 1
         # load best
         if checkpoint_dir and warmup_epochs_performed > 0:
+            print("loading best backbone checkpoint")
             self.load(checkpoint_dir + "checkpoint.pt")
 
         # train einet (and optionally resnet jointly)
@@ -211,11 +221,10 @@ class EinetUtils:
         torch.save(self.state_dict(), path)
 
     def load(self, path, backbone_only=False):
-        self.load_state_dict(torch.load(path))
+        state_dict = torch.load(path)
         if backbone_only:
-            # reinitialize einet
-            for param in self.einet.parameters():
-                torch.nn.init.normal_(param, mean=0.0, std=0.01)
+            state_dict = {k: v for k, v in state_dict.items() if "einet" not in k}
+        self.load_state_dict(state_dict, strict=False)
 
     def eval_acc(self, dl, device):
         self.eval()

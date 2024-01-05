@@ -374,6 +374,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 f"label: {test_ds_rot_s[0][1]}, rot: {test_ds_rot_s[0][0][0]}, cut: {test_ds_rot_s[0][0][1]}, noise: {test_ds_rot_s[0][0][2]}"
             )
             mlflow.log_figure(fig, f"rotation_{severity}.png")
+            plt.close()
 
             test_ds_cutoff_s = TensorDataset(
                 cut_ds[prev_s:s], test_ds.targets[prev_s:s]
@@ -389,6 +390,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 f"label: {test_ds_cutoff_s[0][1]}, rot: {test_ds_cutoff_s[0][0][0]}, cut: {test_ds_cutoff_s[0][0][1]}, noise: {test_ds_cutoff_s[0][0][2]}"
             )
             mlflow.log_figure(fig, f"cutoff_{severity}.png")
+            plt.close()
 
             acc = model.eval_acc(test_dl_cutoff, device)
             ll = model.eval_ll(test_dl_cutoff, device)
@@ -418,6 +420,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 f"label: {test_ds_noise_s[0][1]}, rot: {test_ds_noise_s[0][0][0]}, cut: {test_ds_noise_s[0][0][1]}, noise: {test_ds_noise_s[0][0][2]}"
             )
             mlflow.log_figure(fig, f"noise_{severity}.png")
+            plt.close()
 
             acc = model.eval_acc(test_dl_noise, device)
             ll = model.eval_ll(test_dl_noise, device)
@@ -457,7 +460,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         # create plot for each corruption
         # x axis: severity
         # y axis: acc, ll, var, entropy
-        import matplotlib.pyplot as plt
 
         for m in ["rotation", "cutoff", "noise"]:
             accs = [
@@ -503,5 +505,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{m}.png")
+            plt.close()
 
         return lowest_val_loss

@@ -428,6 +428,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{corruption}.png")
+            plt.close()
 
         # plot showing corruption levels on x-axis and expl-ll/mpe of
         # current corruption on y-axis
