@@ -22,7 +22,9 @@ class SpectralNormConv(object):
     #   added `v` as a buffer, and
     #   made eval mode use `W = u @ W_orig @ v` rather than the stored `W`.
 
-    def __init__(self, coeff, input_dim, name="weight", n_power_iterations=1, eps=1e-12):
+    def __init__(
+        self, coeff, input_dim, name="weight", n_power_iterations=1, eps=1e-12
+    ):
         self.coeff = coeff
         self.input_dim = input_dim
         self.name = name
@@ -90,17 +92,27 @@ class SpectralNormConv(object):
                     # Note: out flag for in-place changes
                     v = normalize(v_s.view(-1), dim=0, eps=self.eps, out=v)
 
-                    u_s = conv2d(v.view(self.input_dim), weight, stride=stride, padding=padding, bias=None,)
+                    u_s = conv2d(
+                        v.view(self.input_dim),
+                        weight,
+                        stride=stride,
+                        padding=padding,
+                        bias=None,
+                    )
                     u = normalize(u_s.view(-1), dim=0, eps=self.eps, out=u)
                 if self.n_power_iterations > 0:
                     # See above on why we need to clone
                     u = u.clone()
                     v = v.clone()
-        weight_v = conv2d(v.view(self.input_dim), weight, stride=stride, padding=padding, bias=None)
+        weight_v = conv2d(
+            v.view(self.input_dim), weight, stride=stride, padding=padding, bias=None
+        )
         weight_v = weight_v.view(-1)
         sigma = torch.dot(u.view(-1), weight_v)
         # enforce spectral norm only as constraint
-        factorReverse = torch.max(torch.ones(1, device=weight.device), sigma / self.coeff)
+        factorReverse = torch.max(
+            torch.ones(1, device=weight.device), sigma / self.coeff
+        )
 
         # rescaling
         weight = weight / (factorReverse + 1e-5)  # for stability
@@ -119,16 +131,23 @@ class SpectralNormConv(object):
         module.register_parameter(self.name, torch.nn.Parameter(weight.detach()))
 
     def __call__(self, module, inputs):
-        assert inputs[0].shape[1:] == self.input_dim[1:], "Input dims don't match actual input"
+        assert (
+            inputs[0].shape[1:] == self.input_dim[1:]
+        ), "Input dims don't match actual input"
         setattr(
-            module, self.name, self.compute_weight(module, do_power_iteration=module.training),
+            module,
+            self.name,
+            self.compute_weight(module, do_power_iteration=module.training),
         )
 
     @staticmethod
     def apply(module, coeff, input_dim, name, n_power_iterations, eps):
         for k, hook in module._forward_pre_hooks.items():
             if isinstance(hook, SpectralNormConv) and hook.name == name:
-                raise RuntimeError("Cannot register two spectral_norm hooks on " "the same parameter {}".format(name))
+                raise RuntimeError(
+                    "Cannot register two spectral_norm hooks on "
+                    "the same parameter {}".format(name)
+                )
 
         fn = SpectralNormConv(coeff, input_dim, name, n_power_iterations, eps)
         weight = module._parameters[name]
@@ -141,9 +160,13 @@ class SpectralNormConv(object):
             stride = module.stride
             padding = module.padding
             # forward call to infer the shape
-            u = conv2d(v.view(input_dim), weight, stride=stride, padding=padding, bias=None)
+            u = conv2d(
+                v.view(input_dim), weight, stride=stride, padding=padding, bias=None
+            )
             fn.out_shape = u.shape
-            num_output_dim = fn.out_shape[0] * fn.out_shape[1] * fn.out_shape[2] * fn.out_shape[3]
+            num_output_dim = (
+                fn.out_shape[0] * fn.out_shape[1] * fn.out_shape[2] * fn.out_shape[3]
+            )
             # overwrite u with random init
             u = normalize(torch.randn(num_output_dim), dim=0, eps=fn.eps)
 
@@ -157,7 +180,9 @@ class SpectralNormConv(object):
         module.register_forward_pre_hook(fn)
 
         module._register_state_dict_hook(SpectralNormConvStateDictHook(fn))
-        module._register_load_state_dict_pre_hook(SpectralNormConvLoadStateDictPreHook(fn))
+        module._register_load_state_dict_pre_hook(
+            SpectralNormConvLoadStateDictPreHook(fn)
+        )
         return fn
 
 
@@ -175,17 +200,29 @@ class SpectralNormConvLoadStateDictPreHook(object):
     # To compute `v`, we solve `W_orig @ x = u`, and let
     #    v = x / (u @ W_orig @ x) * (W / W_orig).
     def __call__(
-        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs,
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
     ):
         fn = self.fn
-        version = local_metadata.get("spectral_norm_conv", {}).get(fn.name + ".version", None)
+        version = local_metadata.get("spectral_norm_conv", {}).get(
+            fn.name + ".version", None
+        )
         if version is None or version < 1:
-            with torch.no_grad():
-                weight_orig = state_dict[prefix + fn.name + "_orig"]
-                weight = state_dict.pop(prefix + fn.name)
-                sigma = (weight_orig / weight).mean()
-                weight_mat = fn.reshape_weight_to_matrix(weight_orig)
-                u = state_dict[prefix + fn.name + "_u"]
+            # TODO: Added by me for enabling loading... not sure if that changes something...
+            # The attriutes were not accessed after setting them anyway
+            pass
+            # with torch.no_grad():
+            #     weight_orig = state_dict[prefix + fn.name + "_orig"]
+            #     weight = state_dict.pop(prefix + fn.name)
+            #     sigma = (weight_orig / weight).mean()
+            #     weight_mat = fn.reshape_weight_to_matrix(weight_orig)
+            #     u = state_dict[prefix + fn.name + "_u"]
 
 
 class SpectralNormConvStateDictHook(object):
@@ -198,11 +235,15 @@ class SpectralNormConvStateDictHook(object):
             local_metadata["spectral_norm_conv"] = {}
         key = self.fn.name + ".version"
         if key in local_metadata["spectral_norm_conv"]:
-            raise RuntimeError("Unexpected key in metadata['spectral_norm_conv']: {}".format(key))
+            raise RuntimeError(
+                "Unexpected key in metadata['spectral_norm_conv']: {}".format(key)
+            )
         local_metadata["spectral_norm_conv"][key] = self.fn._version
 
 
-def spectral_norm_conv(module, coeff, input_dim, n_power_iterations, name="weight", eps=1e-12):
+def spectral_norm_conv(
+    module, coeff, input_dim, n_power_iterations, name="weight", eps=1e-12
+):
     r"""Applies spectral normalization to a parameter in the given module.
     .. math::
          \mathbf{W} = \dfrac{\mathbf{W}}{\sigma(\mathbf{W})} \\
