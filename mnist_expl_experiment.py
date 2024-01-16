@@ -136,6 +136,113 @@ def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
     return manip_ds
 
 
+def manipulate_single_image(img, cutoff, rotation, noise):
+    img_noise = torch.randn((28, 28, 1)) * noise * 10
+    img_noise = torch.clamp(img.clone() + img_noise, 0, 255).to(dtype=torch.uint8)
+
+    cutoff = int(2 if cutoff == 1 else cutoff**2)
+    img_cutoff = img_noise
+    img_cutoff[:cutoff, ...] = 0
+
+    img_rot = transforms.ToTensor()(img_cutoff.numpy())
+    image_rot = transforms.functional.rotate(img=image_rot, angle=int(rotation * 20))
+    final_image: torch.Tensor = transforms.Normalize((0.1307,), (0.3081,))(image_rot)
+    return final_image
+
+
+def mnist_expl_manual_evaluation(model_params, path, device):
+    # load model
+    model_name = model_params["model"]
+    if model_name == "ConvResNetSPN":
+        from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
+
+        if model_params["block"] == "basic":
+            block = ResidualBlockSN
+        elif model_params["block"] == "bottleneck":
+            block = BottleNeckSN
+        else:
+            raise NotImplementedError
+
+        del model_params["block"]
+        layers = model_params["layers"]
+        del model_params["layers"]
+        del model_params["spectral_normalization"]
+        del model_params["mod"]
+
+        model = ConvResNetSPN(
+            block,
+            layers,
+            **model_params,
+        )
+    elif model_name == "ConvResNetDDU":
+        from ResNetSPN import ConvResnetDDU
+        from net.resnet import BasicBlock, Bottleneck
+
+        if model_params["block"] == "basic":
+            block = BasicBlock
+        elif model_params["block"] == "bottleneck":
+            block = Bottleneck
+        else:
+            raise NotImplementedError
+
+        del model_params["block"]
+        layers = model_params["layers"]
+        del model_params["layers"]
+        del model_params["spec_norm_bound"]
+        model = ConvResnetDDU(
+            block,
+            layers,
+            **model_params,
+        )
+    elif model_name == "AutoEncoderSPN":
+        from ResNetSPN import AutoEncoderSPN
+
+        model = AutoEncoderSPN(
+            **model_params,
+        )
+    elif model_name == "EfficientNetSPN":
+        from ResNetSPN import EfficientNetSPN
+
+        model = EfficientNetSPN(
+            **model_params,
+        )
+    else:
+        raise NotImplementedError
+
+    model.load(path)
+    model.to(device)
+
+    # get first image of test-set
+    _, test_ds, _ = get_datasets()
+    img = test_ds.data[0]
+
+    # perform some manipulations:
+    # 1. only rotate with severity 4
+    img1 = manipulate_single_image(img, cutoff=0, rotation=4, noise=0)
+    # 2. rotate with severity 4 and cutoff with severity 2
+    img2 = manipulate_single_image(img, cutoff=2, rotation=4, noise=0)
+    # 3. rotate with severity 3 and cutoff with severity 3
+    img3 = manipulate_single_image(img, cutoff=3, rotation=3, noise=0)
+    # 4. rotate with severity 4 and cutoff with severity 2 and noise with severity 2
+    img4 = manipulate_single_image(img, cutoff=2, rotation=4, noise=2)
+
+    # create dataloader
+    target = test_ds.targets[0]
+    dl = DataLoader(
+        TensorDataset(
+            torch.stack([img1, img2, img3, img4]),
+            torch.tensor([target, target, target, target]),
+        ),
+        batch_size=1,
+    )
+    # get LL and explanations of all images
+    ll = model.eval_ll(dl, device)
+    expl_ll = model.explain_ll(dl, device)
+    # Should get back a tensor of shape (3, 4) or (4,3) unsure
+    # with the explanations for each image
+    # TODO: plot images and explanations
+
+
 def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

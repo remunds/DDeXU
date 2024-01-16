@@ -317,22 +317,31 @@ class EinetUtils:
             return uncertainties
         return torch.mean(uncertainties).item()
 
-    def explain_ll(self, dl, device):
+    def explain_ll(self, dl, device, return_all=False):
         """
         Check each explaining variable individually.
         Returns the difference in log likelihood between the default model and the marginalized model.
         If largely positive, the variable explains the result.
         """
-        ll_default = self.eval_ll(dl, device)
+        ll_default = self.eval_ll(dl, device, return_all)
         explanations = []
         for i in self.explaining_vars:
             self.marginalized_scopes = [i]
-            ll_marg = self.eval_ll(dl, device)
+            ll_marg = self.eval_ll(dl, device, return_all)
             explanations.append((ll_marg - ll_default))
         self.marginalized_scopes = None
-        return explanations
+        # return explanations
+        return torch.stack(explanations, dim=1)
 
     def explain_mpe(self, dl, device):
+        # Aktuelle idee (benoetigt gegebene expl. var. daten):
+        # Vergleiche MPE der expl. vars mit evidence
+        # mit den tatsaechlich gegebenen Daten
+        # Aussage von starken Unterschieden: "Anders als durch bisherige Distr. erwartet"
+        # Weitere Idee (benoetigt keine gegebenen expl. var. daten):
+        # Vergleiche MPE der expl. vars mit evidence
+        # mit dem MPE der expl. vars ohne evidence
+        # -> wenn hoeher: starker unterschied zu Distribution
         expl_var_vals = []
         expl_var_mpes = []
         for data, _ in dl:
@@ -364,6 +373,15 @@ class EinetUtils:
         expl_var_vals = torch.cat(expl_var_vals, dim=0)
         expl_var_mpes = torch.cat(expl_var_mpes, dim=0)
         return torch.abs(expl_var_mpes - expl_var_vals).mean(dim=0).cpu().numpy()
+
+    def plot_feature_importance(images):
+        # get LL and MPE explanations for all images and all expl. variables
+        # create bar-plot: x-axis: explainaing vars, y-axis: explanation strength
+        # Problem: probably need a way to normalize these values
+        #    |          |
+        #    |     |    |
+        # cutoff  rot  noise
+        raise NotImplementedError()
 
 
 class DenseResnet(nn.Module):

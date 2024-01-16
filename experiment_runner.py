@@ -44,13 +44,6 @@ mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 # )
 
 
-# TODO: in the long run, it would be nice to optimize all HP's for accuracy and ECE
-# Manually select the following setups:
-# - fully discriminative, fully generative, hybrid loss
-# - for end-to-end, seperate and warmup training
-# this is already many different runs for each dataset
-# Then, tune following hyperparameters for each of these runs:
-# einet_depth (3 and 5), einet_num_repetitions, lr, lr_warmup, schedule_step_size, schedule_gamma
 def suggest_hps(trial, train_params, model_params):
     einet_depth = trial.suggest_categorical("einet_depth", [3, 5])
     einet_rep = trial.suggest_categorical("einet_rep", [1, 3])
@@ -483,21 +476,102 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
 #     for m in models:
 #         tune_conv(d, "discriminative", "backbone_only", m)
 
+
+def run_cifar_expl(dataset, model, loss, pretrained_path):
+    mlflow.set_experiment(dataset)
+    model_params = dict(
+        model=model,
+        block="basic",  # basic, bottleneck
+        layers=[2, 2, 2, 2],
+        num_classes=10,
+        image_shape=(3, 32, 32),
+        einet_depth=5,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=5,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
+        spec_norm_bound=0.9,  # only for ConvResNetSPN
+        spectral_normalization=True,  # only for ConvResNetDDU
+        mod=True,  # only for ConvResNetDDU
+    )
+    if model == "ConvResNetSPN":
+        lr = 0.002
+    elif model == "ConvResNetDDU":
+        lr = 0.02
+    elif model == "EfficientNetSPN":
+        lr = 0.015
+    else:
+        raise ValueError(
+            "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
+        )
+
+    if loss == "discriminative":
+        lambda_v = 1.0
+    elif loss == "generative":
+        lambda_v = 0.0
+    elif loss == "hybrid":
+        lambda_v = 0.5
+    elif loss == "hybrid_low":
+        lambda_v = 0.1
+    elif loss == "hybrid_very_low":
+        lambda_v = 0.01
+    elif loss == "hybrid_high":
+        lambda_v = 0.9
+    else:
+        raise ValueError(
+            "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
+        )
+    train_params = dict(
+        pretrained_path=pretrained_path,
+        learning_rate_warmup=0.05,  # irrelevant
+        learning_rate=lr,  # depends on model
+        lambda_v=lambda_v,  # depends on loss
+        warmup_epochs=0,
+        num_epochs=100,
+        deactivate_backbone=True,
+        early_stop=10,
+    )
+    batch_sizes = dict(resnet=512)
+    model_params["explaining_vars"] = list(range(19))
+    train_params["corruption_levels_train"] = [0, 1]
+    training = "einet_only"
+    run_name = f"{loss}_{training}_{model}_manual"
+    try:
+        val_loss_2 = start_cifar10_expl_run(
+            run_name,
+            batch_sizes.copy(),
+            model_params.copy(),
+            train_params.copy(),
+            trial=None,
+        )
+        train_params["corruption_levels_train"] = [0, 1, 2, 3]
+        val_loss_4 = start_cifar10_expl_run(
+            run_name, batch_sizes, model_params, train_params, trial=None
+        )
+        return (val_loss_2 + val_loss_4) / 2
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
+        mlflow.set_tag("pruned", e)
+        mlflow.end_run()
+
+
 # Zweites Tuning
 loss = [
-    "discriminative",
-    "generative",
     "hybrid_low",
     "hybrid_high",
     "hybrid",
     "hybrid_very_low",
+    "discriminative",
+    "generative",
 ]
 dataset = [
-    "two-moons",
-    "mnist-calib",
-    "mnist-expl",
-    "dirty-mnist",
-    "cifar10-c",
+    # "two-moons",
+    # "mnist-calib",
+    # "mnist-expl",
+    # "dirty-mnist",
+    # "cifar10-c",
     "cifar10-c_expl",
 ]
 models = [
@@ -560,4 +634,5 @@ for d in dataset:
             pretrained_path = (
                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             )
-            tune_conv(d, l, "einet_only", m, pretrained_path)
+            # tune_conv(d, l, "einet_only", m, pretrained_path)
+            run_cifar_expl(d, m, l, pretrained_path)
