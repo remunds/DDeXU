@@ -4,7 +4,7 @@ import mlflow
 import optuna
 from two_moons_experiment import start_two_moons_run
 from mnist_calib_experiment import start_mnist_calib_run
-from mnist_expl_experiment import start_mnist_expl_run
+from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
 from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
@@ -12,36 +12,6 @@ from cifar10_calib_experiment import start_cifar10_calib_run
 torch.manual_seed(0)
 # Set our tracking server uri for logging
 mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
-
-# model_params_conv = dict(
-#     model="ConvResNetSPN",  # ConvResNetSPN, ConvResNetDDU
-#     block="basic",  # basic, bottleneck
-#     layers=[2, 2, 2, 2],
-#     num_classes=10,
-#     image_shape=(1, 28, 28),
-#     einet_depth=3,
-#     einet_num_sums=20,
-#     einet_num_leaves=20,
-#     einet_num_repetitions=1,
-#     einet_leaf_type="Normal",
-#     einet_dropout=0.0,
-#     spec_norm_bound=0.9,  # only for ConvResNetSPN
-#     spectral_normalization=True,  # only for ConvResNetDDU
-#     mod=True,  # only for ConvResNetDDU
-# )
-# train_params = dict(
-#     learning_rate_warmup=0.05,
-#     learning_rate=0.05,
-#     lambda_v=0.995,
-#     warmup_epochs=100,
-#     num_epochs=100,
-#     deactivate_backbone=True,
-#     lr_schedule_warmup_step_size=10,
-#     lr_schedule_warmup_gamma=0.5,
-#     lr_schedule_step_size=10,
-#     lr_schedule_gamma=0.5,
-#     early_stop=10,
-# )
 
 
 def suggest_hps(trial, train_params, model_params):
@@ -557,6 +527,88 @@ def run_cifar_expl(dataset, model, loss, pretrained_path):
         mlflow.end_run()
 
 
+def run_mnist_expl(dataset, model, loss, pretrained_path):
+    mlflow.set_experiment(dataset)
+    model_params = dict(
+        model=model,
+        block="basic",  # basic, bottleneck
+        layers=[2, 2, 2, 2],
+        num_classes=10,
+        image_shape=(1, 28, 28),
+        einet_depth=5,
+        einet_num_sums=20,
+        einet_num_leaves=20,
+        einet_num_repetitions=5,
+        einet_leaf_type="Normal",
+        einet_dropout=0.0,
+        spec_norm_bound=0.9,  # only for ConvResNetSPN
+        spectral_normalization=True,  # only for ConvResNetDDU
+        mod=True,  # only for ConvResNetDDU
+    )
+    if model == "ConvResNetSPN":
+        lr = 0.002
+    elif model == "ConvResNetDDU":
+        lr = 0.02
+    elif model == "EfficientNetSPN":
+        lr = 0.015
+    else:
+        raise ValueError(
+            "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
+        )
+
+    if loss == "discriminative":
+        lambda_v = 1.0
+    elif loss == "generative":
+        lambda_v = 0.0
+    elif loss == "hybrid":
+        lambda_v = 0.5
+    elif loss == "hybrid_low":
+        lambda_v = 0.1
+    elif loss == "hybrid_very_low":
+        lambda_v = 0.01
+    elif loss == "hybrid_high":
+        lambda_v = 0.9
+    else:
+        raise ValueError(
+            "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
+        )
+    train_params = dict(
+        pretrained_path=pretrained_path,
+        learning_rate_warmup=0.05,  # irrelevant
+        learning_rate=lr,  # depends on model
+        lambda_v=lambda_v,  # depends on loss
+        warmup_epochs=0,
+        # num_epochs=100,
+        num_epochs=1,
+        deactivate_backbone=True,
+        early_stop=5,
+    )
+    batch_sizes = dict(resnet=512)
+    model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
+    train_params["highest_severity_train"] = 2
+    training = "einet_only"
+    run_name = f"{loss}_{training}_{model}_manual"
+    try:
+        val_loss_2 = start_mnist_expl_run(
+            run_name,
+            batch_sizes.copy(),
+            model_params.copy(),
+            train_params.copy(),
+            trial=None,
+        )
+        # train_params["highest_severity_train"] = 4
+        # val_loss_4 = start_mnist_expl_run(
+        #     run_name, batch_sizes, model_params, train_params, trial=None
+        # )
+        # return (val_loss_2 + val_loss_4) / 2
+        return val_loss_2
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
+        mlflow.set_tag("pruned", e)
+        mlflow.end_run()
+
+
 # Zweites Tuning
 loss = [
     "hybrid_low",
@@ -567,11 +619,11 @@ loss = [
     "generative",
 ]
 dataset = [
-    # "two-moons",
-    # "mnist-calib",
-    # "mnist-expl",
-    # "dirty-mnist",
-    # "cifar10-c",
+    "two-moons",
+    "mnist-calib",
+    "mnist-expl",
+    "dirty-mnist",
+    "cifar10-c",
     "cifar10-c_expl",
 ]
 models = [
@@ -620,19 +672,71 @@ pretrained_backbones = {
     },
 }
 
-for d in dataset:
-    for l in loss:
-        if d == "two-moons":
-            pretrained_path = pretrained_backbones[d]
-            pretrained_path = (
-                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            )
-            tune_two_moons(l, "einet_only", pretrained_path)
-            continue
-        for m in models:
-            pretrained_path = pretrained_backbones[d][m]
-            pretrained_path = (
-                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            )
-            # tune_conv(d, l, "einet_only", m, pretrained_path)
-            run_cifar_expl(d, m, l, pretrained_path)
+# for d in dataset:
+#     for l in loss:
+#         if d == "two-moons":
+#             pretrained_path = pretrained_backbones[d]
+#             pretrained_path = (
+#                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+#             )
+#             tune_two_moons(l, "einet_only", pretrained_path)
+#             continue
+#         for m in models:
+#             pretrained_path = pretrained_backbones[d][m]
+#             pretrained_path = (
+#                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+#             )
+#             # tune_conv(d, l, "einet_only", m, pretrained_path)
+#             run_cifar_expl(d, m, l, pretrained_path)
+
+trained_models = {
+    "mnist-calib": {
+        # "EfficientNetSPN": "987712940205555914/b5320090ae7d4dd7a971f29207ac8097/artifacts/model",
+        "EfficientNetSPN": "764598691207333922/049c027b5cec490e8c4ace0e334617ab/artifacts/model"
+    },
+    "mnist-expl": {
+        # "EfficientNetSPN": "764598691207333922/02852d15bd2446f5bfc021b5043f2a29/artifacts/model",
+        "EfficientNetSPN": "764598691207333922/9e133cfbafbd4df2acac15464349f1ec/artifacts/model"
+    },
+}
+
+path = (
+    "/data_docker/mlartifacts/"
+    + trained_models["mnist-expl"]["EfficientNetSPN"]
+    + "/state_dict.pth"
+)
+
+model_params = dict(
+    model="EfficientNetSPN",  # ConvResNetSPN, ConvResNetDDU
+    num_classes=10,
+    image_shape=(1, 28, 28),
+    explaining_vars=[0, 1, 2],
+    einet_depth=5,
+    einet_num_sums=20,
+    einet_num_leaves=20,
+    einet_num_repetitions=5,
+    einet_leaf_type="Normal",
+    einet_dropout=0.0,
+)
+# train_params = dict(
+#     learning_rate_warmup=-1.05,
+#     learning_rate=-1.05,
+#     lambda_v=-1.995,
+#     warmup_epochs=99,
+#     num_epochs=99,
+#     deactivate_backbone=True,
+#     lr_schedule_warmup_step_size=9,
+#     lr_schedule_warmup_gamma=-1.5,
+#     lr_schedule_step_size=9,
+#     lr_schedule_gamma=-1.5,
+#     early_stop=9,
+# )
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# mnist_expl_manual_evaluation(model_params, path, device)
+
+path = (
+    "/data_docker/mlartifacts/"
+    + pretrained_backbones["mnist-expl"]["EfficientNetSPN"]
+    + "/state_dict.pth"
+)
+run_mnist_expl("mnist-expl-new", "EfficientNetSPN", "hybrid_very_low", path)

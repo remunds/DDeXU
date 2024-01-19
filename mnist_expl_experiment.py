@@ -1,8 +1,11 @@
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
+import numpy as np
 import os
 import mlflow
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 
 def get_datasets():
@@ -83,10 +86,15 @@ def get_manipulations(ds, highest_severity=None):
     # 0: 10, 1: 20, 2: 30, 3: 40, 4: 50 noise
     for i, r in enumerate(noises):
         noises[i] = get_severity(ds, i)
-    return rotations, cutoffs, noises
+    return (
+        rotations.to(dtype=torch.int),
+        cutoffs.to(dtype=torch.int),
+        noises.to(dtype=torch.int),
+    )
 
 
 def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
+    # first rotate, then cutoff, then add noise
     if seperated:
         rot_ds = torch.zeros(len(data), 28 * 28)
         cut_ds = torch.zeros(len(data), 28 * 28)
@@ -96,151 +104,193 @@ def manipulate_data(data, rotations, cutoffs, noises, seperated=False):
     for i, img in enumerate(data):
         image = img.reshape(28, 28, 1)
 
-        this_noise = torch.randn((28, 28, 1)) * noises[i] * 10
-        img_noise = torch.clamp(image.clone() + this_noise, 0, 255).to(
-            dtype=torch.uint8
-        )
-        if seperated:
-            img_noise_done = transforms.ToTensor()(img_noise.numpy())
-            noise_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
-                img_noise_done
-            ).flatten()
-            image_cutoff = image.clone()
-        else:
-            image_cutoff = img_noise
-
-        # cutoff rows
-        cutoff = int(2 if cutoffs[i] == 1 else cutoffs[i] ** 2)
-        image_cutoff[:cutoff, ...] = 0
-        if seperated:
-            image_cutoff_done = transforms.ToTensor()(image_cutoff.numpy())
-            cut_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
-                image_cutoff_done
-            ).flatten()
-            image_rot = image.clone()
-        else:
-            image_rot = image_cutoff
-
-        image_rot = transforms.ToTensor()(image_rot.numpy())
+        image_transformed = transforms.ToTensor()(image.numpy())
         image_rot = transforms.functional.rotate(
-            img=image_rot, angle=int(rotations[i] * 20)  # , fill=-mean / std
+            img=image_transformed, angle=int(rotations[i] * 20)  # , fill=-mean / std
         )
         if seperated:
             rot_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(image_rot).flatten()
+            image_cutoff = image_transformed.clone()
+        else:
+            image_cutoff = image_rot
+
+        # cutoff rows
+        cutoff = cutoffs[i] * 5
+        image_cutoff[:, :cutoff, :] = 0
+        if seperated:
+            cut_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
+                image_cutoff
+            ).flatten()
+            image_noise = image_transformed.clone()
+        else:
+            image_noise = image_cutoff
+
+        # scale image back to 0-255
+        image_noise = image_noise * 255
+        image_noise = image_noise.to(dtype=torch.uint8)
+        this_noise = torch.randn((1, 28, 28)) * noises[i] * 10
+        img_noise = torch.clamp(image_noise + this_noise, 0, 255)
+        # scale back to 0-1
+        img_noise = img_noise / 255
+
+        if seperated:
+            noise_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
+                img_noise
+            ).flatten()
         else:
             manip_ds[i] = transforms.Normalize((0.1307,), (0.3081,))(
-                image_rot
+                img_noise
             ).flatten()
     if seperated:
         return rot_ds, cut_ds, noise_ds
     return manip_ds
 
 
-def manipulate_single_image(img, cutoff, rotation, noise):
-    img_noise = torch.randn((28, 28, 1)) * noise * 10
-    img_noise = torch.clamp(img.clone() + img_noise, 0, 255).to(dtype=torch.uint8)
+def manipulate_single_image(img, manipulation):
+    rotation = manipulation[0]
+    cutoff = manipulation[1]
+    noise = manipulation[2]
+    # first rotate, then cutoff, then add noise
+    img_rot = transforms.ToTensor()(img.numpy())
+    img_rot = transforms.functional.rotate(img=img_rot, angle=int(rotation * 20))
+    img_cutoff = img_rot
+    cutoff = cutoff * 5
+    img_cutoff[:, :cutoff, :] = 0
 
-    cutoff = int(2 if cutoff == 1 else cutoff**2)
-    img_cutoff = img_noise
-    img_cutoff[:cutoff, ...] = 0
+    img_noise = img_cutoff * 255
+    img_noise = img_noise.to(dtype=torch.uint8)
+    this_noise = torch.randn((1, 28, 28)) * noise * 5
+    img_noise = torch.clamp(img_noise + this_noise, 0, 255).to(dtype=torch.uint8)
+    img_noise = img_noise / 255
 
-    img_rot = transforms.ToTensor()(img_cutoff.numpy())
-    image_rot = transforms.functional.rotate(img=image_rot, angle=int(rotation * 20))
-    final_image: torch.Tensor = transforms.Normalize((0.1307,), (0.3081,))(image_rot)
+    final_image: torch.Tensor = transforms.Normalize((0.1307,), (0.3081,))(img_noise)
     return final_image
 
 
 def mnist_expl_manual_evaluation(model_params, path, device):
-    # load model
-    model_name = model_params["model"]
-    if model_name == "ConvResNetSPN":
-        from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
+    run_name = f"mnist_expl_manual_evaluation_{model_params['model']}"
+    print("starting run: ", run_name)
+    with mlflow.start_run(run_name=run_name):
+        # load model
+        model_name = model_params["model"]
+        if model_name == "ConvResNetSPN":
+            from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
 
-        if model_params["block"] == "basic":
-            block = ResidualBlockSN
-        elif model_params["block"] == "bottleneck":
-            block = BottleNeckSN
+            if model_params["block"] == "basic":
+                block = ResidualBlockSN
+            elif model_params["block"] == "bottleneck":
+                block = BottleNeckSN
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spectral_normalization"]
+            del model_params["mod"]
+
+            model = ConvResNetSPN(
+                block,
+                layers,
+                **model_params,
+            )
+        elif model_name == "ConvResNetDDU":
+            from ResNetSPN import ConvResnetDDU
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            model = ConvResnetDDU(
+                block,
+                layers,
+                **model_params,
+            )
+        elif model_name == "AutoEncoderSPN":
+            from ResNetSPN import AutoEncoderSPN
+
+            model = AutoEncoderSPN(
+                **model_params,
+            )
+        elif model_name == "EfficientNetSPN":
+            from ResNetSPN import EfficientNetSPN
+
+            model = EfficientNetSPN(
+                **model_params,
+            )
         else:
             raise NotImplementedError
 
-        del model_params["block"]
-        layers = model_params["layers"]
-        del model_params["layers"]
-        del model_params["spectral_normalization"]
-        del model_params["mod"]
+        model.load(path)
+        model.activate_einet()
+        model.to(device)
 
-        model = ConvResNetSPN(
-            block,
-            layers,
-            **model_params,
+        # get first image of test-set
+        _, test_ds, _ = get_datasets()
+        img = test_ds.data[0]
+
+        # perform some manipulations:
+        # 1. only rotate with severity 4
+        expl1 = torch.tensor([0, 4, 0])
+        img1 = manipulate_single_image(img, expl1)
+        img1 = torch.concatenate([expl1, img1.flatten()])
+
+        expl2 = torch.tensor([0, 0, 4])
+        img2 = manipulate_single_image(img, expl2)
+        img2 = torch.concatenate([expl2, img2.flatten()])
+
+        expl3 = torch.tensor([0, 4, 4])
+        img3 = manipulate_single_image(img, expl3)
+        img3 = torch.concatenate([expl3, img3.flatten()])
+
+        expl4 = torch.tensor([4, 0, 0])
+        img4 = manipulate_single_image(img, expl4)
+        img4 = torch.concatenate([expl4, img4.flatten()])
+        imgs = torch.stack([img1, img2, img3, img4])
+
+        # stupid test
+        # img4_1 = torch.concatenate([expl1, img4.flatten()])
+        # img4_2 = torch.concatenate([expl2, img4.flatten()])
+        # img4_3 = torch.concatenate([expl3, img4.flatten()])
+        # imgs = torch.stack([img4_1, img4_2, img4_3, img4_4])
+
+        # create dataloader
+        target = test_ds.targets[0]
+        dl = DataLoader(
+            TensorDataset(
+                imgs,
+                torch.tensor([target, target, target, target]),
+            ),
+            batch_size=1,
         )
-    elif model_name == "ConvResNetDDU":
-        from ResNetSPN import ConvResnetDDU
-        from net.resnet import BasicBlock, Bottleneck
+        # get LL and explanations of all images
+        ll = model.eval_ll(dl, device, True)
+        print("lls: ", ll)
+        # expl_ll = model.explain_ll(dl, device, True)
+        expl_ll = model.explain_ll(dl, device, True)
+        print("expl_lls: ", expl_ll)
+        var_vals, mpe_vals = model.explain_mpe(dl, device, True)
+        print("var: ", var_vals)
+        print("mpe: ", mpe_vals)
 
-        if model_params["block"] == "basic":
-            block = BasicBlock
-        elif model_params["block"] == "bottleneck":
-            block = Bottleneck
-        else:
-            raise NotImplementedError
-
-        del model_params["block"]
-        layers = model_params["layers"]
-        del model_params["layers"]
-        del model_params["spec_norm_bound"]
-        model = ConvResnetDDU(
-            block,
-            layers,
-            **model_params,
-        )
-    elif model_name == "AutoEncoderSPN":
-        from ResNetSPN import AutoEncoderSPN
-
-        model = AutoEncoderSPN(
-            **model_params,
-        )
-    elif model_name == "EfficientNetSPN":
-        from ResNetSPN import EfficientNetSPN
-
-        model = EfficientNetSPN(
-            **model_params,
-        )
-    else:
-        raise NotImplementedError
-
-    model.load(path)
-    model.to(device)
-
-    # get first image of test-set
-    _, test_ds, _ = get_datasets()
-    img = test_ds.data[0]
-
-    # perform some manipulations:
-    # 1. only rotate with severity 4
-    img1 = manipulate_single_image(img, cutoff=0, rotation=4, noise=0)
-    # 2. rotate with severity 4 and cutoff with severity 2
-    img2 = manipulate_single_image(img, cutoff=2, rotation=4, noise=0)
-    # 3. rotate with severity 3 and cutoff with severity 3
-    img3 = manipulate_single_image(img, cutoff=3, rotation=3, noise=0)
-    # 4. rotate with severity 4 and cutoff with severity 2 and noise with severity 2
-    img4 = manipulate_single_image(img, cutoff=2, rotation=4, noise=2)
-
-    # create dataloader
-    target = test_ds.targets[0]
-    dl = DataLoader(
-        TensorDataset(
-            torch.stack([img1, img2, img3, img4]),
-            torch.tensor([target, target, target, target]),
-        ),
-        batch_size=1,
-    )
-    # get LL and explanations of all images
-    ll = model.eval_ll(dl, device)
-    expl_ll = model.explain_ll(dl, device)
-    # Should get back a tensor of shape (3, 4) or (4,3) unsure
-    # with the explanations for each image
-    # TODO: plot images and explanations
+        for i, img in enumerate(imgs):
+            img = img[3:]
+            # plot image, title contains explanations
+            fig, ax = plt.subplots()
+            ax.imshow(img.reshape(28, 28), cmap="gray")
+            ax.set_title(
+                f"rot: {expl_ll[i][0]}, cut: {expl_ll[i][1]}, noise: {expl_ll[i][2]}"
+            )
+            mlflow.log_figure(fig, f"img_{i}.png")
+            plt.close()
 
 
 def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, trial):
@@ -312,8 +362,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         )
 
         # plot first 5 images
-        import matplotlib.pyplot as plt
-
         for i in range(5):
             fig, ax = plt.subplots()
             ax.imshow(train_ds[i][0][3:].reshape(28, 28), cmap="gray")
@@ -441,8 +489,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             dim=1,
         )
 
-        from tqdm import tqdm
-
         # calibration test
         eval_dict = {}
         severity_levels = 5
@@ -470,7 +516,8 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             eval_dict["rotation"][severity] = {
                 "acc": acc,
                 "ll": ll,
-                "expl_ll": expl_ll[0],
+                # "expl_ll": expl_ll[0],
+                "expl_ll": expl_ll,
                 "expl_mpe": expl_mpe[0].item(),
             }
             # plot first image
@@ -508,7 +555,8 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             eval_dict["cutoff"][severity] = {
                 "acc": acc,
                 "ll": ll,
-                "expl_ll": expl_ll[1],
+                # "expl_ll": expl_ll[1],
+                "expl_ll": expl_ll,
                 "expl_mpe": expl_mpe[1].item(),
             }
 
@@ -538,14 +586,13 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             eval_dict["noise"][severity] = {
                 "acc": acc,
                 "ll": ll,
-                "expl_ll": expl_ll[2],
+                # "expl_ll": expl_ll[2],
+                "expl_ll": expl_ll,
                 "expl_mpe": expl_mpe[2].item(),
             }
             prev_s = s
 
         mlflow.log_dict(eval_dict, "eval_dict")
-
-        import numpy as np
 
         overall_acc = np.mean(
             [
@@ -567,6 +614,9 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         # create plot for each corruption
         # x axis: severity
         # y axis: acc, ll, var, entropy
+
+        # TODO: add all ll-expl curves of all variables
+        # this shows that only one explanation makes sense here!
 
         for m in ["rotation", "cutoff", "noise"]:
             accs = [
@@ -600,7 +650,11 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             # ax2.set_ylim([0, 1])
 
             ax3 = ax.twinx()
-            ax3.plot(ll_expl, label="ll expl", color="green")
+            # TODO: cannot access these elements since its a list of list not tensor :(
+            ll_expl = torch.tensor(ll_expl)
+            ax3.plot(ll_expl[:, 0], label="ll expl rot", color="darkgreen")
+            ax3.plot(ll_expl[:, 1], label="ll expl cut", color="mediumseagreen")
+            ax3.plot(ll_expl[:, 2], label="ll expl noise", color="lime")
             # ax3.set_ylabel("predictive variance", color="green")
             ax3.tick_params(axis="y", labelcolor="green")
 

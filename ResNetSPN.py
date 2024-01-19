@@ -9,7 +9,9 @@ import torch.nn as nn
 from spectral_normalization import spectral_norm
 from simple_einet.einet import EinetConfig, Einet
 
-from simple_einet.layers.distributions.normal import Normal
+from simple_einet.layers.distributions.normal import Normal, RatNormal
+from simple_einet.layers.distributions.categorical import Categorical
+from simple_einet.layers.distributions.multidistribution import MultiDistributionLayer
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
@@ -162,7 +164,8 @@ class EinetUtils:
                 optimizer.step()
             if lr_schedule_einet is not None:
                 lr_schedule_einet.step()
-
+            # print(5000 * mpe_loss)
+            # print(loss_v - (5000 * mpe_loss))
             val_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
@@ -330,18 +333,21 @@ class EinetUtils:
             ll_marg = self.eval_ll(dl, device, return_all)
             explanations.append((ll_marg - ll_default))
         self.marginalized_scopes = None
-        # return explanations
-        return torch.stack(explanations, dim=1)
+        if return_all:
+            return torch.stack(explanations, dim=1)
+        return explanations
 
-    def explain_mpe(self, dl, device):
-        # Aktuelle idee (benoetigt gegebene expl. var. daten):
-        # Vergleiche MPE der expl. vars mit evidence
-        # mit den tatsaechlich gegebenen Daten
-        # Aussage von starken Unterschieden: "Anders als durch bisherige Distr. erwartet"
-        # Weitere Idee (benoetigt keine gegebenen expl. var. daten):
-        # Vergleiche MPE der expl. vars mit evidence
-        # mit dem MPE der expl. vars ohne evidence
-        # -> wenn hoeher: starker unterschied zu Distribution
+    def explain_mpe(self, dl, device, return_all=False):
+        """
+        Aktuelle idee (benoetigt gegebene expl. var. daten):
+        Vergleiche MPE der expl. vars mit evidence
+        mit den tatsaechlich gegebenen Daten
+        Aussage von starken Unterschieden: "Anders als durch bisherige Distr. erwartet"
+        Weitere Idee (benoetigt keine gegebenen expl. var. daten):
+        Vergleiche MPE der expl. vars mit evidence
+        mit dem MPE der expl. vars ohne evidence
+        -> wenn hoeher: starker unterschied zu Distribution
+        """
         expl_var_vals = []
         expl_var_mpes = []
         for data, _ in dl:
@@ -354,7 +360,7 @@ class EinetUtils:
             mask[:, self.explaining_vars] = False
             data = data[mask]
             if self.image_shape is not None:
-                # ConvResNetSPN
+                # ConvResNets
                 # reshape to image
                 data = data.reshape(
                     -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
@@ -365,18 +371,20 @@ class EinetUtils:
 
             # extract most probable explanation of current input
             hidden = self.forward_hidden(data)
-            hidden = torch.cat([hidden, exp_vars], dim=1)
+            hidden = torch.cat([exp_vars, hidden], dim=1)
             mpe = self.einet.mpe(
                 evidence=hidden, marginalized_scopes=self.explaining_vars
             )
             expl_var_mpes.append(mpe[:, self.explaining_vars])
         expl_var_vals = torch.cat(expl_var_vals, dim=0)
         expl_var_mpes = torch.cat(expl_var_mpes, dim=0)
+        if return_all:
+            return expl_var_vals, expl_var_mpes
         return torch.abs(expl_var_mpes - expl_var_vals).mean(dim=0).cpu().numpy()
 
     def plot_feature_importance(images):
         # get LL and MPE explanations for all images and all expl. variables
-        # create bar-plot: x-axis: explainaing vars, y-axis: explanation strength
+        # create bar-plot: x-axis: explaining vars, y-axis: explanation strength
         # Problem: probably need a way to normalize these values
         #    |          |
         #    |     |    |
@@ -548,7 +556,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
-            hidden = torch.cat([hidden, exp_vars], dim=1)
+            hidden = torch.cat([exp_vars, hidden], dim=1)
             return self.einet(hidden)
 
         return self.classifier(hidden)
@@ -701,7 +709,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
-            x = torch.cat([x, exp_vars], dim=1)
+            x = torch.cat([exp_vars, x], dim=1)
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.fc(x)
@@ -827,7 +835,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
-            x = torch.cat([x, exp_vars], dim=1)
+            x = torch.cat([exp_vars, x], dim=1)
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.fc(x) / self.temp
@@ -929,7 +937,7 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
         self.latent = x
 
         # classifier is einet, so we need to concatenate the explaining vars
-        x = torch.cat([x, exp_vars], dim=1)
+        x = torch.cat([exp_vars, x], dim=1)
         return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
     def decode(self, x):
@@ -1201,7 +1209,8 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         self.einet_num_leaves = einet_num_leaves
         self.einet_num_repetitions = einet_num_repetitions
         if einet_leaf_type == "Normal":
-            self.einet_leaf_type = Normal
+            # self.einet_leaf_type = Normal
+            self.einet_leaf_type = RatNormal
         else:
             raise NotImplementedError
         self.einet_dropout = einet_dropout
@@ -1265,6 +1274,17 @@ class EfficientNetSPN(nn.Module, EinetUtils):
 
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
+        scopes_a = torch.arange(0, len(self.explaining_vars))
+        scopes_b = torch.arange(
+            len(self.explaining_vars), 1280 + len(self.explaining_vars)
+        )
+        leaf_kwargs = {
+            "scopes_to_dist": [
+                (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
+                # (scopes_a, Categorical, {"num_bins": 5}),
+                (scopes_b, Normal, {}),  # Tuple of (scopes, class, kwargs)
+            ]
+        }
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
@@ -1273,7 +1293,9 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
-            leaf_type=self.einet_leaf_type,
+            # leaf_type=self.einet_leaf_type,
+            leaf_type=MultiDistributionLayer,
+            leaf_kwargs=leaf_kwargs,
             layer_type="einsum",
             dropout=self.einet_dropout,
         )
@@ -1299,10 +1321,11 @@ class EfficientNetSPN(nn.Module, EinetUtils):
 
         # feed through resnet
         x = self.forward_hidden(x)
+        self.hidden = x
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
-            x = torch.cat([x, exp_vars], dim=1)
+            x = torch.cat([exp_vars, x], dim=1)
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.backbone.classifier(x)  # default classifier
