@@ -200,8 +200,8 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         mlflow.log_metric("ood_ll", ood_ll)
 
         resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
-        resnet_probs = torch.nn.functional.softmax(resnet_logits, dim=1)[:, 0]
-        resnet_probs = resnet_probs.cpu().detach().numpy()
+        resnet_probs_softmax = torch.nn.functional.softmax(resnet_logits, dim=1)
+        resnet_probs = resnet_probs_softmax[:, 0].cpu().detach().numpy()
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, resnet_probs, ax=ax
@@ -211,16 +211,22 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         plt.title("Class Probability, SPN model")
         mlflow.log_figure(fig, "class_probability.png")
 
-        resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
+        # resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
+        resnet_uncertainty = (
+            -torch.sum(resnet_probs_softmax * torch.log(resnet_probs_softmax), axis=1)
+            .cpu()
+            .detach()
+            .numpy()
+        )
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Uncertainty, SPN Model")
-        mlflow.log_figure(fig, "predictive_variance.png")
+        plt.title("Predictive Entropy, SPN Model")
+        mlflow.log_figure(fig, "predictive_entropy.png")
 
-        resnet_uncertainty = (
+        resnet_uncertainty = -(
             resnet_logits.cpu().detach().numpy()[:, 0]
         )  # log likelihood
         print(resnet_uncertainty[:5])

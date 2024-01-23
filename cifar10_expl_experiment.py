@@ -14,7 +14,7 @@ corruptions = [
     "contrast",
     "defocus_blur",
     "elastic_transform",
-    "fog",  # was broken -> reload?
+    "fog",
     "frost",
     "gaussian_blur",
     "gaussian_noise",
@@ -363,12 +363,19 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
                     # pin_memory=True,
                     # num_workers=1,
                 )
+                model.einet_active = False
+                backbone_acc = model.eval_acc(dl, device)
+                eval_dict[corruption][corr_level]["backbone_acc"] = backbone_acc
+                model.einet_active = True
                 acc = model.eval_acc(dl, device)
                 eval_dict[corruption][corr_level]["acc"] = acc
                 ll = model.eval_ll(dl, device)
                 eval_dict[corruption][corr_level]["ll"] = ll
                 expl_ll = model.explain_ll(dl, device)
-                eval_dict[corruption][corr_level]["expl_ll"] = expl_ll[corr_idx]
+                # eval_dict[corruption][corr_level]["expl_ll"] = expl_ll[corr_idx]
+                eval_dict[corruption][corr_level][
+                    "expl_ll"
+                ] = expl_ll  # len: [1, num_expl_vars]
                 expl_mpe = model.explain_mpe(dl, device)
                 eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe[
                     corr_idx
@@ -390,13 +397,17 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         # x-axis: corruption level, y-axis: acc/ll
         # as in calib_experiment
         for corruption in eval_dict:
+            backbone_accs = [
+                eval_dict[corruption][l]["backbone_acc"] for l in eval_dict[corruption]
+            ]
             accs = [eval_dict[corruption][l]["acc"] for l in eval_dict[corruption]]
             lls = [eval_dict[corruption][l]["ll"] for l in eval_dict[corruption]]
             # get corruption index
             corr_idx = corruptions.index(corruption)
             expl_ll = [
                 eval_dict[corruption][l]["expl_ll"] for l in eval_dict[corruption]
-            ]
+            ]  # list of list, shape: [num_levels, num_expl_vars]
+            expl_ll = torch.tensor(expl_ll)
             expl_mpe = [
                 eval_dict[corruption][l]["expl_mpe"] for l in eval_dict[corruption]
             ]
@@ -406,6 +417,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             ax.set_xticks(np.array(list(range(5))) + 1)
 
             ax.plot(accs, label="acc", color="red")
+            ax.plot(backbone_accs, label="backbone_acc", color="orange")
             ax.set_ylabel("accuracy", color="red")
             ax.tick_params(axis="y", labelcolor="red")
             ax.set_ylim([0, 1])
@@ -415,19 +427,23 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             # ax2.set_ylabel("log-likelihood", color="blue")
             ax2.tick_params(axis="y", labelcolor="blue")
 
-            ax3 = ax.twinx()
-            ax3.plot(expl_ll, label="expl_ll", color="green")
-            # ax3.set_ylabel("expl_ll", color="green")
-            ax3.tick_params(axis="y", labelcolor="green")
-
-            ax4 = ax.twinx()
-            ax4.plot(expl_mpe, label="expl_mpe", color="orange")
-            # ax4.set_ylabel("expl_mpe", color="orange")
-            ax4.tick_params(axis="y", labelcolor="orange")
-
             fig.tight_layout()
             fig.legend()
             mlflow.log_figure(fig, f"{corruption}.png")
+            plt.close()
+
+            # create new plot showing corruption levels on x-axis and expl-ll of all
+            # corruptions on y-axis
+            fig, ax = plt.subplots()
+            ax.set_xlabel("severity")
+            ax.set_xticks(np.array(list(range(5))) + 1)
+            # expl_ll.shape = [num_levels, num_expl_vars]
+            for i in range(expl_ll.shape[1]):
+                ax.plot(expl_ll[:, i], label=corruptions[i])
+            ax.set_ylabel("expl_ll")
+            fig.tight_layout()
+            fig.legend()
+            mlflow.log_figure(fig, f"{corruption}_expl_ll.png")
             plt.close()
 
         # plot showing corruption levels on x-axis and expl-ll/mpe of

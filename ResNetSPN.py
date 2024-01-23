@@ -516,6 +516,11 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
 
     def make_einet_output_layer(self):
         """uses einet as the output layer."""
+        leaf_type = RatNormal
+        leaf_kwargs = {
+            "min_sigma": 0.00001,
+            "max_sigma": 10.0,
+        }
         cfg = EinetConfig(
             num_features=self.num_hidden + len(self.explaining_vars),
             num_channels=1,
@@ -524,8 +529,8 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
             num_classes=self.output_dim,
-            leaf_type=self.einet_leaf_type,
-            # leaf_kwargs={"total_count": 2**n_bits - 1},
+            leaf_type=leaf_type,
+            leaf_kwargs=leaf_kwargs,
             layer_type="einsum",
             dropout=self.einet_dropout,
         )
@@ -663,6 +668,26 @@ class ConvResNetSPN(ResNet, EinetUtils):
 
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
+        if len(self.explaining_vars) > 0:
+            leaf_type = MultiDistributionLayer
+            scopes_a = torch.arange(0, len(self.explaining_vars))
+            scopes_b = torch.arange(
+                len(self.explaining_vars), 1280 + len(self.explaining_vars)
+            )
+            leaf_kwargs = {
+                "scopes_to_dist": [
+                    (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
+                    # (scopes_a, Categorical, {"num_bins": 5}),
+                    (
+                        scopes_b,
+                        RatNormal,
+                        {"min_sigma": 0.00001, "max_sigma": 10.0},
+                    ),  # Tuple of (scopes, class, kwargs)
+                ]
+            }
+        else:
+            leaf_type = RatNormal
+            leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
@@ -671,7 +696,9 @@ class ConvResNetSPN(ResNet, EinetUtils):
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
-            leaf_type=self.einet_leaf_type,
+            # leaf_type=self.einet_leaf_type,
+            leaf_type=leaf_type,
+            leaf_kwargs=leaf_kwargs,
             layer_type="einsum",
             dropout=self.einet_dropout,
         )
@@ -792,6 +819,26 @@ class ConvResnetDDU(ResNet, EinetUtils):
 
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
+        if len(self.explaining_vars) > 0:
+            leaf_type = MultiDistributionLayer
+            scopes_a = torch.arange(0, len(self.explaining_vars))
+            scopes_b = torch.arange(
+                len(self.explaining_vars), 1280 + len(self.explaining_vars)
+            )
+            leaf_kwargs = {
+                "scopes_to_dist": [
+                    (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
+                    # (scopes_a, Categorical, {"num_bins": 5}),
+                    (
+                        scopes_b,
+                        RatNormal,
+                        {"min_sigma": 0.00001, "max_sigma": 10.0},
+                    ),  # Tuple of (scopes, class, kwargs)
+                ]
+            }
+        else:
+            leaf_type = RatNormal
+            leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
@@ -800,7 +847,9 @@ class ConvResnetDDU(ResNet, EinetUtils):
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
-            leaf_type=self.einet_leaf_type,
+            # leaf_type=self.einet_leaf_type,
+            leaf_type=leaf_type,
+            leaf_kwargs=leaf_kwargs,
             layer_type="einsum",
             dropout=self.einet_dropout,
         )
@@ -1274,17 +1323,27 @@ class EfficientNetSPN(nn.Module, EinetUtils):
 
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
-        scopes_a = torch.arange(0, len(self.explaining_vars))
-        scopes_b = torch.arange(
-            len(self.explaining_vars), 1280 + len(self.explaining_vars)
-        )
-        leaf_kwargs = {
-            "scopes_to_dist": [
-                (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
-                # (scopes_a, Categorical, {"num_bins": 5}),
-                (scopes_b, Normal, {}),  # Tuple of (scopes, class, kwargs)
-            ]
-        }
+        if len(self.explaining_vars) > 0:
+            leaf_type = MultiDistributionLayer
+            scopes_a = torch.arange(0, len(self.explaining_vars))
+            scopes_b = torch.arange(
+                len(self.explaining_vars), 1280 + len(self.explaining_vars)
+            )
+            leaf_kwargs = {
+                "scopes_to_dist": [
+                    (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
+                    # (scopes_a, Categorical, {"num_bins": 5}),
+                    (
+                        scopes_b,
+                        RatNormal,
+                        {"min_sigma": 0.00001, "max_sigma": 10.0},
+                    ),  # Tuple of (scopes, class, kwargs)
+                ]
+            }
+        else:
+            leaf_type = RatNormal
+            leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
+
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
@@ -1294,7 +1353,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             num_repetitions=self.einet_num_repetitions,
             num_classes=out_features,
             # leaf_type=self.einet_leaf_type,
-            leaf_type=MultiDistributionLayer,
+            leaf_type=leaf_type,
             leaf_kwargs=leaf_kwargs,
             layer_type="einsum",
             dropout=self.einet_dropout,

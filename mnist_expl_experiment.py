@@ -167,6 +167,50 @@ def manipulate_single_image(img, manipulation):
     return final_image
 
 
+def mnist_expl_qualitative_evaluation(model, device):
+    model.to(device)
+    model.activate_einet()
+    # get first image of test-set
+    _, test_ds, _ = get_datasets()
+    image = test_ds.data[0]
+
+    imgs = []
+
+    for i in range(0, 5, 2):
+        for j in range(0, 5, 2):
+            for k in range(0, 5, 2):
+                # perform some manipulations:
+                expl = torch.tensor([i, j, k])
+                img = manipulate_single_image(image.clone(), expl)
+                img = torch.concatenate([expl, img.flatten()])
+                imgs.append(img)
+
+    imgs = torch.stack(imgs)
+    targets = test_ds.targets[0].repeat(len(imgs))
+
+    # create dataloader
+    dl = DataLoader(
+        TensorDataset(
+            imgs,
+            targets,
+        ),
+        batch_size=1,
+    )
+    expl_ll = model.explain_ll(dl, device, True)
+
+    for i, img in enumerate(imgs):
+        expl = img[:3]
+        img = img[3:]
+        # plot image, title contains explanations
+        fig, ax = plt.subplots()
+        ax.imshow(img.reshape(28, 28), cmap="gray")
+        ax.set_title(
+            f"rot: {expl_ll[i][0]:.3f}, cut: {expl_ll[i][1]:.3f}, noise: {expl_ll[i][2]:.3f}"
+        )
+        mlflow.log_figure(fig, f"img_{expl[0]}_{expl[1]}_{expl[2]}.png")
+        plt.close()
+
+
 def mnist_expl_manual_evaluation(model_params, path, device):
     run_name = f"mnist_expl_manual_evaluation_{model_params['model']}"
     print("starting run: ", run_name)
@@ -230,67 +274,8 @@ def mnist_expl_manual_evaluation(model_params, path, device):
             raise NotImplementedError
 
         model.load(path)
-        model.activate_einet()
-        model.to(device)
 
-        # get first image of test-set
-        _, test_ds, _ = get_datasets()
-        img = test_ds.data[0]
-
-        # perform some manipulations:
-        # 1. only rotate with severity 4
-        expl1 = torch.tensor([0, 4, 0])
-        img1 = manipulate_single_image(img, expl1)
-        img1 = torch.concatenate([expl1, img1.flatten()])
-
-        expl2 = torch.tensor([0, 0, 4])
-        img2 = manipulate_single_image(img, expl2)
-        img2 = torch.concatenate([expl2, img2.flatten()])
-
-        expl3 = torch.tensor([0, 4, 4])
-        img3 = manipulate_single_image(img, expl3)
-        img3 = torch.concatenate([expl3, img3.flatten()])
-
-        expl4 = torch.tensor([4, 0, 0])
-        img4 = manipulate_single_image(img, expl4)
-        img4 = torch.concatenate([expl4, img4.flatten()])
-        imgs = torch.stack([img1, img2, img3, img4])
-
-        # stupid test
-        # img4_1 = torch.concatenate([expl1, img4.flatten()])
-        # img4_2 = torch.concatenate([expl2, img4.flatten()])
-        # img4_3 = torch.concatenate([expl3, img4.flatten()])
-        # imgs = torch.stack([img4_1, img4_2, img4_3, img4_4])
-
-        # create dataloader
-        target = test_ds.targets[0]
-        dl = DataLoader(
-            TensorDataset(
-                imgs,
-                torch.tensor([target, target, target, target]),
-            ),
-            batch_size=1,
-        )
-        # get LL and explanations of all images
-        ll = model.eval_ll(dl, device, True)
-        print("lls: ", ll)
-        # expl_ll = model.explain_ll(dl, device, True)
-        expl_ll = model.explain_ll(dl, device, True)
-        print("expl_lls: ", expl_ll)
-        var_vals, mpe_vals = model.explain_mpe(dl, device, True)
-        print("var: ", var_vals)
-        print("mpe: ", mpe_vals)
-
-        for i, img in enumerate(imgs):
-            img = img[3:]
-            # plot image, title contains explanations
-            fig, ax = plt.subplots()
-            ax.imshow(img.reshape(28, 28), cmap="gray")
-            ax.set_title(
-                f"rot: {expl_ll[i][0]}, cut: {expl_ll[i][1]}, noise: {expl_ll[i][2]}"
-            )
-            mlflow.log_figure(fig, f"img_{i}.png")
-            plt.close()
+        mnist_expl_qualitative_evaluation(model, device)
 
 
 def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, trial):
@@ -667,5 +652,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             fig.legend()
             mlflow.log_figure(fig, f"{m}.png")
             plt.close()
+
+        mnist_expl_qualitative_evaluation(model, device)
 
         return lowest_val_loss
