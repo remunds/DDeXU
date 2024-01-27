@@ -200,10 +200,10 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         layers=[2, 2, 2, 2],
         num_classes=10,
         image_shape=image_shape,
-        einet_depth=3,  # might be overwritten by optuna
+        einet_depth=5,  # might be overwritten by optuna
         einet_num_sums=20,
         einet_num_leaves=20,
-        einet_num_repetitions=1,  # might be overwritten by optuna
+        einet_num_repetitions=5,  # might be overwritten by optuna
         einet_leaf_type="Normal",
         einet_dropout=0.0,
         spec_norm_bound=0.95,  # only for ConvResNetSPN
@@ -214,7 +214,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.05,  # irrelevant
         num_epochs=100,
-        early_stop=10,
+        early_stop=5,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -252,6 +252,10 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
         train_params["num_epochs"] = 100
+    elif training == "eval_only":
+        train_params["warmup_epochs"] = 0
+        train_params["deactivate_backbone"] = True
+        train_params["num_epochs"] = 0
     else:
         raise ValueError(
             "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
@@ -306,7 +310,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
-    elif "cifar10-c" in dataset:
+    elif "cifar10-c-calib" in dataset:
         try:
             start_cifar10_calib_run(
                 run_name, batch_sizes, model_params, train_params, None
@@ -316,7 +320,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
-    elif "cifar10-c_expl" in dataset:
+    elif "cifar10-c-expl" in dataset:
         model_params["explaining_vars"] = list(range(19))
         train_params["corruption_levels_train"] = [0, 1]
         try:
@@ -477,7 +481,7 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
-        elif "cifar10-c" in dataset:
+        elif "cifar10-c-calib" in dataset:
             try:
                 return start_cifar10_calib_run(
                     run_name, batch_sizes, model_params, train_params, trial
@@ -490,7 +494,7 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
-        elif "cifar10-c_expl" in dataset:
+        elif "cifar10-c-expl" in dataset:
             model_params["explaining_vars"] = list(range(19))
             train_params["corruption_levels_train"] = [0, 1]
             try:
@@ -862,21 +866,21 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "hybrid_low",
-    "hybrid_high",
     "hybrid",
-    "hybrid_very_low",
-    "hybrid_very_high",
-    "discriminative",
+    "hybrid_low",
     "generative",
+    "discriminative",
+    "hybrid_high",
+    "hybrid_very_high",
+    "hybrid_very_low",
 ]
 dataset = [
     # "two-moons",
-    "dirty-mnist",
-    "mnist-calib",
-    "mnist-expl",
-    "cifar10-c",
-    "cifar10-c_expl",
+    # "dirty-mnist",
+    # "mnist-calib",
+    # "mnist-expl",
+    # "cifar10-c-calib",
+    "cifar10-c-expl",
 ]
 models = [
     # "ConvResNetSPN",
@@ -908,7 +912,7 @@ pretrained_backbones = {
         # val-acc: 0.8944
         "EfficientNetSPN": "958692786192727381/54bb623d51ac41b0b4c19717c39b75d1/artifacts/model",
     },
-    "cifar10-c": {
+    "cifar10-c-calib": {
         # val-acc: 0.8188
         "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
         # val-acc: 0.8850
@@ -917,10 +921,24 @@ pretrained_backbones = {
         "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
     },
     # same as calib
-    "cifar10-c_expl": {
+    "cifar10-c-expl": {
         "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+    },
+}
+
+trained_models = {
+    "mnist-calib": {
+        # "EfficientNetSPN": "987712940205555914/b5320090ae7d4dd7a971f29207ac8097/artifacts/model",
+        "EfficientNetSPN": "764598691207333922/049c027b5cec490e8c4ace0e334617ab/artifacts/model"
+    },
+    "mnist-expl": {
+        # "EfficientNetSPN": "764598691207333922/02852d15bd2446f5bfc021b5043f2a29/artifacts/model",
+        "EfficientNetSPN": "764598691207333922/9e133cfbafbd4df2acac15464349f1ec/artifacts/model"
+    },
+    "cifar10-c-expl": {
+        "EfficientNetSPN": "718553087440563724/d7f46d12439e4ac48a4284303ee92d40/artifacts/model",
     },
 }
 
@@ -940,23 +958,15 @@ for d in dataset:
             continue
         for m in models:
             pretrained_path = pretrained_backbones[d][m]
+            # pretrained_path = trained_models[d][m]
             pretrained_path = (
                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             )
             dataset = d + "-newLeafKwargs"
+            # run_conv(dataset, l, "eval_only", m, pretrained_path)
             run_conv(dataset, l, "einet_only", m, pretrained_path)
             # run_cifar_expl(d, m, l, pretrained_path)
 
-# trained_models = {
-#     "mnist-calib": {
-#         # "EfficientNetSPN": "987712940205555914/b5320090ae7d4dd7a971f29207ac8097/artifacts/model",
-#         "EfficientNetSPN": "764598691207333922/049c027b5cec490e8c4ace0e334617ab/artifacts/model"
-#     },
-#     "mnist-expl": {
-#         # "EfficientNetSPN": "764598691207333922/02852d15bd2446f5bfc021b5043f2a29/artifacts/model",
-#         "EfficientNetSPN": "764598691207333922/9e133cfbafbd4df2acac15464349f1ec/artifacts/model"
-#     },
-# }
 
 # path = (
 #     "/data_docker/mlartifacts/"
@@ -987,7 +997,7 @@ for d in dataset:
 
 # path = (
 #     "/data_docker/mlartifacts/"
-#     + pretrained_backbones["cifar10-c_expl"]["EfficientNetSPN"]
+#     + pretrained_backbones["cifar10-c-expl"]["EfficientNetSPN"]
 #     + "/state_dict.pth"
 # )
-# run_cifar_expl("cifar10-c_expl-new", "EfficientNetSPN", "hybrid_very_low", path)
+# run_cifar_expl("cifar10-c-expl-new", "EfficientNetSPN", "hybrid_very_low", path)

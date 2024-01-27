@@ -297,8 +297,6 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
         # Evaluate
         model.eval()
 
@@ -312,6 +310,12 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
 
         valid_ll = model.eval_ll(valid_dl, device)
         mlflow.log_metric("valid_ll", valid_ll)
+
+        # for later calibration evaluation
+        train_lls = model.eval_ll(train_dl, device, return_all=True)
+        # used for normalization when computing confidence values from log-likelihoods
+        min_ll = torch.min(train_lls)
+        max_ll = torch.max(train_lls)
 
         del train_dl
         del valid_dl
@@ -341,6 +345,23 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             ],
             dim=1,
         )
+        print("test_corrupt_data.shape: ", test_corrupt_data.shape)
+        # calibration evaluation
+        dl = DataLoader(
+            list(zip(test_corrupt_data, test_corrupt_labels)),
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+        )
+        ece_eq_freq, ece_eq_width, nll = model.eval_calibration(
+            dl, device, n_bins=20, low_ll=min_ll, high_ll=max_ll
+        )
+        mlflow.log_metric("ece_eq_freq", ece_eq_freq)
+        mlflow.log_metric("ece_eq_width", ece_eq_width)
+        mlflow.log_metric("nll", nll)
+        print("ece_eq_freq: ", ece_eq_freq)
+        print("ece_eq_width: ", ece_eq_width)
+
         # test_corrupt_levels.shape = [num_data_points, num_corruptions]
         from tqdm import tqdm
 

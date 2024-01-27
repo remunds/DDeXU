@@ -43,8 +43,16 @@ class EinetUtils:
     ):
         if pretrained_path is not None:
             print(f"loading pretrained model from {pretrained_path}")
-            self.load(pretrained_path, backbone_only=True)
+            if num_epochs == 0 and warmup_epochs == 0:
+                # load complete model and return
+                self.load(pretrained_path)
+            else:
+                self.load(pretrained_path, backbone_only=True)
             self.deactivate_einet()
+            val_acc = self.eval_acc(dl_valid, device)
+            print(f"pretrained backbone validation accuracy: {val_acc}")
+            mlflow.log_metric(key="pretrained_backbone_val_acc", value=val_acc)
+            self.activate_einet(deactivate_backbone)
             val_acc = self.eval_acc(dl_valid, device)
             print(f"pretrained model validation accuracy: {val_acc}")
             mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
@@ -257,6 +265,21 @@ class EinetUtils:
             return lls
         return torch.mean(lls).item()
 
+    def eval_posterior(self, dl, device, return_all=False):
+        self.eval()
+        index = 0
+        posteriors = torch.zeros(len(dl.dataset), self.num_classes)
+        with torch.no_grad():
+            for data, _ in dl:
+                data = data.to(device)
+                lls = self(data)  # this sets the einet_input
+                posterior = self.einet.posterior(self.einet_input)
+                posteriors[index : index + len(posterior)] = posterior
+                index += len(posterior)
+        if return_all:
+            return posteriors
+        return torch.mean(posteriors).item()
+
     def eval_pred_variance(self, dl, device, return_all=False):
         self.eval()
         index = 0
@@ -382,14 +405,120 @@ class EinetUtils:
             return expl_var_vals, expl_var_mpes
         return torch.abs(expl_var_mpes - expl_var_vals).mean(dim=0).cpu().numpy()
 
-    def plot_feature_importance(images):
-        # get LL and MPE explanations for all images and all expl. variables
-        # create bar-plot: x-axis: explaining vars, y-axis: explanation strength
-        # Problem: probably need a way to normalize these values
-        #    |          |
-        #    |     |    |
-        # cutoff  rot  noise
-        raise NotImplementedError()
+    def eval_calibration(self, dl, device, n_bins=10, low_ll=None, high_ll=None):
+        """Computes the expected calibration error and plots the calibration curve."""
+        self.eval()
+
+        # get posteriors p(y_i | x) via bayes rule
+        posteriors = self.eval_posterior(dl, device, return_all=True)
+
+        # get confidences and predictions via max/argmax
+        confidences, predictions = torch.max(posteriors, dim=1)
+        # convert from logit to probability
+        confidences = torch.exp(confidences)
+        # make a histogram of the confidences
+        plt.hist(confidences.cpu().numpy(), bins=n_bins)
+        mlflow.log_figure(plt.gcf(), "ll_hist.png")
+        plt.clf()
+
+        # predictions = torch.argmax(posteriors, dim=1)
+
+        # this assumes that the dl does not shuffle the data
+        labels = torch.cat([labels for _, labels in dl], dim=0)
+
+        def equal_frequency_binning(confidences, predictions, labels, num_bins):
+            # Sort confidences and predictions
+            sorted_indices = torch.argsort(confidences)
+            sorted_confidences = confidences[sorted_indices]
+            sorted_predictions = predictions[sorted_indices]
+            sorted_labels = labels[sorted_indices]
+
+            # Split data into equal frequency bins
+            binned_conf = torch.chunk(sorted_confidences, num_bins)
+            binned_pred = torch.chunk(sorted_predictions, num_bins)
+            binned_labels = torch.chunk(sorted_labels, num_bins)
+
+            bin_confidences = []
+            bin_accuracies = []
+
+            # Calculate observed accuracy for each bin
+            for bin_c, bin_p, bin_l in zip(binned_conf, binned_pred, binned_labels):
+                bin_confidences.append(torch.mean(bin_c).item())
+                bin_accuracies.append((bin_p == bin_l).to(float).mean().item())
+
+            return bin_confidences, bin_accuracies
+
+        def equal_width_binning(confidences, predictions, labels, num_bins):
+            # Sort confidences and predictions
+            sorted_indices = torch.argsort(confidences)
+            sorted_confidences = confidences[sorted_indices]
+            sorted_predictions = predictions[sorted_indices]
+            sorted_labels = labels[sorted_indices]
+
+            # Split data into bins in range [0, 1] with equal width
+            bin_size = 1 / num_bins
+            bin_confidences = []
+            bin_accuracies = []
+
+            for i in range(num_bins):
+                # Get indices of samples in current bin
+                bin_indices = torch.where(
+                    (sorted_confidences >= i * bin_size)
+                    & (sorted_confidences < (i + 1) * bin_size)
+                )[0]
+                # Calculate mean confidence and accuracy for current bin
+                bin_confidences.append(
+                    torch.mean(sorted_confidences[bin_indices]).item()
+                )
+                bin_accuracies.append(
+                    (sorted_predictions[bin_indices] == sorted_labels[bin_indices])
+                    .to(float)
+                    .mean()
+                    .item()
+                )
+
+            return bin_confidences, bin_accuracies
+
+        def plot_calibration_curve(conf, acc, title):
+            # Plot the calibration curve
+            plt.plot(conf, acc, marker="o")
+            plt.plot(
+                [0, 1], [0, 1], linestyle="--", color="gray"
+            )  # Diagonal line for reference
+            plt.xlabel("Mean Confidence")
+            plt.ylabel("Observed Accuracy")
+            plt.title("Calibration Plot")
+            mlflow.log_figure(plt.gcf(), f"calibration_curve_{title}.png")
+            plt.clf()
+
+        def compute_ece(conf, acc):
+            ece = 0.0
+            for i in range(len(conf)):
+                if acc[i] == torch.nan or conf[i] == torch.nan:
+                    continue
+                ece += abs(acc[i] - conf[i])
+            ece = ece / len(conf)
+            return ece
+
+        # equal frequency binning
+        conf, acc = equal_frequency_binning(
+            confidences, predictions, labels, num_bins=n_bins
+        )
+        plot_calibration_curve(conf, acc, "equal_frequency")
+        ece_eq_freq = compute_ece(conf, acc)
+        conf, acc = equal_width_binning(
+            confidences, predictions, labels, num_bins=n_bins
+        )
+        plot_calibration_curve(conf, acc, "equal_width")
+        ece_eq_width = compute_ece(conf, acc)
+
+        # the negative ll's is simply the mean output of the einet across all samples
+        # output is likelihood: P(x | y_i) for each class y_i
+        # taking the mean over the classes gives the marginal likelihood P(x)
+        # do that for each sample and take the mean over all samples
+        nll = -self.eval_ll(dl, device, return_all=False)
+
+        return ece_eq_freq, ece_eq_width, nll
 
 
 class DenseResnet(nn.Module):
@@ -400,7 +529,7 @@ class DenseResnet(nn.Module):
     def __init__(
         self,
         input_dim,
-        output_dim,
+        num_classes,
         num_layers=3,
         num_hidden=128,
         dropout_rate=0.1,
@@ -413,7 +542,7 @@ class DenseResnet(nn.Module):
         self.dropout_rate = dropout_rate
         self.classifier_kwargs = classifier_kwargs
         self.input_dim = input_dim
-        self.output_dim = output_dim
+        self.num_classes = num_classes
 
         # Defines the hidden layers.
         self.input_layer = nn.Linear(self.input_dim, self.num_hidden)
@@ -445,7 +574,7 @@ class DenseResnet(nn.Module):
 
     def make_output_layer(self):
         """Uses the Dense layer as the output layer."""
-        return nn.Linear(self.num_hidden, self.output_dim, **self.classifier_kwargs)
+        return nn.Linear(self.num_hidden, self.num_classes, **self.classifier_kwargs)
 
 
 class DenseResNetSPN(DenseResnet, EinetUtils):
@@ -528,7 +657,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             num_sums=self.einet_num_sums,
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
-            num_classes=self.output_dim,
+            num_classes=self.num_classes,
             leaf_type=leaf_type,
             leaf_kwargs=leaf_kwargs,
             layer_type="einsum",
@@ -562,6 +691,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
             hidden = torch.cat([exp_vars, hidden], dim=1)
+            self.einet_input = hidden
             return self.einet(hidden)
 
         return self.classifier(hidden)
@@ -737,6 +867,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
             x = torch.cat([exp_vars, x], dim=1)
+            self.einet_input = x
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.fc(x)
@@ -885,6 +1016,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
             x = torch.cat([exp_vars, x], dim=1)
+            self.einet_input = x
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.fc(x) / self.temp
@@ -987,6 +1119,7 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
 
         # classifier is einet, so we need to concatenate the explaining vars
         x = torch.cat([exp_vars, x], dim=1)
+        self.einet_input = x
         return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
     def decode(self, x):
@@ -1385,6 +1518,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
             x = torch.cat([exp_vars, x], dim=1)
+            self.einet_input = x
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.backbone.classifier(x)  # default classifier

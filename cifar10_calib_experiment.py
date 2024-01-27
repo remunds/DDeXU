@@ -293,7 +293,6 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                     "var": test_pred_var,
                     "entropy": test_pred_entropy,
                 }
-        print(eval_dict)
         mlflow.log_dict(eval_dict, "eval_dict")
 
         overall_acc = np.mean(
