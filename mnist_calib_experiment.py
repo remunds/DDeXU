@@ -3,6 +3,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
 import os
 import mlflow
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm
 
 
 def get_severity(test_ds, i):
@@ -249,8 +252,6 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
         )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
         # evaluate
         model.eval()
         model.einet_active = False
@@ -278,7 +279,52 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
         ood_ll = model.eval_ll(ood_dl, device)
         mlflow.log_metric("ood ll", ood_ll)
 
-        from tqdm import tqdm
+        del (
+            ood_ds_flat,
+            ood_dl,
+            train_dl,
+            valid_dl,
+            test_dl,
+            train_ds,
+            valid_ds,
+        )
+
+        print("creating calibration plots")
+        # calibration plots
+        test_ds_rot = TensorDataset(test_ds_rot, test_ds.targets)
+        test_dl_rot = DataLoader(
+            test_ds_rot,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            num_workers=1,
+            pin_memory=True,
+        )
+        model.eval_calibration(test_dl_rot, device, "rotation", 20)
+        del test_dl_rot
+
+        test_ds_cutoff = TensorDataset(test_ds_cutoff, test_ds.targets)
+        test_dl_cutoff = DataLoader(
+            test_ds_cutoff,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            num_workers=1,
+            pin_memory=True,
+        )
+        model.eval_calibration(test_dl_cutoff, device, "cutoff", 20)
+        del test_dl_cutoff
+
+        test_ds_noise = TensorDataset(test_ds_noise, test_ds.targets)
+        test_dl_noise = DataLoader(
+            test_ds_noise,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            num_workers=1,
+            pin_memory=True,
+        )
+
+        model.eval_calibration(test_dl_noise, device, "noise", 20)
+        del test_dl_noise
+        print("done creating calibration plots")
 
         severity_levels = 5
 
@@ -289,171 +335,218 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
         index_4 = index_1 * 4
         index_5 = index_1 * 5
 
-        # calibration test
+        # plots by severity
         eval_dict = {}
         severity_indices = [index_1, index_2, index_3, index_4, index_5]
         prev_s = 0
         for s in tqdm(severity_indices):
             test_ds_rot_s = TensorDataset(
-                test_ds_rot[prev_s:s], test_ds.targets[prev_s:s]
+                test_ds_rot[prev_s:s][0], test_ds.targets[prev_s:s]
             )
             test_dl_rot = DataLoader(
-                test_ds_rot_s, batch_size=batch_sizes["resnet"], shuffle=True
+                test_ds_rot_s,
+                batch_size=batch_sizes["resnet"],
+                shuffle=False,
+                num_workers=1,
+                pin_memory=True,
             )
-            # show first image
-            import matplotlib.pyplot as plt
-
-            image = test_ds_rot_s[0][0].reshape(28, 28).numpy()
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap="gray")
-            ax.set_title(
-                f"label: {test_ds_rot_s[0][1]}",
-            )
-            mlflow.log_figure(fig, f"rotation_{s}_first.png")
-
-            image = test_ds_rot_s[-1][0].reshape(28, 28).numpy()
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap="gray")
-            ax.set_title(
-                f"label: {test_ds_rot_s[-1][1]}",
-            )
-            mlflow.log_figure(fig, f"rotation_{s}_last.png")
 
             severity = get_severity(test_ds, s - 1)
-            acc = model.eval_acc(test_dl_rot, device)
+            model.deactivate_einet()
+            backbone_acc = model.eval_acc(test_dl_rot, device)
+            model.activate_einet()
+            einet_acc = model.eval_acc(test_dl_rot, device)
             ll = model.eval_ll(test_dl_rot, device)
-            pred_var = model.eval_pred_variance(test_dl_rot, device)
-            pred_ent = model.eval_pred_entropy(test_dl_rot, device)
+            entropy = model.eval_entropy(test_dl_rot, device)
+            highest_class_prob = model.eval_highest_class_prob(test_dl_rot, device)
+            correct_class_prob = model.eval_correct_class_prob(test_dl_rot, device)
+            dempster_shafer = model.eval_dempster_shafer(test_dl_rot, device)
+
             if "rotation" not in eval_dict:
                 eval_dict["rotation"] = {}
             eval_dict["rotation"][severity] = {
-                "acc": acc,
+                "backbone_acc": backbone_acc,
+                "einet_acc": einet_acc,
                 "ll": ll,
-                "var": pred_var,
-                "entropy": pred_ent,
+                "entropy": entropy,
+                "highest_class_prob": highest_class_prob,
+                "correct_class_prob": correct_class_prob,
+                "dempster_shafer": dempster_shafer,
             }
 
             test_ds_cutoff_s = TensorDataset(
-                test_ds_cutoff[prev_s:s], test_ds.targets[prev_s:s]
+                test_ds_cutoff[prev_s:s][0], test_ds.targets[prev_s:s]
             )
             test_dl_cutoff = DataLoader(
-                test_ds_cutoff_s, batch_size=batch_sizes["resnet"], shuffle=True
+                test_ds_cutoff_s,
+                batch_size=batch_sizes["resnet"],
+                shuffle=False,
+                num_workers=1,
+                pin_memory=True,
             )
             severity = get_severity(test_ds, s - 1)
-            acc = model.eval_acc(test_dl_cutoff, device)
+            model.deactivate_einet()
+            backbone_acc = model.eval_acc(test_dl_cutoff, device)
+            model.activate_einet()
+            einet_acc = model.eval_acc(test_dl_cutoff, device)
             ll = model.eval_ll(test_dl_cutoff, device)
-            pred_var = model.eval_pred_variance(test_dl_cutoff, device)
-            pred_ent = model.eval_pred_entropy(test_dl_cutoff, device)
+            entropy = model.eval_entropy(test_dl_cutoff, device)
+            highest_class_prob = model.eval_highest_class_prob(test_dl_cutoff, device)
+            correct_class_prob = model.eval_correct_class_prob(test_dl_cutoff, device)
+            dempster_shafer = model.eval_dempster_shafer(test_dl_cutoff, device)
+
             if "cutoff" not in eval_dict:
                 eval_dict["cutoff"] = {}
             eval_dict["cutoff"][severity] = {
-                "acc": acc,
+                "backbone_acc": backbone_acc,
+                "einet_acc": einet_acc,
                 "ll": ll,
-                "var": pred_var,
-                "entropy": pred_ent,
+                "entropy": entropy,
+                "highest_class_prob": highest_class_prob,
+                "correct_class_prob": correct_class_prob,
+                "dempster_shafer": dempster_shafer,
             }
 
-            # plot first image
-            import matplotlib.pyplot as plt
-
-            image = test_ds_rot_s[0][0].reshape(28, 28).numpy()
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap="gray")
-            ax.set_title(
-                f"label: {test_ds_rot_s[0][1]}, rot: {test_ds_rot_s[0][0][0]}, cut: {test_ds_rot_s[0][0][1]}, noise: {test_ds_rot_s[0][0][2]}"
-            )
-
-            mlflow.log_figure(fig, f"rotation_{severity}.png")
-
             test_ds_noise_s = TensorDataset(
-                test_ds_noise[prev_s:s], test_ds.targets[prev_s:s]
+                test_ds_noise[prev_s:s][0], test_ds.targets[prev_s:s]
             )
+            # test_ds_noise_s = test_ds_noise[prev_s:s]
             test_dl_noise = DataLoader(
-                test_ds_noise_s, batch_size=batch_sizes["resnet"], shuffle=True
+                test_ds_noise_s,
+                batch_size=batch_sizes["resnet"],
+                shuffle=False,
+                num_workers=1,
+                pin_memory=True,
             )
             severity = get_severity(test_ds, s - 1)
-            acc = model.eval_acc(test_dl_noise, device)
+            model.deactivate_einet()
+            einet_acc = model.eval_acc(test_dl_noise, device)
+            model.activate_einet()
+            backbone_acc = model.eval_acc(test_dl_noise, device)
             ll = model.eval_ll(test_dl_noise, device)
-            pred_var = model.eval_pred_variance(test_dl_noise, device)
-            pred_ent = model.eval_pred_entropy(test_dl_noise, device)
+            entropy = model.eval_entropy(test_dl_noise, device)
+            highest_class_prob = model.eval_highest_class_prob(test_dl_noise, device)
+            correct_class_prob = model.eval_correct_class_prob(test_dl_noise, device)
+            # dempster_shafer = model.eval_dempster_shafer(test_dl_noise, device)
+
             if "noise" not in eval_dict:
                 eval_dict["noise"] = {}
             eval_dict["noise"][severity] = {
-                "acc": acc,
+                "backbone_acc": backbone_acc,
+                "einet_acc": einet_acc,
                 "ll": ll,
-                "var": pred_var,
-                "entropy": pred_ent,
+                "entropy": entropy,
+                "highest_class_prob": highest_class_prob,
+                "correct_class_prob": correct_class_prob,
+                # "dempster_shafer": dempster_shafer,
             }
 
             prev_s = s
 
         mlflow.log_dict(eval_dict, "eval_dict")
 
-        import numpy as np
-
-        overall_acc = np.mean(
+        backbone_acc = np.mean(
             [
-                eval_dict[m][severity]["acc"]
+                eval_dict[m][severity]["backbone_acc"]
                 for m in eval_dict
                 for severity in eval_dict[m]
             ]
         )
-        overall_ll = np.mean(
+        einet_acc = np.mean(
+            [
+                eval_dict[m][severity]["einet_acc"]
+                for m in eval_dict
+                for severity in eval_dict[m]
+            ]
+        )
+        ll = np.mean(
             [
                 eval_dict[m][severity]["ll"]
                 for m in eval_dict
                 for severity in eval_dict[m]
             ]
         )
-        overall_var = np.mean(
-            [
-                eval_dict[m][severity]["var"]
-                for m in eval_dict
-                for severity in eval_dict[m]
-            ]
-        )
-        overall_ent = np.mean(
+        entropy = np.mean(
             [
                 eval_dict[m][severity]["entropy"]
                 for m in eval_dict
                 for severity in eval_dict[m]
             ]
         )
-        mlflow.log_metric("manip acc", overall_acc)
-        mlflow.log_metric("manip ll", overall_ll)
-        mlflow.log_metric("manip var", overall_var)
-        mlflow.log_metric("manip ent", overall_ent)
+        highest_class_prob = np.mean(
+            [
+                eval_dict[m][severity]["highest_class_prob"]
+                for m in eval_dict
+                for severity in eval_dict[m]
+            ]
+        )
+        correct_class_prob = np.mean(
+            [
+                eval_dict[m][severity]["correct_class_prob"]
+                for m in eval_dict
+                for severity in eval_dict[m]
+            ]
+        )
+        # dempster_shafer = np.mean(
+        #     [
+        #         eval_dict[m][severity]["dempster_shafer"]
+        #         for m in eval_dict
+        #         for severity in eval_dict[m]
+        #     ]
+        # )
+
+        mlflow.log_metric("manip_backbone_acc", backbone_acc)
+        mlflow.log_metric("manip_einet_acc", einet_acc)
+        mlflow.log_metric("manip_ll", ll)
+        mlflow.log_metric("manip_entropy", entropy)
+        mlflow.log_metric("manip_highest_class_prob", highest_class_prob)
+        mlflow.log_metric("manip_correct_class_prob", correct_class_prob)
+        # mlflow.log_metric("manip_dempster_shafer", dempster_shafer)
 
         # create plot for each corruption
         # x axis: severity
-        # y axis: acc, ll, var, entropy
-        import matplotlib.pyplot as plt
+        # y axis: metrics
 
         for m in ["rotation", "cutoff", "noise"]:
-            accs = [
-                eval_dict[m][severity]["acc"]
+            einet_acc = [
+                eval_dict[m][severity]["einet_acc"]
+                for severity in sorted(eval_dict[m].keys())
+            ]
+            backbone_acc = [
+                eval_dict[m][severity]["backbone_acc"]
                 for severity in sorted(eval_dict[m].keys())
             ]
             lls = [
                 eval_dict[m][severity]["ll"] for severity in sorted(eval_dict[m].keys())
             ]
-            vars = [
-                eval_dict[m][severity]["var"]
-                for severity in sorted(eval_dict[m].keys())
-            ]
             ents = [
                 eval_dict[m][severity]["entropy"]
                 for severity in sorted(eval_dict[m].keys())
             ]
+            highest_class_probs = [
+                eval_dict[m][severity]["highest_class_prob"]
+                for severity in sorted(eval_dict[m].keys())
+            ]
+            correct_class_probs = [
+                eval_dict[m][severity]["correct_class_prob"]
+                for severity in sorted(eval_dict[m].keys())
+            ]
+            # dempster_shafers = [
+            #     eval_dict[m][severity]["dempster_shafer"]
+            #     for severity in sorted(eval_dict[m].keys())
+            # ]
+
             fig, ax = plt.subplots()
 
             ax.set_xlabel("severity")
             ax.set_xticks(np.array(list(range(5))) + 1)
 
-            ax.plot(accs, label="acc", color="red")
+            ax.plot(backbone_acc, label="backbone_acc", color="red")
+            ax.plot(einet_acc, label="einet_acc", color="orange")
             ax.set_ylabel("accuracy", color="red")
             ax.tick_params(axis="y", labelcolor="red")
             ax.set_ylim([0, 1])
+            ax.grid(False)
 
             ax2 = ax.twinx()
             ax2.plot(lls, label="ll", color="blue")
@@ -461,14 +554,20 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             # ax2.set_ylim([0, 1])
 
             ax3 = ax.twinx()
-            ax3.plot(vars, label="pred var", color="green")
-            # ax3.set_ylabel("predictive variance", color="green")
+            ax3.plot(ents, label="pred entropy", color="green")
             ax3.tick_params(axis="y", labelcolor="green")
 
             ax4 = ax.twinx()
-            ax4.plot(ents, label="pred entropy", color="orange")
-            # ax4.set_ylabel("predictive entropy", color="orange")
-            ax4.tick_params(axis="y", labelcolor="orange")
+            ax4.plot(highest_class_probs, label="highest class prob", color="purple")
+            ax4.tick_params(axis="y", labelcolor="purple")
+
+            ax5 = ax.twinx()
+            ax5.plot(correct_class_probs, label="correct class prob", color="pink")
+            ax5.tick_params(axis="y", labelcolor="pink")
+
+            # ax6 = ax.twinx()
+            # ax6.plot(dempster_shafers, label="dempster shafer", color="black")
+            # ax6.tick_params(axis="y", labelcolor="black")
 
             fig.tight_layout()
             fig.legend()

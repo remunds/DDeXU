@@ -56,6 +56,8 @@ class EinetUtils:
             val_acc = self.eval_acc(dl_valid, device)
             print(f"pretrained model validation accuracy: {val_acc}")
             mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
+            if num_epochs == 0 and warmup_epochs == 0:
+                return 0.0
 
         self.train()
         self.deactivate_einet()
@@ -256,7 +258,9 @@ class EinetUtils:
         index = 0
         lls = torch.zeros(len(dl.dataset))
         with torch.no_grad():
-            for data, _ in dl:
+            for data in dl:
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
                 data = data.to(device)
                 ll = self(data)
                 lls[index : index + len(ll)] = ll.mean(dim=1)
@@ -270,7 +274,9 @@ class EinetUtils:
         index = 0
         posteriors = torch.zeros(len(dl.dataset), self.num_classes)
         with torch.no_grad():
-            for data, _ in dl:
+            for data in dl:
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
                 data = data.to(device)
                 lls = self(data)  # this sets the einet_input
                 posterior = self.einet.posterior(self.einet_input)
@@ -279,6 +285,35 @@ class EinetUtils:
         if return_all:
             return posteriors
         return torch.mean(posteriors).item()
+
+    def eval_entropy(self, dl, device, return_all=False):
+        posteriors_log = self.eval_posterior(dl, device, return_all=True)
+        # convert log probs to probs
+        posteriors = torch.exp(posteriors_log)
+        entropy = -torch.sum(posteriors * posteriors_log, dim=1)
+        if return_all:
+            return entropy
+        return torch.mean(entropy).item()
+
+    def eval_highest_class_prob(self, dl, device, return_all=False):
+        posteriors_log = self.eval_posterior(dl, device, return_all=True)
+        # convert log probs to probs
+        posteriors = torch.exp(posteriors_log)
+        highest_prob = torch.max(posteriors, dim=1)[0]
+        if return_all:
+            return highest_prob
+        return torch.mean(highest_prob).item()
+
+    def eval_correct_class_prob(self, dl, device, return_all=False):
+        posteriors_log = self.eval_posterior(dl, device, return_all=True)
+        # convert log probs to probs
+        posteriors = torch.exp(posteriors_log)
+        # get correct class
+        labels = torch.cat([labels for _, labels in dl], dim=0)
+        correct_class_prob = posteriors[torch.arange(len(labels)), labels]
+        if return_all:
+            return correct_class_prob
+        return torch.mean(correct_class_prob).item()
 
     def eval_pred_variance(self, dl, device, return_all=False):
         self.eval()
@@ -297,26 +332,27 @@ class EinetUtils:
             return pred_vars
         return torch.mean(pred_vars).item()
 
-    def eval_pred_entropy(self, dl, device, return_all=False):
-        self.eval()
-        index = 0
-        pred_entropies = torch.zeros(len(dl.dataset))
-        with torch.no_grad():
-            for data, _ in dl:
-                data = data.to(device)
-                pred_logit = self(data)
-                pred = torch.softmax(pred_logit, dim=1)
-                pred_entropy = -torch.sum(pred * torch.log(pred), dim=1)
-                pred_entropies[index : index + len(pred_entropy)] = pred_entropy
-                index += len(pred_entropy)
-        if return_all:
-            return pred_entropies
-        return torch.mean(pred_entropies).item()
+    # def eval_pred_entropy(self, dl, device, return_all=False):
+    #     self.eval()
+    #     index = 0
+    #     pred_entropies = torch.zeros(len(dl.dataset))
+    #     with torch.no_grad():
+    #         for data, _ in dl:
+    #             data = data.to(device)
+    #             pred_logit = self(data)
+    #             pred = torch.softmax(pred_logit, dim=1)
+    #             pred_entropy = -torch.sum(pred * torch.log(pred), dim=1)
+    #             pred_entropies[index : index + len(pred_entropy)] = pred_entropy
+    #             index += len(pred_entropy)
+    #     if return_all:
+    #         return pred_entropies
+    #     return torch.mean(pred_entropies).item()
 
     def eval_dempster_shafer(self, dl, device, return_all=False):
         """
         SNGP: better for distance aware models, where
         magnitude of logits reflects distance from observed data manifold
+        https://arxiv.org/pdf/2006.10108.pdf
         """
         num_classes = self.einet.config.num_classes
         self.eval()
@@ -324,18 +360,13 @@ class EinetUtils:
         uncertainties = torch.zeros(len(dl.dataset))
         with torch.no_grad():
             for data in dl:
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
                 data = data.to(device)
                 lls = self(data)
-                # assumes negative log likelihoods
-                # not really sure if normalizing even makes sense
-                # but without, values are always 1(-) or 0(+)
-                # lls_norm = lls / torch.min(lls, dim=1)[0].unsqueeze(1)
-                lls_norm = lls - torch.mean(lls, dim=1).unsqueeze(1)
-                lls_norm = lls_norm / torch.max(torch.abs(lls_norm), dim=1)[
-                    0
-                ].unsqueeze(1)
+                posterior = self.einet.posterior(self.einet_input)
                 uncertainty = num_classes / (
-                    num_classes + torch.sum(torch.exp(lls_norm), dim=1)
+                    num_classes + torch.sum(torch.exp(posterior), dim=1)
                 )
                 uncertainties[index : index + len(uncertainty)] = uncertainty
                 index += len(uncertainty)
@@ -405,7 +436,7 @@ class EinetUtils:
             return expl_var_vals, expl_var_mpes
         return torch.abs(expl_var_mpes - expl_var_vals).mean(dim=0).cpu().numpy()
 
-    def eval_calibration(self, dl, device, n_bins=10, low_ll=None, high_ll=None):
+    def eval_calibration(self, dl, device, name, n_bins=10):
         """Computes the expected calibration error and plots the calibration curve."""
         self.eval()
 
@@ -418,7 +449,7 @@ class EinetUtils:
         confidences = torch.exp(confidences)
         # make a histogram of the confidences
         plt.hist(confidences.cpu().numpy(), bins=n_bins)
-        mlflow.log_figure(plt.gcf(), "ll_hist.png")
+        mlflow.log_figure(plt.gcf(), f"ll_hist_{name}.png")
         plt.clf()
 
         # predictions = torch.argmax(posteriors, dim=1)
@@ -479,7 +510,7 @@ class EinetUtils:
 
             return bin_confidences, bin_accuracies
 
-        def plot_calibration_curve(conf, acc, title):
+        def plot_calibration_curve(conf, acc, ece, nll, title):
             # Plot the calibration curve
             plt.plot(conf, acc, marker="o")
             plt.plot(
@@ -487,7 +518,11 @@ class EinetUtils:
             )  # Diagonal line for reference
             plt.xlabel("Mean Confidence")
             plt.ylabel("Observed Accuracy")
-            plt.title("Calibration Plot")
+            plt.title(
+                "Calibration Plot, ECE: {ece:.3f}, NLL: {nll:.3f}".format(
+                    ece=ece, nll=nll
+                )
+            )
             mlflow.log_figure(plt.gcf(), f"calibration_curve_{title}.png")
             plt.clf()
 
@@ -500,25 +535,23 @@ class EinetUtils:
             ece = ece / len(conf)
             return ece
 
-        # equal frequency binning
-        conf, acc = equal_frequency_binning(
-            confidences, predictions, labels, num_bins=n_bins
-        )
-        plot_calibration_curve(conf, acc, "equal_frequency")
-        ece_eq_freq = compute_ece(conf, acc)
-        conf, acc = equal_width_binning(
-            confidences, predictions, labels, num_bins=n_bins
-        )
-        plot_calibration_curve(conf, acc, "equal_width")
-        ece_eq_width = compute_ece(conf, acc)
-
         # the negative ll's is simply the mean output of the einet across all samples
         # output is likelihood: P(x | y_i) for each class y_i
         # taking the mean over the classes gives the marginal likelihood P(x)
         # do that for each sample and take the mean over all samples
         nll = -self.eval_ll(dl, device, return_all=False)
 
-        return ece_eq_freq, ece_eq_width, nll
+        # equal frequency binning
+        conf, acc = equal_frequency_binning(
+            confidences, predictions, labels, num_bins=n_bins
+        )
+        ece = compute_ece(conf, acc)
+        plot_calibration_curve(conf, acc, ece, nll, f"equal_frequency_{name}")
+        conf, acc = equal_width_binning(
+            confidences, predictions, labels, num_bins=n_bins
+        )
+        ece = compute_ece(conf, acc)
+        plot_calibration_curve(conf, acc, ece, nll, f"equal_width_{name}")
 
 
 class DenseResnet(nn.Module):

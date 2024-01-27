@@ -251,7 +251,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 100
+        train_params["num_epochs"] = 10
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -789,15 +789,15 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
 
     batch_sizes = dict(resnet=512)
     model_params_dense = dict(
+        num_classes=2,
         input_dim=2,
-        output_dim=2,
         num_layers=3,
         num_hidden=32,
         spec_norm_bound=0.95,
-        einet_depth=5,  # might be overwritten by optuna
+        einet_depth=5,
         einet_num_sums=20,
         einet_num_leaves=20,
-        einet_num_repetitions=5,  # might be overwritten by optuna
+        einet_num_repetitions=5,
         einet_leaf_type="Normal",
         einet_dropout=0.0,
     )
@@ -820,6 +820,7 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
     elif loss == "hybrid_high":
         train_params["lambda_v"] = 0.9
     elif loss == "hybrid_very_high":
+        # train_params["lambda_v"] = 0.95
         train_params["lambda_v"] = 0.99
     else:
         raise ValueError(
@@ -866,21 +867,21 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "hybrid",
-    "hybrid_low",
-    "generative",
-    "discriminative",
+    # "hybrid",
+    # "hybrid_low",
+    # "generative",
+    # "discriminative",
     "hybrid_high",
-    "hybrid_very_high",
-    "hybrid_very_low",
+    # "hybrid_very_high",
+    # "hybrid_very_low",
 ]
 dataset = [
     # "two-moons",
     # "dirty-mnist",
-    # "mnist-calib",
+    "mnist-calib",
     # "mnist-expl",
     # "cifar10-c-calib",
-    "cifar10-c-expl",
+    # "cifar10-c-expl",
 ]
 models = [
     # "ConvResNetSPN",
@@ -931,7 +932,7 @@ pretrained_backbones = {
 trained_models = {
     "mnist-calib": {
         # "EfficientNetSPN": "987712940205555914/b5320090ae7d4dd7a971f29207ac8097/artifacts/model",
-        "EfficientNetSPN": "764598691207333922/049c027b5cec490e8c4ace0e334617ab/artifacts/model"
+        "EfficientNetSPN": "640832573776399546/7f8def9a908b4b008038f1f1be9f87bf/artifacts/model"
     },
     "mnist-expl": {
         # "EfficientNetSPN": "764598691207333922/02852d15bd2446f5bfc021b5043f2a29/artifacts/model",
@@ -957,14 +958,14 @@ for d in dataset:
             run_two_moons(dataset, l, "einet_only", pretrained_path)
             continue
         for m in models:
-            pretrained_path = pretrained_backbones[d][m]
-            # pretrained_path = trained_models[d][m]
+            # pretrained_path = pretrained_backbones[d][m]
+            pretrained_path = trained_models[d][m]
             pretrained_path = (
                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             )
             dataset = d + "-newLeafKwargs"
-            # run_conv(dataset, l, "eval_only", m, pretrained_path)
-            run_conv(dataset, l, "einet_only", m, pretrained_path)
+            run_conv(dataset, l, "eval_only", m, pretrained_path)
+            # run_conv(dataset, l, "einet_only", m, pretrained_path)
             # run_cifar_expl(d, m, l, pretrained_path)
 
 

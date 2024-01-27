@@ -21,6 +21,7 @@ def plot_uncertainty_surface(
     ax,
     cmap=None,
     plot_train=True,
+    input_is_ll=False,
 ):
     """Visualizes the 2D uncertainty surface.
 
@@ -50,14 +51,10 @@ def plot_uncertainty_surface(
     )
     DEFAULT_N_GRID = 100
     # Normalize uncertainty for better visualization.
-    # 1. all positive
-    # if np.min(test_uncertainty) > 0:
-    #     test_uncertainty = test_uncertainty / np.max(test_uncertainty)
-    # # 2. all negative or mixed
-    # elif np.max(test_uncertainty) < 0:
-    #     # shift to positive
     test_uncertainty = test_uncertainty - np.min(test_uncertainty)
-    test_uncertainty = test_uncertainty / np.max(test_uncertainty)
+    test_uncertainty = test_uncertainty / (
+        np.max(test_uncertainty) - np.min(test_uncertainty)
+    )
 
     # Set view limits.
     ax.set_ylim(DEFAULT_Y_RANGE)
@@ -166,12 +163,12 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
 
         from ResNetSPN import DenseResNetSPN
 
-        resnet = DenseResNetSPN(**model_params)
-        mlflow.set_tag("model", resnet.__class__.__name__)
-        print(resnet)
-        resnet.to(device)
+        resnet_spn = DenseResNetSPN(**model_params)
+        mlflow.set_tag("model", resnet_spn.__class__.__name__)
+        print(resnet_spn)
+        resnet_spn.to(device)
         # it is interesting to play with lambda_v, dropout, repetition and depth
-        lowest_val_loss = resnet.start_train(
+        lowest_val_loss = resnet_spn.start_train(
             train_dl,
             valid_dl,
             device,
@@ -179,77 +176,43 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(resnet.state_dict(), "model")
+        mlflow.pytorch.log_state_dict(resnet_spn.state_dict(), "model")
 
         if train_params["num_epochs"] == 0:
             return lowest_val_loss
         # evaluate
-        resnet.eval()
-        valid_acc = resnet.eval_acc(valid_dl, device)
+        resnet_spn.eval()
+        valid_acc = resnet_spn.eval_acc(valid_dl, device)
         print("valid accuracy: ", valid_acc)
         mlflow.log_metric("valid accuracy", valid_acc)
 
+        pos_dl = DataLoader(
+            pos_examples,
+            batch_size=batch_sizes["resnet"],
+            pin_memory=False,
+            num_workers=1,
+        )
         # get LL's
-        pos_ll = resnet(torch.from_numpy(pos_examples).to(device)).mean()
+        pos_ll = resnet_spn.eval_ll(pos_dl, device)
         mlflow.log_metric("pos_ll", pos_ll)
-        neg_ll = resnet(torch.from_numpy(neg_examples).to(device)).mean()
+        neg_dl = DataLoader(
+            neg_examples,
+            batch_size=batch_sizes["resnet"],
+            pin_memory=False,
+            num_workers=1,
+        )
+        neg_ll = resnet_spn.eval_ll(neg_dl, device)
         mlflow.log_metric("neg_ll", neg_ll)
-
-        # get LL's
-        ood_ll = resnet(torch.from_numpy(ood_examples).to(device)).mean()
+        ood_dl = DataLoader(
+            ood_examples,
+            batch_size=batch_sizes["resnet"],
+            pin_memory=False,
+            num_workers=1,
+        )
+        ood_ll = resnet_spn.eval_ll(ood_dl, device)
         mlflow.log_metric("ood_ll", ood_ll)
 
-        resnet_logits = resnet(torch.from_numpy(test_examples).to(device))
-        resnet_probs_softmax = torch.nn.functional.softmax(resnet_logits, dim=1)
-        resnet_probs = resnet_probs_softmax[:, 0].cpu().detach().numpy()
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, resnet_probs, ax=ax
-        )
-
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Class Probability, SPN model")
-        mlflow.log_figure(fig, "class_probability.png")
-
-        # resnet_uncertainty = resnet_probs * (1 - resnet_probs)  # predictive variance
-        resnet_uncertainty = (
-            -torch.sum(resnet_probs_softmax * torch.log(resnet_probs_softmax), axis=1)
-            .cpu()
-            .detach()
-            .numpy()
-        )
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
-        )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Entropy, SPN Model")
-        mlflow.log_figure(fig, "predictive_entropy.png")
-
-        resnet_uncertainty = -(
-            resnet_logits.cpu().detach().numpy()[:, 0]
-        )  # log likelihood
-        print(resnet_uncertainty[:5])
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
-        )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("LL Uncertainty, SPN Model")
-        mlflow.log_figure(fig, "ll_uncertainty.png")
-
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(
-            train_examples,
-            train_labels,
-            ood_examples,
-            resnet_uncertainty,
-            ax=ax,
-            plot_train=False,
-        )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("LL Uncertainty, SPN Model")
-        mlflow.log_figure(fig, "ll_uncertainty_no_train.png")
+        del pos_dl, neg_dl, ood_dl
 
         test_dl = DataLoader(
             test_examples,
@@ -257,19 +220,90 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             pin_memory=True,
             num_workers=1,
         )
-        resnet_uncertainty = (
-            resnet.eval_dempster_shafer(test_dl, device, return_all=True)
+
+        # Visualize SPN posterior
+        posteriors = resnet_spn.eval_posterior(test_dl, device, return_all=True)
+        posteriors = torch.exp(posteriors)
+        # take the probability of class 0 as the uncertainty
+        # if p==1 -> no uncertainty, if p==0 -> high uncertainty
+        probs_class_0 = posteriors[:, 0].cpu().detach().numpy()
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, probs_class_0, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Class Probability, SPN model")
+        mlflow.log_figure(fig, "posterior_class_probability.png")
+
+        # Visualize SPN predictive entropy
+        entropy = -torch.sum(posteriors * torch.log(posteriors), axis=1)
+        entropy = entropy.cpu().detach().numpy()
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, entropy, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Predictive Entropy, SPN Model")
+        mlflow.log_figure(fig, "posterior_predictive_entropy.png")
+
+        # Visualize SPN predictive variance/uncertainty
+        # unnecessary according to fabrizio, because we have the entropy
+        variance = probs_class_0 * (1 - probs_class_0)
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, variance, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Predictive Variance, SPN Model")
+        mlflow.log_figure(fig, "posterior_predictive_variance.png")
+
+        lls = resnet_spn.eval_ll(test_dl, device, return_all=True)
+        nll = -(lls.cpu().detach().numpy())  # negative log likelihood
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, nll, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("NLL, SPN Model")
+        mlflow.log_figure(fig, "nll.png")
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples,
+            train_labels,
+            ood_examples,
+            nll,
+            ax=ax,
+            plot_train=False,
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("NLL, SPN Model")
+        mlflow.log_figure(fig, "nll_no_train.png")
+
+        dempster_shafer = (
+            resnet_spn.eval_dempster_shafer(test_dl, device, return_all=True)
             .cpu()
             .detach()
             .numpy()
         )
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, resnet_uncertainty, ax=ax
+            train_examples, train_labels, ood_examples, dempster_shafer, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Dempster Shafer, SPN Model")
         mlflow.log_figure(fig, "dempster_shafer.png")
+
+        # maximum predictive probability as in Figure 3, appendix C in https://arxiv.org/pdf/2006.10108.pdf
+        max_pred_prob = np.max(posteriors.cpu().detach().numpy(), axis=1)
+        uncertainty = 1 - 2 * np.abs(max_pred_prob - 0.5)
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, uncertainty, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Maximum Predictive Probability, SPN Model")
+        mlflow.log_figure(fig, "max_pred_prob.png")
+
         plt.close()
-        # return train_acc
         return lowest_val_loss
