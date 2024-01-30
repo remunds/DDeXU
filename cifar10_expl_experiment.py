@@ -311,15 +311,6 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         valid_ll = model.eval_ll(valid_dl, device)
         mlflow.log_metric("valid_ll", valid_ll)
 
-        # for later calibration evaluation
-        train_lls = model.eval_ll(train_dl, device, return_all=True)
-        # used for normalization when computing confidence values from log-likelihoods
-        min_ll = torch.min(train_lls)
-        max_ll = torch.max(train_lls)
-
-        del train_dl
-        del valid_dl
-
         # test with all corruption-levels
         test_levels = [0, 1, 2, 3, 4]
         print("loading test corrupted data")
@@ -353,14 +344,6 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             shuffle=False,
             pin_memory=True,
         )
-        ece_eq_freq, ece_eq_width, nll = model.eval_calibration(
-            dl, device, n_bins=20, low_ll=min_ll, high_ll=max_ll
-        )
-        mlflow.log_metric("ece_eq_freq", ece_eq_freq)
-        mlflow.log_metric("ece_eq_width", ece_eq_width)
-        mlflow.log_metric("nll", nll)
-        print("ece_eq_freq: ", ece_eq_freq)
-        print("ece_eq_width: ", ece_eq_width)
 
         # test_corrupt_levels.shape = [num_data_points, num_corruptions]
         from tqdm import tqdm
@@ -368,6 +351,8 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         eval_dict = {}
 
         for corr_idx, corruption in tqdm(enumerate(corruptions)):
+            if corr_idx > 0:
+                break
             eval_dict[corruption] = {}
             for corr_level in test_levels:
                 eval_dict[corruption][corr_level] = {}
@@ -384,9 +369,6 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
                     # pin_memory=True,
                     # num_workers=1,
                 )
-                model.einet_active = False
-                backbone_acc = model.eval_acc(dl, device)
-                eval_dict[corruption][corr_level]["backbone_acc"] = backbone_acc
                 model.einet_active = True
                 acc = model.eval_acc(dl, device)
                 eval_dict[corruption][corr_level]["acc"] = acc
@@ -398,9 +380,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
                     "expl_ll"
                 ] = expl_ll  # len: [1, num_expl_vars]
                 expl_mpe = model.explain_mpe(dl, device)
-                eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe[
-                    corr_idx
-                ].item()
+                eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe.tolist()
         mlflow.log_dict(eval_dict, "eval_dict")
 
         overall_acc = np.mean(
@@ -414,15 +394,41 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
 
         import matplotlib.pyplot as plt
 
+        plt.set_cmap("tab20")
+        cmap = plt.get_cmap("tab20")
+        colors = cmap(np.linspace(0, 1, len(corruptions)))
+
+        def create_plot(accs, expls, corruption, mode):
+            fig, ax = plt.subplots()
+            ax.set_xlabel("severity")
+            ax.set_xticks(np.array(list(range(5))) + 1)
+
+            ax.plot(accs, label="accuracy", color="red")
+            ax.set_ylabel("accuracy", color="red")
+            ax.tick_params(axis="y", labelcolor="red")
+            ax.set_ylim([0, 1])
+
+            ax2 = ax.twinx()
+            for i in range(expls.shape[1]):
+                ax2.plot(expls[:, i], label=corruptions[i], color=colors[i])
+            ax2.tick_params(axis="y")
+            ax2.set_ylabel(f"{mode} explanations")
+            if mode == "ll":
+                ax2.set_ylim([0, 100])
+            else:
+                ax2.set_ylim([0, 4])
+
+            fig.legend()
+            fig.tight_layout()
+            mlflow.log_figure(fig, f"{corruption}_expl_{mode}.png")
+            plt.close()
+
         # plot showing that with each corruption increase, acc and ll decrease
         # x-axis: corruption level, y-axis: acc/ll
         # as in calib_experiment
         for corruption in eval_dict:
-            backbone_accs = [
-                eval_dict[corruption][l]["backbone_acc"] for l in eval_dict[corruption]
-            ]
             accs = [eval_dict[corruption][l]["acc"] for l in eval_dict[corruption]]
-            lls = [eval_dict[corruption][l]["ll"] for l in eval_dict[corruption]]
+            # lls = [eval_dict[corruption][l]["ll"] for l in eval_dict[corruption]]
             # get corruption index
             corr_idx = corruptions.index(corruption)
             expl_ll = [
@@ -432,40 +438,13 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             expl_mpe = [
                 eval_dict[corruption][l]["expl_mpe"] for l in eval_dict[corruption]
             ]
+            expl_mpe = torch.tensor(expl_mpe)
+            print(expl_ll.shape)
+            print(expl_mpe.shape)
 
-            fig, ax = plt.subplots()
-            ax.set_xlabel("severity")
-            ax.set_xticks(np.array(list(range(5))) + 1)
-
-            ax.plot(accs, label="acc", color="red")
-            ax.plot(backbone_accs, label="backbone_acc", color="orange")
-            ax.set_ylabel("accuracy", color="red")
-            ax.tick_params(axis="y", labelcolor="red")
-            ax.set_ylim([0, 1])
-
-            ax2 = ax.twinx()
-            ax2.plot(lls, label="ll", color="blue")
-            # ax2.set_ylabel("log-likelihood", color="blue")
-            ax2.tick_params(axis="y", labelcolor="blue")
-
-            fig.tight_layout()
-            fig.legend()
-            mlflow.log_figure(fig, f"{corruption}.png")
-            plt.close()
-
-            # create new plot showing corruption levels on x-axis and expl-ll of all
-            # corruptions on y-axis
-            fig, ax = plt.subplots()
-            ax.set_xlabel("severity")
-            ax.set_xticks(np.array(list(range(5))) + 1)
+            create_plot(accs, expl_ll, corruption, "ll")
+            create_plot(accs, expl_mpe, corruption, "mpe")
             # expl_ll.shape = [num_levels, num_expl_vars]
-            for i in range(expl_ll.shape[1]):
-                ax.plot(expl_ll[:, i], label=corruptions[i])
-            ax.set_ylabel("expl_ll")
-            fig.tight_layout()
-            fig.legend()
-            mlflow.log_figure(fig, f"{corruption}_expl_ll.png")
-            plt.close()
 
         # plot showing corruption levels on x-axis and expl-ll/mpe of
         # current corruption on y-axis

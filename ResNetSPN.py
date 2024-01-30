@@ -165,10 +165,20 @@ class EinetUtils:
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
-                loss_v = (
-                    lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                    + (1 - lambda_v) * -output.mean()
-                )
+                # scale ll loss
+                loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target) + (
+                    1 - lambda_v
+                ) * -(output.mean() / 100)
+                # mpe_expl_vars = self.einet.sample(
+                #     evidence=self.einet_input,
+                #     marginalized_scopes=self.explaining_vars,
+                #     is_differentiable=True,
+                #     is_mpe=True,
+                # )[:, self.explaining_vars]
+                # # reconstruction loss
+                # expl_vars_vals = data[:, self.explaining_vars]
+                # mpe_reconstruction_loss = F.mse_loss(mpe_expl_vars, expl_vars_vals)
+                # loss_v = 0.001 * loss_v + 0.999 * mpe_reconstruction_loss
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
@@ -183,10 +193,9 @@ class EinetUtils:
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
-                    loss_v = (
-                        lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                        + (1 - lambda_v) * -output.mean()
-                    )
+                    loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target) + (
+                        1 - lambda_v
+                    ) * -(output.mean() / 100)
                     val_loss += loss_v.item()
                 t.set_postfix(
                     dict(
@@ -269,6 +278,40 @@ class EinetUtils:
             return lls
         return torch.mean(lls).item()
 
+    def eval_ll_unmarginalized(self, dl, device, return_all=False):
+        self.eval()
+        index = 0
+        lls = torch.zeros(len(dl.dataset), self.num_classes)
+        with torch.no_grad():
+            for data in dl:
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
+                data = data.to(device)
+                ll = self(data)
+                lls[index : index + len(ll)] = ll
+                index += len(ll)
+        if return_all:
+            return lls
+        return torch.mean(lls, dim=0).item()
+
+    def backbone_logits(self, dl, device, return_all=False):
+        self.deactivate_einet()
+        self.eval()
+        index = 0
+        logits = torch.zeros(len(dl.dataset), self.num_classes)
+        with torch.no_grad():
+            for data in dl:
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
+                data = data.to(device)
+                output = self(data)
+                logits[index : index + len(output)] = output
+                index += len(output)
+        self.activate_einet()
+        if return_all:
+            return logits
+        return torch.mean(logits, dim=0).item()
+
     def eval_posterior(self, dl, device, return_all=False):
         self.eval()
         index = 0
@@ -307,10 +350,12 @@ class EinetUtils:
     def eval_correct_class_prob(self, dl, device, return_all=False):
         posteriors_log = self.eval_posterior(dl, device, return_all=True)
         # convert log probs to probs
-        posteriors = torch.exp(posteriors_log)
+        posteriors = torch.exp(posteriors_log).to(device)
         # get correct class
-        labels = torch.cat([labels for _, labels in dl], dim=0)
-        correct_class_prob = posteriors[torch.arange(len(labels)), labels]
+        labels = torch.cat([labels for _, labels in dl], dim=0).to(device)
+        correct_class_prob = posteriors[
+            torch.arange(len(labels), device=device), labels.to(device)
+        ]
         if return_all:
             return correct_class_prob
         return torch.mean(correct_class_prob).item()
@@ -378,7 +423,7 @@ class EinetUtils:
         """
         Check each explaining variable individually.
         Returns the difference in log likelihood between the default model and the marginalized model.
-        If largely positive, the variable explains the result.
+        Use, when the explaining variables are given in the data.
         """
         ll_default = self.eval_ll(dl, device, return_all)
         explanations = []
@@ -393,22 +438,14 @@ class EinetUtils:
 
     def explain_mpe(self, dl, device, return_all=False):
         """
-        Aktuelle idee (benoetigt gegebene expl. var. daten):
-        Vergleiche MPE der expl. vars mit evidence
-        mit den tatsaechlich gegebenen Daten
-        Aussage von starken Unterschieden: "Anders als durch bisherige Distr. erwartet"
-        Weitere Idee (benoetigt keine gegebenen expl. var. daten):
-        Vergleiche MPE der expl. vars mit evidence
-        mit dem MPE der expl. vars ohne evidence
-        -> wenn hoeher: starker unterschied zu Distribution
+        Explain the explaining variables by computing their most probable explanation (MPE).
+        Use, when the explaining variables are not given in the data.
         """
-        expl_var_vals = []
         expl_var_mpes = []
         for data, _ in dl:
             data = data.to(device)
             # extract explaining vars
             exp_vars = data[:, self.explaining_vars]
-            expl_var_vals.append(exp_vars)
             # mask out explaining vars for backbone
             mask = torch.ones_like(data, dtype=torch.bool)
             mask[:, self.explaining_vars] = False
@@ -426,15 +463,13 @@ class EinetUtils:
             # extract most probable explanation of current input
             hidden = self.forward_hidden(data)
             hidden = torch.cat([exp_vars, hidden], dim=1)
-            mpe = self.einet.mpe(
+            mpe: torch.Tensor = self.einet.mpe(
                 evidence=hidden, marginalized_scopes=self.explaining_vars
             )
             expl_var_mpes.append(mpe[:, self.explaining_vars])
-        expl_var_vals = torch.cat(expl_var_vals, dim=0)
-        expl_var_mpes = torch.cat(expl_var_mpes, dim=0)
         if return_all:
-            return expl_var_vals, expl_var_mpes
-        return torch.abs(expl_var_mpes - expl_var_vals).mean(dim=0).cpu().numpy()
+            return expl_var_mpes
+        return torch.cat(expl_var_mpes, dim=0).mean(dim=0)
 
     def eval_calibration(self, dl, device, name, n_bins=10):
         """Computes the expected calibration error and plots the calibration curve."""
@@ -447,6 +482,8 @@ class EinetUtils:
         confidences, predictions = torch.max(posteriors, dim=1)
         # convert from logit to probability
         confidences = torch.exp(confidences)
+        print(len(confidences))
+
         # make a histogram of the confidences
         plt.hist(confidences.cpu().numpy(), bins=n_bins)
         mlflow.log_figure(plt.gcf(), f"ll_hist_{name}.png")
@@ -527,6 +564,10 @@ class EinetUtils:
             plt.clf()
 
         def compute_ece(conf, acc):
+            if len(conf) != len(acc) or len(conf) == 0 or len(acc) == 0:
+                raise ValueError(
+                    "Confidence and accuracy arrays have different lengths"
+                )
             ece = 0.0
             for i in range(len(conf)):
                 if acc[i] == torch.nan or conf[i] == torch.nan:
@@ -942,7 +983,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
             n_power_iterations,
             mnist,
         )
-
+        self.num_classes = num_classes
         self.explaining_vars = explaining_vars
         self.image_shape = image_shape
         self.marginalized_scopes = None

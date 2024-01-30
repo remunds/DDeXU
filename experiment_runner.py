@@ -8,6 +8,7 @@ from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evalua
 from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
+from svhn_calib_experiment import start_svhn_calib_run
 
 torch.manual_seed(0)
 # Set our tracking server uri for logging
@@ -187,7 +188,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     batch_sizes = dict(resnet=512)
     if "mnist" in dataset:
         image_shape = (1, 28, 28)
-    elif "cifar10" in dataset:
+    elif "cifar10" in dataset or "svhn" in dataset:
         image_shape = (3, 32, 32)
     else:
         raise ValueError(
@@ -214,7 +215,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.05,  # irrelevant
         num_epochs=100,
-        early_stop=5,
+        early_stop=10,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -239,10 +240,11 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
     elif training == "seperate":
-        train_params["warmup_epochs"] = 100
+        train_params["warmup_epochs"] = 10
         train_params["deactivate_backbone"] = True
+        train_params["num_epochs"] = 10
     elif training == "warmup":
-        train_params["warmup_epochs"] = 100
+        train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
     elif training == "backbone_only":
         train_params["warmup_epochs"] = 50
@@ -251,7 +253,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 10
+        train_params["num_epochs"] = 50
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -330,6 +332,16 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
                 model_params.copy(),
                 train_params.copy(),
                 None,
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+    elif "svhn-c-calib" in dataset:
+        try:
+            start_svhn_calib_run(
+                run_name, batch_sizes, model_params, train_params, None
             )
         except Exception as e:
             print(e)
@@ -817,11 +829,16 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
         train_params["lambda_v"] = 0.1
     elif loss == "hybrid_very_low":
         train_params["lambda_v"] = 0.01
+    elif loss == "hybrid_mid_high":
+        train_params["lambda_v"] = 0.8
     elif loss == "hybrid_high":
         train_params["lambda_v"] = 0.9
     elif loss == "hybrid_very_high":
-        # train_params["lambda_v"] = 0.95
         train_params["lambda_v"] = 0.99
+    elif loss == "hybrid_super_high":
+        train_params["lambda_v"] = 0.999
+    elif loss == "hybrid_super_super_high":
+        train_params["lambda_v"] = 0.9999
     else:
         raise ValueError(
             "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
@@ -867,26 +884,30 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "hybrid",
-    # "hybrid_low",
     # "generative",
-    # "discriminative",
-    "hybrid_high",
-    # "hybrid_very_high",
     # "hybrid_very_low",
+    # "hybrid_low",
+    "hybrid",
+    # "hybrid_high",
+    # "hybrid_very_high",
+    # "discriminative",
+    # "hybrid_super_super_high",
+    # "hybrid_super_high",
+    # "hybrid_mid_high",
 ]
 dataset = [
     # "two-moons",
     # "dirty-mnist",
-    "mnist-calib",
+    # "mnist-calib",
     # "mnist-expl",
     # "cifar10-c-calib",
     # "cifar10-c-expl",
+    "svhn-c-calib"
 ]
 models = [
     # "ConvResNetSPN",
-    # "ConvResNetDDU",
     "EfficientNetSPN",
+    # "ConvResNetDDU",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -904,6 +925,7 @@ pretrained_backbones = {
         "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
         "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
         "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+        "EfficientNetSPN": "713846316953751186/ec48857b51a440dfbed105dcfc03e5e0/artifacts/model",
     },
     "dirty-mnist": {
         # val-acc: 0.8954
@@ -941,6 +963,22 @@ trained_models = {
     "cifar10-c-expl": {
         "EfficientNetSPN": "718553087440563724/d7f46d12439e4ac48a4284303ee92d40/artifacts/model",
     },
+    "cifar10-c-calib": {
+        "EfficientNetSPN": "232957915879295399/2a8506542b784512bc5ce588011ed044/artifacts/model"
+    },
+    "dirty-mnist": {
+        "hybrid": {
+            "EfficientNetSPN": "627860869402028747/9765a8e3d04a4b66b0ba854dbb9c03a4/artifacts/model",
+            "ConvResNetDDU": "627860869402028747/a343319ac4db4a388f1dfef99fdf1789/artifacts/model",
+        },
+        "hybrid_low": {
+            "ConvResNetDDU": "627860869402028747/becd4bd9a3824ebbbe09d9ce2862b6d1/artifacts/model",
+            "EfficientNetSPN": "627860869402028747/85ab40cb132640828b499f3008cd4415/artifacts/model",
+        },
+    },
+    "svhn-c-calib": {
+        "EfficientNetSPN": "553153056869580546/19585eabdd51448baa89e7aacd18b80c/artifacts/model",
+    },
 }
 
 # pretrained_path = pretrained_backbones["two-moons"]
@@ -960,13 +998,15 @@ for d in dataset:
         for m in models:
             # pretrained_path = pretrained_backbones[d][m]
             pretrained_path = trained_models[d][m]
+            # pretrained_path = trained_models[d][l][m]
             pretrained_path = (
                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             )
-            dataset = d + "-newLeafKwargs"
-            run_conv(dataset, l, "eval_only", m, pretrained_path)
-            # run_conv(dataset, l, "einet_only", m, pretrained_path)
-            # run_cifar_expl(d, m, l, pretrained_path)
+            dataset = d
+            # run_conv(dataset, l, "seperate", m, pretrained_path)
+            # run_conv(dataset, l, "eval_only", m, pretrained_path)
+            run_conv(dataset, l, "einet_only", m, pretrained_path)
+            # run_conv(dataset, l, "seperate", m)
 
 
 # path = (

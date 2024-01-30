@@ -197,18 +197,26 @@ def mnist_expl_qualitative_evaluation(model, device):
         batch_size=1,
     )
     expl_ll = model.explain_ll(dl, device, True)
+    expl_mpe = model.explain_mpe(dl, device, True)
 
-    for i, img in enumerate(imgs):
-        expl = img[:3]
-        img = img[3:]
+    def create_image(explaining_vars, explanations, img, mode):
         # plot image, title contains explanations
         fig, ax = plt.subplots()
         ax.imshow(img.reshape(28, 28), cmap="gray")
         ax.set_title(
-            f"rot: {expl_ll[i][0]:.3f}, cut: {expl_ll[i][1]:.3f}, noise: {expl_ll[i][2]:.3f}"
+            f"rot: {explanations[0]:.3f}, cut: {explanations[1]:.3f}, noise: {explanations[2]:.3f}"
         )
-        mlflow.log_figure(fig, f"img_{expl[0]}_{expl[1]}_{expl[2]}.png")
+        mlflow.log_figure(
+            fig,
+            f"img_{explaining_vars[0]}_{explaining_vars[1]}_{explaining_vars[2]}_{mode}.png",
+        )
         plt.close()
+
+    for i, img in enumerate(imgs):
+        expl = img[:3]
+        img = img[3:]
+        create_image(expl, expl_ll[i], img, "ll")
+        create_image(expl, expl_mpe[i][0].tolist(), img, "mpe")
 
 
 def mnist_expl_manual_evaluation(model_params, path, device):
@@ -302,25 +310,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         rot, cut, nois = get_manipulations(mnist_ds, highest_severity=highest_severity)
         train_ds = manipulate_data(mnist_ds.data, rot, cut, nois, seperated=False)
 
-        # # plot original
-        # import matplotlib.pyplot as plt
-
-        # image = mnist_ds.data[0].reshape(28, 28)
-        # fig, ax = plt.subplots()
-        # ax.imshow(image, cmap="gray")
-        # ax.set_title(f"label: {mnist_ds.targets[0]}")
-        # mlflow.log_figure(fig, "original.png")
-
-        # # show first image
-
-        # image = train_ds[0].reshape(28, 28)
-        # fig, ax = plt.subplots()
-        # ax.imshow(image, cmap="gray")
-        # ax.set_title(
-        #     f"label: {mnist_ds.targets[0]}, rot: {rot[0]}, cut: {cut[0]}, noise: {nois[0]}"
-        # )
-        # mlflow.log_figure(fig, "manipulated.png")
-
         manipulations = torch.stack([rot, cut, nois], dim=1)
         # add rot, cut, noise in front of each image in train_ds
         train_ds = torch.cat([manipulations, train_ds], dim=1)
@@ -345,15 +334,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             pin_memory=True,
             num_workers=2,
         )
-
-        # plot first 5 images
-        for i in range(5):
-            fig, ax = plt.subplots()
-            ax.imshow(train_ds[i][0][3:].reshape(28, 28), cmap="gray")
-            ax.set_title(
-                f"label: {train_ds[i][1]}, rot: {train_ds[i][0][0]}, cut: {train_ds[i][0][1]}, noise: {train_ds[i][0][2]}"
-            )
-            mlflow.log_figure(fig, f"manipulated_{i}.png")
 
         # create model
         model_name = model_params["model"]
@@ -428,8 +408,6 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
         # evaluate
         model.eval()
 
@@ -446,6 +424,9 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
 
         del train_dl
         del valid_dl
+
+        # qualitative evaluation
+        mnist_expl_qualitative_evaluation(model, device)
 
         # for test, manipulate all separately
         rot, cut, nois = get_manipulations(test_ds)
@@ -496,24 +477,16 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             ll = model.eval_ll(test_dl_rot, device)
             expl_ll = model.explain_ll(test_dl_rot, device)
             expl_mpe = model.explain_mpe(test_dl_rot, device)
+            # convert to list
+            expl_mpe = expl_mpe.tolist()
             if "rotation" not in eval_dict:
                 eval_dict["rotation"] = {}
             eval_dict["rotation"][severity] = {
                 "acc": acc,
                 "ll": ll,
-                # "expl_ll": expl_ll[0],
                 "expl_ll": expl_ll,
-                "expl_mpe": expl_mpe[0].item(),
+                "expl_mpe": expl_mpe,
             }
-            # plot first image
-            image = test_ds_rot_s[0][0][3:].reshape(28, 28)
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap="gray")
-            ax.set_title(
-                f"label: {test_ds_rot_s[0][1]}, rot: {test_ds_rot_s[0][0][0]}, cut: {test_ds_rot_s[0][0][1]}, noise: {test_ds_rot_s[0][0][2]}"
-            )
-            mlflow.log_figure(fig, f"rotation_{severity}.png")
-            plt.close()
 
             test_ds_cutoff_s = TensorDataset(
                 cut_ds[prev_s:s], test_ds.targets[prev_s:s]
@@ -521,28 +494,19 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             test_dl_cutoff = DataLoader(
                 test_ds_cutoff_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
-            # plot first image
-            image = test_ds_cutoff_s[0][0][3:].reshape(28, 28)
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap="gray")
-            ax.set_title(
-                f"label: {test_ds_cutoff_s[0][1]}, rot: {test_ds_cutoff_s[0][0][0]}, cut: {test_ds_cutoff_s[0][0][1]}, noise: {test_ds_cutoff_s[0][0][2]}"
-            )
-            mlflow.log_figure(fig, f"cutoff_{severity}.png")
-            plt.close()
 
             acc = model.eval_acc(test_dl_cutoff, device)
             ll = model.eval_ll(test_dl_cutoff, device)
             expl_ll = model.explain_ll(test_dl_cutoff, device)
             expl_mpe = model.explain_mpe(test_dl_cutoff, device)
+            expl_mpe = expl_mpe.tolist()
             if "cutoff" not in eval_dict:
                 eval_dict["cutoff"] = {}
             eval_dict["cutoff"][severity] = {
                 "acc": acc,
                 "ll": ll,
-                # "expl_ll": expl_ll[1],
                 "expl_ll": expl_ll,
-                "expl_mpe": expl_mpe[1].item(),
+                "expl_mpe": expl_mpe,
             }
 
             test_ds_noise_s = TensorDataset(
@@ -552,28 +516,18 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 test_ds_noise_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
 
-            # plot first image
-            image = test_ds_noise_s[0][0][3:].reshape(28, 28)
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap="gray")
-            ax.set_title(
-                f"label: {test_ds_noise_s[0][1]}, rot: {test_ds_noise_s[0][0][0]}, cut: {test_ds_noise_s[0][0][1]}, noise: {test_ds_noise_s[0][0][2]}"
-            )
-            mlflow.log_figure(fig, f"noise_{severity}.png")
-            plt.close()
-
             acc = model.eval_acc(test_dl_noise, device)
             ll = model.eval_ll(test_dl_noise, device)
             expl_ll = model.explain_ll(test_dl_noise, device)
             expl_mpe = model.explain_mpe(test_dl_noise, device)
+            expl_mpe = expl_mpe.tolist()
             if "noise" not in eval_dict:
                 eval_dict["noise"] = {}
             eval_dict["noise"][severity] = {
                 "acc": acc,
                 "ll": ll,
-                # "expl_ll": expl_ll[2],
                 "expl_ll": expl_ll,
-                "expl_mpe": expl_mpe[2].item(),
+                "expl_mpe": expl_mpe,
             }
             prev_s = s
 
@@ -600,16 +554,40 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         # x axis: severity
         # y axis: acc, ll, var, entropy
 
-        # TODO: add all ll-expl curves of all variables
-        # this shows that only one explanation makes sense here!
+        # deactivate grid in plots
+        plt.grid(False)
+        plt.rcParams["axes.grid"] = False
+
+        def create_expl_plot(corruption, mode, expl):
+            fig, ax = plt.subplots()
+
+            ax.set_xlabel("severity")
+            ax.set_xticks(np.array(list(range(5))) + 1)
+
+            ax.plot(accs, label="accuracy", color="red")
+            ax.set_ylabel("accuracy", color="red")
+            ax.tick_params(axis="y", labelcolor="red")
+            ax.set_ylim([0, 1])
+            # ax2.set_ylim([0, 1])
+
+            ax2 = ax.twinx()
+            expl_tensor = torch.tensor(expl)
+            ax2.plot(expl_tensor[:, 0], label=f"{mode} expl rot", color="green")
+            ax2.plot(expl_tensor[:, 1], label=f"{mode} expl cut", color="purple")
+            ax2.plot(expl_tensor[:, 2], label=f"{mode} expl noise", color="orange")
+            ax2.tick_params(axis="y")
+            ax2.set_ylabel(f"{mode} explanations")
+            ax2.set_ylim([0, 20])
+
+            fig.tight_layout()
+            fig.legend(loc="upper left")
+            mlflow.log_figure(fig, f"{corruption}_{mode}_expl.png")
+            plt.close()
 
         for m in ["rotation", "cutoff", "noise"]:
             accs = [
                 eval_dict[m][severity]["acc"]
                 for severity in sorted(eval_dict[m].keys())
-            ]
-            lls = [
-                eval_dict[m][severity]["ll"] for severity in sorted(eval_dict[m].keys())
             ]
             ll_expl = [
                 eval_dict[m][severity]["expl_ll"]
@@ -619,40 +597,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict[m][severity]["expl_mpe"]
                 for severity in sorted(eval_dict[m].keys())
             ]
-            fig, ax = plt.subplots()
-
-            ax.set_xlabel("severity")
-            ax.set_xticks(np.array(list(range(5))) + 1)
-
-            ax.plot(accs, label="acc", color="red")
-            ax.set_ylabel("accuracy", color="red")
-            ax.tick_params(axis="y", labelcolor="red")
-            ax.set_ylim([0, 1])
-
-            ax2 = ax.twinx()
-            ax2.plot(lls, label="ll", color="blue")
-            ax2.tick_params(axis="y", labelcolor="blue")
-            # ax2.set_ylim([0, 1])
-
-            ax3 = ax.twinx()
-            # TODO: cannot access these elements since its a list of list not tensor :(
-            ll_expl = torch.tensor(ll_expl)
-            ax3.plot(ll_expl[:, 0], label="ll expl rot", color="darkgreen")
-            ax3.plot(ll_expl[:, 1], label="ll expl cut", color="mediumseagreen")
-            ax3.plot(ll_expl[:, 2], label="ll expl noise", color="lime")
-            # ax3.set_ylabel("predictive variance", color="green")
-            ax3.tick_params(axis="y", labelcolor="green")
-
-            ax4 = ax.twinx()
-            ax4.plot(mpe_expl, label="mpe expl", color="orange")
-            # ax4.set_ylabel("predictive entropy", color="orange")
-            ax4.tick_params(axis="y", labelcolor="orange")
-
-            fig.tight_layout()
-            fig.legend()
-            mlflow.log_figure(fig, f"{m}.png")
-            plt.close()
-
-        mnist_expl_qualitative_evaluation(model, device)
+            create_expl_plot(m, "ll", ll_expl)
+            create_expl_plot(m, "mpe", mpe_expl)
 
         return lowest_val_loss

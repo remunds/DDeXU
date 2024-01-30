@@ -6,68 +6,60 @@ import mlflow
 
 
 dataset_dir = "/data_docker/datasets/"
-cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
-cifar10_c_path = "CIFAR-10-C"
-cifar10_c_path_complete = dataset_dir + cifar10_c_path
+svhn_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
+svhn_c_path = "CIFAR-10-C"
+svhn_c_path_complete = dataset_dir + svhn_c_path
 
 
 def load_datasets():
-    # download cifar10-c
-    if not os.path.exists(cifar10_c_path_complete + ".tar"):
-        print("Downloading CIFAR-10-C...")
-        os.system(f"wget {cifar10_c_url} -O {cifar10_c_path_complete}")
+    # TODO
+    # download svhn-c
+    if not os.path.exists(svhn_c_path_complete + ".tar"):
+        print("Downloading svhn-c...")
+        os.system(f"wget {svhn_c_url} -O {svhn_c_path_complete}")
 
-        print("Extracting CIFAR-10-C...")
-        os.system(f"tar -xvf {cifar10_c_path_complete}.tar")
+        print("Extracting svhn-c...")
+        os.system(f"tar -xvf {svhn_c_path_complete}.tar")
 
         print("Done!")
 
-    # get normal cifar-10
-    from torchvision.datasets import CIFAR10
+    # get normal svhn
+    from torchvision.datasets import SVHN
     from torchvision import transforms
 
-    train_transformer = transforms.Compose(
-        [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
-        ]
-    )
-    test_transformer = transforms.Compose(
+    svhn_transformer = transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
             transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
         ]
     )
 
-    train_ds = CIFAR10(
-        root=dataset_dir + "cifar10",
+    train_ds = SVHN(
+        root=dataset_dir + "svhn",
         download=True,
-        train=True,
-        transform=train_transformer,
+        split="train",
+        transform=svhn_transformer,
     )
     train_ds, valid_ds = torch.utils.data.random_split(
-        train_ds, [45000, 5000], generator=torch.Generator().manual_seed(0)
+        train_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
     )
-    test_ds = CIFAR10(
-        root=dataset_dir + "cifar10",
+    test_ds = SVHN(
+        root=dataset_dir + "svhn",
         download=True,
-        train=False,
-        transform=test_transformer,
+        split="test",
+        transform=svhn_transformer,
     )
 
-    return train_ds, valid_ds, test_ds, test_transformer
+    return train_ds, valid_ds, test_ds, svhn_transformer
 
 
-def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, trial):
+def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
 
-        ckpt_dir = f"/data_docker/ckpts/cifar10-c_calib/{run_name}/"
+        ckpt_dir = f"/data_docker/ckpts/svhn-c_calib/{run_name}/"
         mlflow.log_param("ckpt_dir", ckpt_dir)
 
         # log all params
@@ -76,7 +68,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         mlflow.log_params(train_params)
 
         # load datasets
-        train_ds, valid_ds, test_ds, test_transformer = load_datasets()
+        train_ds, valid_ds, test_ds, svhn_transformer = load_datasets()
 
         train_dl = DataLoader(
             train_ds,
@@ -178,13 +170,6 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         model.eval()
         eval_dict = {}
 
-        # eval resnet
-        # model.einet_active = False
-        # train_acc = model.eval_acc(train_dl, device)
-        # mlflow.log_metric("train accuracy resnet", train_acc)
-        # test_acc = model.eval_acc(test_dl, device)
-        # mlflow.log_metric("test accuracy resnet", test_acc)
-
         # eval einet
         model.einet_active = True
         train_acc = model.eval_acc(train_dl, device)
@@ -203,8 +188,8 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # random noise baseline
         random_data = np.random.rand(10000, 32, 32, 3)
-        random_data = torch.stack([test_transformer(img) for img in random_data], dim=0)
-        random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.targets))
+        random_data = torch.stack([svhn_transformer(img) for img in random_data], dim=0)
+        random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.labels))
         random_dl = DataLoader(
             random_ds,
             batch_size=batch_sizes["resnet"],
@@ -218,6 +203,13 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         mlflow.log_metric("random_ll", random_ll)
         random_pred_entropy = model.eval_entropy(random_dl, device)
         mlflow.log_metric("random_entropy", random_pred_entropy)
+
+        # evaluate calibration
+        print("evaluating calibration")
+        model.eval_calibration(test_dl, device, name="svhn", n_bins=20)
+        print("done evaluating calibration")
+        exit()
+        # TODO
 
         # train: 50k, 32, 32, 3
         # test: 10k, 32, 32, 3
@@ -247,29 +239,27 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         from tqdm import tqdm
 
         print("loading all corrupted data")
-        cifar10_c_ds = torch.zeros((10000 * len(corruptions) * 5, 32 * 32 * 3))
+        svhn_c_ds = torch.zeros((10000 * len(corruptions) * 5, 32 * 32 * 3))
         index = 0
         for corruption in tqdm(corruptions):
-            curr_cifar10 = np.load(f"{cifar10_c_path_complete}/{corruption}.npy")
-            curr_cifar10 = torch.stack(
-                [test_transformer(img) for img in curr_cifar10], dim=0
-            )
-            cifar10_c_ds[index : index + 10000 * 5] = curr_cifar10
+            curr_svhn = np.load(f"{svhn_c_path_complete}/{corruption}.npy")
+            curr_svhn = torch.stack([test_transformer(img) for img in curr_svhn], dim=0)
+            svhn_c_ds[index : index + 10000 * 5] = curr_svhn
             index += 10000 * 5
         targets = torch.cat(
             [torch.tensor(test_ds.targets) for _ in range(len(corruptions) * 5)], dim=0
         )
 
-        print("shapes of corrupted stuff: ", cifar10_c_ds.shape, targets.shape)
-        cifar10_c_ds = list(
+        print("shapes of corrupted stuff: ", svhn_c_ds.shape, targets.shape)
+        svhn_c_ds = list(
             zip(
-                cifar10_c_ds.to(dtype=torch.float32),
+                svhn_c_ds.to(dtype=torch.float32),
                 targets.reshape(-1),
             )
         )
 
-        cifar10_c_dl = DataLoader(
-            cifar10_c_ds,
+        svhn_c_dl = DataLoader(
+            svhn_c_ds,
             batch_size=batch_sizes["resnet"],
             shuffle=False,
             pin_memory=True,
@@ -278,20 +268,20 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # evaluate calibration
         print("evaluating calibration")
-        model.eval_calibration(cifar10_c_dl, device, name="cifar10-c", n_bins=20)
+        model.eval_calibration(svhn_c_dl, device, name="svhn-c", n_bins=20)
         print("done evaluating calibration")
 
-        del cifar10_c_ds, cifar10_c_dl
+        del svhn_c_ds, svhn_c_dl
 
         # iterate over all corruptions, load dataset, evaluate
         for corruption in tqdm(corruptions):
             # load dataset
-            data = np.load(f"{cifar10_c_path_complete}/{corruption}.npy")
+            data = np.load(f"{svhn_c_path_complete}/{corruption}.npy")
             eval_dict[corruption] = {}
             # iterate over severity levels
             for severity in range(5):
                 current_data = data[severity * 10000 : (severity + 1) * 10000]
-                # transform with cifar10_transformer
+                # transform with svhn_transformer
                 current_data = torch.stack(
                     [test_transformer(img) for img in current_data], dim=0
                 )

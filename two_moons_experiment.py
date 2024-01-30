@@ -238,6 +238,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         # Visualize SPN predictive entropy
         entropy = -torch.sum(posteriors * torch.log(posteriors), axis=1)
         entropy = entropy.cpu().detach().numpy()
+        print("entropy: ", entropy[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, entropy, ax=ax
@@ -249,6 +250,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         # Visualize SPN predictive variance/uncertainty
         # unnecessary according to fabrizio, because we have the entropy
         variance = probs_class_0 * (1 - probs_class_0)
+        print("variance: ", variance[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, variance, ax=ax
@@ -296,7 +298,9 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
 
         # maximum predictive probability as in Figure 3, appendix C in https://arxiv.org/pdf/2006.10108.pdf
         max_pred_prob = np.max(posteriors.cpu().detach().numpy(), axis=1)
+        print("max posterior: ", max_pred_prob[:5])
         uncertainty = 1 - 2 * np.abs(max_pred_prob - 0.5)
+        print("uncert max posterior: ", uncertainty[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, uncertainty, ax=ax
@@ -304,6 +308,47 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         plt.colorbar(pcm, ax=ax)
         plt.title("Maximum Predictive Probability, SPN Model")
         mlflow.log_figure(fig, "max_pred_prob.png")
+
+        # Test epistemic as in DDU (p(x)) (for me: mean(exp(ll))) with ll = log(p(x|y)
+        # use logsumexp trick to avoid numerical issues
+        lls = resnet_spn.eval_ll_unmarginalized(test_dl, device, return_all=True)
+        lls_lsexp = torch.logsumexp(lls, axis=1)
+        p_z_y0 = torch.exp(lls[:, 0] - lls_lsexp)
+        p_z_y1 = torch.exp(lls[:, 1] - lls_lsexp)
+        p_z = p_z_y0 * 0.5 + p_z_y1 * 0.5  # density of embedding z
+        epistemic = p_z.cpu().detach().numpy()
+        print("density p(z): ", epistemic[:5])
+        print("min density p(z): ", np.min(epistemic))
+        print("max density p(z): ", np.max(epistemic))
+
+        # uncertainty = 1 - 2 * np.abs(epistemic - 0.5)
+        # print("uncert density: ", uncertainty[:5])
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples,
+            train_labels,
+            ood_examples,
+            # uncertainty,
+            epistemic,
+            ax=ax,
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Epistemic Uncertainty, SPN Model")
+        mlflow.log_figure(fig, "epistemic.png")
+
+        # Test aleatoric as in DDU entropy of softmax
+        logits = resnet_spn.backbone_logits(test_dl, device, return_all=True)
+        probs = torch.softmax(logits, dim=1)
+        aleatoric = -torch.sum(probs * torch.log(probs), axis=1).cpu().detach().numpy()
+        print(aleatoric)
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples, train_labels, ood_examples, aleatoric, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Aleatoric Uncertainty, SPN Model")
+        mlflow.log_figure(fig, "aleatoric.png")
 
         plt.close()
         return lowest_val_loss

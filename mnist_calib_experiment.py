@@ -359,8 +359,8 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             ll = model.eval_ll(test_dl_rot, device)
             entropy = model.eval_entropy(test_dl_rot, device)
             highest_class_prob = model.eval_highest_class_prob(test_dl_rot, device)
-            correct_class_prob = model.eval_correct_class_prob(test_dl_rot, device)
-            dempster_shafer = model.eval_dempster_shafer(test_dl_rot, device)
+            # correct_class_prob = model.eval_correct_class_prob(test_dl_rot, device)
+            # dempster_shafer = model.eval_dempster_shafer(test_dl_rot, device)
 
             if "rotation" not in eval_dict:
                 eval_dict["rotation"] = {}
@@ -370,8 +370,8 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 "ll": ll,
                 "entropy": entropy,
                 "highest_class_prob": highest_class_prob,
-                "correct_class_prob": correct_class_prob,
-                "dempster_shafer": dempster_shafer,
+                # "correct_class_prob": correct_class_prob,
+                # "dempster_shafer": dempster_shafer,
             }
 
             test_ds_cutoff_s = TensorDataset(
@@ -426,7 +426,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             ll = model.eval_ll(test_dl_noise, device)
             entropy = model.eval_entropy(test_dl_noise, device)
             highest_class_prob = model.eval_highest_class_prob(test_dl_noise, device)
-            correct_class_prob = model.eval_correct_class_prob(test_dl_noise, device)
+            # correct_class_prob = model.eval_correct_class_prob(test_dl_noise, device)
             # dempster_shafer = model.eval_dempster_shafer(test_dl_noise, device)
 
             if "noise" not in eval_dict:
@@ -437,7 +437,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 "ll": ll,
                 "entropy": entropy,
                 "highest_class_prob": highest_class_prob,
-                "correct_class_prob": correct_class_prob,
+                # "correct_class_prob": correct_class_prob,
                 # "dempster_shafer": dempster_shafer,
             }
 
@@ -480,13 +480,13 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 for severity in eval_dict[m]
             ]
         )
-        correct_class_prob = np.mean(
-            [
-                eval_dict[m][severity]["correct_class_prob"]
-                for m in eval_dict
-                for severity in eval_dict[m]
-            ]
-        )
+        # correct_class_prob = np.mean(
+        #     [
+        #         eval_dict[m][severity]["correct_class_prob"]
+        #         for m in eval_dict
+        #         for severity in eval_dict[m]
+        #     ]
+        # )
         # dempster_shafer = np.mean(
         #     [
         #         eval_dict[m][severity]["dempster_shafer"]
@@ -500,7 +500,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
         mlflow.log_metric("manip_ll", ll)
         mlflow.log_metric("manip_entropy", entropy)
         mlflow.log_metric("manip_highest_class_prob", highest_class_prob)
-        mlflow.log_metric("manip_correct_class_prob", correct_class_prob)
+        # mlflow.log_metric("manip_correct_class_prob", correct_class_prob)
         # mlflow.log_metric("manip_dempster_shafer", dempster_shafer)
 
         # create plot for each corruption
@@ -527,10 +527,10 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 eval_dict[m][severity]["highest_class_prob"]
                 for severity in sorted(eval_dict[m].keys())
             ]
-            correct_class_probs = [
-                eval_dict[m][severity]["correct_class_prob"]
-                for severity in sorted(eval_dict[m].keys())
-            ]
+            # correct_class_probs = [
+            #     eval_dict[m][severity]["correct_class_prob"]
+            #     for severity in sorted(eval_dict[m].keys())
+            # ]
             # dempster_shafers = [
             #     eval_dict[m][severity]["dempster_shafer"]
             #     for severity in sorted(eval_dict[m].keys())
@@ -541,8 +541,8 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             ax.set_xlabel("severity")
             ax.set_xticks(np.array(list(range(5))) + 1)
 
-            ax.plot(backbone_acc, label="backbone_acc", color="red")
-            ax.plot(einet_acc, label="einet_acc", color="orange")
+            ax.plot(backbone_acc, label="backbone acc", color="red")
+            ax.plot(einet_acc, label="einet acc", color="orange")
             ax.set_ylabel("accuracy", color="red")
             ax.tick_params(axis="y", labelcolor="red")
             ax.set_ylim([0, 1])
@@ -554,23 +554,23 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             # ax2.set_ylim([0, 1])
 
             ax3 = ax.twinx()
-            ax3.plot(ents, label="pred entropy", color="green")
+            ax3.plot(ents, label="entropy", color="green")
             ax3.tick_params(axis="y", labelcolor="green")
 
             ax4 = ax.twinx()
             ax4.plot(highest_class_probs, label="highest class prob", color="purple")
             ax4.tick_params(axis="y", labelcolor="purple")
 
-            ax5 = ax.twinx()
-            ax5.plot(correct_class_probs, label="correct class prob", color="pink")
-            ax5.tick_params(axis="y", labelcolor="pink")
+            # ax5 = ax.twinx()
+            # ax5.plot(correct_class_probs, label="correct class prob", color="pink")
+            # ax5.tick_params(axis="y", labelcolor="pink")
 
             # ax6 = ax.twinx()
             # ax6.plot(dempster_shafers, label="dempster shafer", color="black")
             # ax6.tick_params(axis="y", labelcolor="black")
 
+            fig.legend(loc="upper left")
             fig.tight_layout()
-            fig.legend()
             mlflow.log_figure(fig, f"{m}.png")
             plt.close()
 
