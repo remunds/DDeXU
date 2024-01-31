@@ -48,11 +48,11 @@ class EinetUtils:
                 self.load(pretrained_path)
             else:
                 self.load(pretrained_path, backbone_only=True)
-            self.deactivate_einet()
+            self.deactivate_uncert_head()
             val_acc = self.eval_acc(dl_valid, device)
             print(f"pretrained backbone validation accuracy: {val_acc}")
             mlflow.log_metric(key="pretrained_backbone_val_acc", value=val_acc)
-            self.activate_einet(deactivate_backbone)
+            self.activate_uncert_head(deactivate_backbone)
             val_acc = self.eval_acc(dl_valid, device)
             print(f"pretrained model validation accuracy: {val_acc}")
             mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
@@ -60,7 +60,7 @@ class EinetUtils:
                 return 0.0
 
         self.train()
-        self.deactivate_einet()
+        self.deactivate_uncert_head()
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
         lr_schedule_backbone = None
         if (
@@ -141,7 +141,7 @@ class EinetUtils:
             self.load(checkpoint_dir + "checkpoint.pt")
 
         # train einet (and optionally resnet jointly)
-        self.activate_einet(deactivate_backbone)
+        self.activate_uncert_head(deactivate_backbone)
         if deactivate_backbone:
             optimizer = torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
         else:
@@ -295,7 +295,7 @@ class EinetUtils:
         return torch.mean(lls, dim=0).item()
 
     def backbone_logits(self, dl, device, return_all=False):
-        self.deactivate_einet()
+        self.deactivate_uncert_head()
         self.eval()
         index = 0
         logits = torch.zeros(len(dl.dataset), self.num_classes)
@@ -307,7 +307,7 @@ class EinetUtils:
                 output = self(data)
                 logits[index : index + len(output)] = output
                 index += len(output)
-        self.activate_einet()
+        self.activate_uncert_head()
         if return_all:
             return logits
         return torch.mean(logits, dim=0).item()
@@ -482,6 +482,7 @@ class EinetUtils:
         confidences, predictions = torch.max(posteriors, dim=1)
         # convert from logit to probability
         confidences = torch.exp(confidences)
+        print(confidences[:5])
 
         # make a histogram of the confidences
         plt.hist(confidences.cpu().numpy(), bins=n_bins)
@@ -683,7 +684,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         super().__init__(**kwargs)
         self.einet = self.make_einet_output_layer()
 
-    def activate_einet(self, deactivate_backbone=True):
+    def activate_uncert_head(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
@@ -697,7 +698,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         for param in self.einet.parameters():
             param.requires_grad = True
 
-    def deactivate_einet(self):
+    def deactivate_uncert_head(self):
         """
         Deactivates the einet output layer for first stage training.
         """
@@ -848,7 +849,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
             512 * block.expansion + len(explaining_vars), num_classes
         )
 
-    def activate_einet(self, deactivate_backbone=True):
+    def activate_uncert_head(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
@@ -862,7 +863,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
         for param in self.einet.parameters():
             param.requires_grad = True
 
-    def deactivate_einet(self):
+    def deactivate_uncert_head(self):
         """
         Deactivates the einet output layer for first stage training.
         """
@@ -1000,7 +1001,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
             512 * block.expansion + len(explaining_vars), num_classes
         )
 
-    def activate_einet(self, deactivate_backbone=True):
+    def activate_uncert_head(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
@@ -1014,7 +1015,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
         for param in self.einet.parameters():
             param.requires_grad = True
 
-    def deactivate_einet(self):
+    def deactivate_uncert_head(self):
         """
         Deactivates the einet output layer for first stage training.
         """
@@ -1505,7 +1506,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         replace_layers_rec(model)
         return model
 
-    def activate_einet(self, deactivate_backbone=True):
+    def activate_uncert_head(self, deactivate_backbone=True):
         """
         Activates the einet output layer for second stage training and inference.
         """
@@ -1519,7 +1520,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         for param in self.einet.parameters():
             param.requires_grad = True
 
-    def deactivate_einet(self):
+    def deactivate_uncert_head(self):
         """
         Deactivates the einet output layer for first stage training.
         """
@@ -1596,3 +1597,216 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.backbone.classifier(x)  # default classifier
+
+
+from gmm_utils import gmm_fit, gmm_get_logits
+
+
+class GMMUtils:
+    def activate_uncert_head(self, deactivate_backbone=True):
+        self.gmm_active = True
+
+    def deactivate_uncert_head(self):
+        self.gmm_active = False
+
+    def fit_gmm(self, dl, device):
+        """Fit gmm after EfficientNet has been trained."""
+        embeddings = []
+        targets = []
+        with torch.no_grad():
+            for data, target in dl:
+                target = target.type(torch.LongTensor)
+                data, target = data.to(device), target.to(device)
+                out = self(data)
+                embeddings.append(self.hidden)
+                targets.append(target)
+
+        embeddings = torch.cat(embeddings, dim=0).to(device)
+        targets = torch.cat(targets, dim=0).to(device)
+        self.gmm, jitter = gmm_fit(embeddings, targets, num_classes=self.num_classes)
+        print("jitter: ", jitter)
+        self.gmm_active = True
+
+    def gmm_logits(self, embeddings):
+        if self.gmm is None:
+            return None
+        return gmm_get_logits(self.gmm, embeddings)
+
+    def eval_posterior(self, dl, device, return_all=False):
+        self.eval()
+        index = 0
+        self.gmm_active = True
+        lls = torch.zeros(len(dl.dataset), self.num_classes)
+        with torch.no_grad():
+            for data in dl:
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
+                data = data.to(device)
+                ll = self(data)
+                lls[index : index + len(ll)] = ll
+                index += len(ll)
+        # convert lls to posterior
+        # p(y|x) = p(x|y) * p(y) / p(x)
+        # p(y) = 1 / num_classes, p(x) = sum_y p(x|y) * p(y)
+        # or in log-space:
+        # log p(y|x) = log p(x|y) + log p(y) - log p(x)
+        # log p(y) = log 1 / num_classes
+        # log p(x) = logsumexp_y log p(x|y) + log p(y)
+        l_y = torch.log(torch.tensor(1 / self.num_classes))
+        l_x_y = lls + l_y
+        l_x = torch.logsumexp(l_x_y, dim=1).unsqueeze(1)
+        log_posteriors = lls + l_y - l_x
+
+        if return_all:
+            return log_posteriors
+        return torch.mean(log_posteriors).item()
+
+
+class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
+    """
+    Spectral normalized EfficientNetV2-S with gmm as the output layer.
+    See DDU paper for details.
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        image_shape,  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        **kwargs,
+    ):
+        super(EfficientNetGMM, self).__init__()
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.spec_norm_bound = spec_norm_bound
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.backbone = self.make_efficientnet()
+        self.gmm = None
+        self.gmm_active = False
+
+    def make_efficientnet(self):
+        def replace_layers_rec(layer):
+            """Recursively apply spectral normalization to Conv and Linear layers."""
+            if len(list(layer.children())) == 0:
+                if isinstance(layer, torch.nn.Conv2d):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torch.nn.Linear):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+            else:
+                for child in list(layer.children()):
+                    replace_layers_rec(child)
+
+        model = efficientnet_v2_s()
+        model.features[0][0] = torch.nn.Conv2d(
+            self.image_shape[0],
+            24,
+            kernel_size=(3, 3),
+            stride=(2, 2),
+            padding=(1, 1),
+            bias=False,
+        )
+        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        # apply spectral normalization
+        replace_layers_rec(model)
+        return model
+
+    def forward_hidden(self, x):
+        x = self.backbone.features(x)
+        x = self.backbone.avgpool(x)
+        x = torch.flatten(x, 1)
+        return x
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+        self.hidden = x
+
+        if self.gmm_active and self.gmm is not None:
+            # notebook: logsumexp(logits, dim=1)
+            # logits = gmm_evaluate = log_prob of all datapoints of the embedding
+            # return self.gmm_logits(x)
+            return self.gmm_logits(x)
+
+        return self.backbone.classifier(x)  # default classifier
+
+
+class ConvResnetDDUGMM(ResNet, GMMUtils, EinetUtils):
+    def __init__(
+        self,
+        block,
+        num_blocks,
+        num_classes=10,
+        temp=1.0,
+        spectral_normalization=True,
+        mod=True,
+        coeff=3,
+        n_power_iterations=1,
+        image_shape=(1, 28, 28),  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        **kwargs,
+    ):
+        mnist = image_shape[0] == 1 and image_shape[1] == 28 and image_shape[2] == 28
+        super(ConvResnetDDUGMM, self).__init__(
+            block,
+            num_blocks,
+            num_classes,
+            temp,
+            spectral_normalization,
+            mod,
+            coeff,
+            n_power_iterations,
+            mnist,
+        )
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.gmm = None
+        self.gmm_active = False
+
+    def forward_hidden(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.activation(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = F.avg_pool2d(x, 4)
+        x = x.view(x.size(0), -1)
+        return x
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+        self.hidden = x
+
+        if self.gmm_active and self.gmm is not None:
+            # classifier is gmm
+            return self.gmm_logits(x)
+
+        return self.fc(x) / self.temp

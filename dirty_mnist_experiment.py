@@ -168,6 +168,27 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "ConvResNetDDUGMM":
+            from ResNetSPN import ConvResnetDDUGMM
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            model = ConvResnetDDUGMM(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         elif model_name == "AutoEncoderSPN":
             from ResNetSPN import AutoEncoderSPN
 
@@ -179,6 +200,13 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             from ResNetSPN import EfficientNetSPN
 
             model = EfficientNetSPN(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "EfficientNetGMM":
+            from ResNetSPN import EfficientNetGMM
+
+            model = EfficientNetGMM(
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
@@ -197,17 +225,24 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        if "GMM" in model_name:
+            print("fitting gmm")
+            model.fit_gmm(train_dl, device)
+        else:
+            # no need to store gmm
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # evaluate
         model.eval()
-        model.einet_active = False
+        model.deactivate_uncert_head()
+        print("checking backbone accuracy")
         train_acc = model.eval_acc(train_dl, device)
-        mlflow.log_metric("train accuracy resnet", train_acc)
+        mlflow.log_metric("train accuracy backbone", train_acc)
         test_acc = model.eval_acc(test_dl, device)
-        mlflow.log_metric("test accuracy resnet", test_acc)
+        mlflow.log_metric("test accuracy backbone", test_acc)
 
-        model.einet_active = True
+        model.activate_uncert_head()
+        print("checking uncertainty head accuracy")
         train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy", train_acc)
         test_acc = model.eval_acc(test_dl, device)
@@ -247,7 +282,10 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
 
         # get log-likelihoods for all datasets
         with torch.no_grad():
-            lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
+            # TODO for all: remove unmarginalized and uncomment marginalized
+            # lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
+            lls_mnist = model.eval_ll_unmarginalized(mnist_dl, device, return_all=True)
+            lls_mnist = torch.logsumexp(lls_mnist, axis=1)
             mlflow.log_metric("mnist ll", torch.mean(lls_mnist).item())
             pred_entropy_mnist = model.eval_entropy(mnist_dl, device, return_all=True)
             mlflow.log_metric("mnist entropy", torch.mean(pred_entropy_mnist).item())
@@ -275,7 +313,11 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             aleatoric_mnist = -torch.sum(probs * torch.log(probs), dim=1)
             mlflow.log_metric("mnist aleatoric", torch.mean(aleatoric_mnist).item())
 
-            lls_amb = model.eval_ll(ambiguous_dl, device, return_all=True)
+            # lls_amb = model.eval_ll(ambiguous_dl, device, return_all=True)
+            lls_amb = model.eval_ll_unmarginalized(
+                ambiguous_dl, device, return_all=True
+            )
+            lls_amb = torch.logsumexp(lls_amb, axis=1)
             mlflow.log_metric("ambiguous ll", torch.mean(lls_amb).item())
             pred_entropy_amb = model.eval_entropy(ambiguous_dl, device, return_all=True)
             mlflow.log_metric("ambiguous entropy", torch.mean(pred_entropy_amb).item())
@@ -309,7 +351,9 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             aleatoric_amb = -torch.sum(probs * torch.log(probs), dim=1)
             mlflow.log_metric("ambiguous aleatoric", torch.mean(aleatoric_amb).item())
 
-            lls_ood = model.eval_ll(ood_dl, device, return_all=True)
+            # lls_ood = model.eval_ll(ood_dl, device, return_all=True)
+            lls_ood = model.eval_ll_unmarginalized(ood_dl, device, return_all=True)
+            lls_ood = torch.logsumexp(lls_ood, axis=1)
             mlflow.log_metric("ood ll", torch.mean(lls_ood).item())
             pred_entropy_ood = model.eval_entropy(ood_dl, device, return_all=True)
             mlflow.log_metric("ood entropy", torch.mean(pred_entropy_ood).item())

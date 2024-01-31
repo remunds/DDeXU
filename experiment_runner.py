@@ -9,6 +9,8 @@ from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
+from mnist_calib_experiment_gmm import start_mnist_calib_run_gmm
+from cifar10_calib_experiment_gmm import start_cifar10_calib_run_gmm
 
 torch.manual_seed(0)
 # Set our tracking server uri for logging
@@ -245,16 +247,27 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["pretrained_path"] = pretrained_path
     if model == "ConvResNetSPN":
         lr = 0.002
-    elif model == "ConvResNetDDU":
+    elif "ConvResNetDDU" in model:
         lr = 0.02
-    elif model == "EfficientNetSPN":
+    elif "EfficientNet" in model:
         lr = 0.015
     else:
         raise ValueError(
             "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
         )
     train_params["learning_rate"] = lr
-    if "mnist-calib" in dataset:
+    if "gmm-mnist-calib" in dataset:
+        try:
+            start_mnist_calib_run_gmm(
+                run_name, batch_sizes, model_params, train_params, None
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+
+    elif "mnist-calib" in dataset:
         try:
             start_mnist_calib_run(
                 run_name, batch_sizes, model_params, train_params, None
@@ -284,6 +297,16 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif "dirty-mnist" in dataset:
         try:
             start_dirty_mnist_run(
+                run_name, batch_sizes, model_params, train_params, None
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+    elif "gmm-cifar10-c-calib" in dataset:
+        try:
+            start_cifar10_calib_run_gmm(
                 run_name, batch_sizes, model_params, train_params, None
             )
         except Exception as e:
@@ -882,14 +905,17 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    # "cifar10-c-calib",
-    "cifar10-c-expl",
+    # "cifar10-c-expl",
     # "svhn-c-calib"
+    # "gmm-mnist-calib",
+    "gmm-cifar10-c-calib",
 ]
 models = [
     # "ConvResNetSPN",
-    "EfficientNetSPN",
+    # "EfficientNetSPN",
     # "ConvResNetDDU",
+    "EfficientNetGMM",
+    "ConvResNetDDUGMM",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -902,20 +928,25 @@ pretrained_backbones = {
         # val-acc: 0.9918
         "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
     },
+    "gmm-mnist-calib": {
+        # val-acc: 0.9918
+        "EfficientNetGMM": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+    },
     # same as calib
     "mnist-expl": {
         "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
         "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
         "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
-        "EfficientNetSPN": "713846316953751186/ec48857b51a440dfbed105dcfc03e5e0/artifacts/model",
     },
     "dirty-mnist": {
         # val-acc: 0.8954
         "ConvResNetSPN": "958692786192727381/1cd3bd7d4f974190a078c7e3c3362cb0/artifacts/model",
         # val-acc: 0.8973
         "ConvResNetDDU": "958692786192727381/6b5c21c4f3da4506b85bb63cd9683e39/artifacts/model",
+        "ConvResNetDDUGMM": "958692786192727381/6b5c21c4f3da4506b85bb63cd9683e39/artifacts/model",
         # val-acc: 0.8944
         "EfficientNetSPN": "958692786192727381/54bb623d51ac41b0b4c19717c39b75d1/artifacts/model",
+        "EfficientNetGMM": "958692786192727381/54bb623d51ac41b0b4c19717c39b75d1/artifacts/model",
     },
     "cifar10-c-calib": {
         # val-acc: 0.8188
@@ -924,6 +955,12 @@ pretrained_backbones = {
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         # val-acc: 0.8496
         "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+    },
+    "gmm-cifar10-c-calib": {
+        # val-acc: 0.8850
+        "ConvResNetDDUGMM": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
+        # val-acc: 0.8496
+        "EfficientNetGMM": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
     },
     # same as calib
     "cifar10-c-expl": {
@@ -978,17 +1015,17 @@ for d in dataset:
             run_two_moons(dataset, l, "einet_only", pretrained_path)
             continue
         for m in models:
-            # pretrained_path = pretrained_backbones[d][m]
+            pretrained_path = pretrained_backbones[d][m]
             # pretrained_path = trained_models[d][m]
-            # # pretrained_path = trained_models[d][l][m]
-            # pretrained_path = (
-            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            # )
+            # pretrained_path = trained_models[d][l][m]
+            pretrained_path = (
+                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            )
             # dataset = d
-            pretrained_path = None
-            tune_conv(d, l, "end-to-end", m, pretrained_path)
+            # pretrained_path = None
+            # tune_conv(d, l, "end-to-end", m, pretrained_path)
             # run_conv(dataset, l, "eval_only", m, pretrained_path)
-            # run_conv(dataset, l, "einet_only", m, pretrained_path)
+            run_conv(d, l, "eval_only", m, pretrained_path)
             # run_conv(dataset, l, "seperate", m)
 
 
