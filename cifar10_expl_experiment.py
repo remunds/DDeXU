@@ -295,6 +295,14 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             trial=trial,
             **train_params,
         )
+
+        model.einet_active = True
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
+
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
@@ -305,8 +313,6 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc_resnet", valid_acc)
         model.einet_active = True
-        valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc", valid_acc)
 
         valid_ll = model.eval_ll(valid_dl, device)
         mlflow.log_metric("valid_ll", valid_ll)
@@ -344,6 +350,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             shuffle=False,
             pin_memory=True,
         )
+        model.eval_calibration(dl, device, "corrupt_test", n_bins=20)
 
         # test_corrupt_levels.shape = [num_data_points, num_corruptions]
         from tqdm import tqdm

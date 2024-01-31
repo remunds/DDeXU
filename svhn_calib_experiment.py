@@ -6,23 +6,11 @@ import mlflow
 
 
 dataset_dir = "/data_docker/datasets/"
-svhn_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
-svhn_c_path = "CIFAR-10-C"
+svhn_c_path = "svhn-c"
 svhn_c_path_complete = dataset_dir + svhn_c_path
 
 
 def load_datasets():
-    # TODO
-    # download svhn-c
-    if not os.path.exists(svhn_c_path_complete + ".tar"):
-        print("Downloading svhn-c...")
-        os.system(f"wget {svhn_c_url} -O {svhn_c_path_complete}")
-
-        print("Extracting svhn-c...")
-        os.system(f"tar -xvf {svhn_c_path_complete}.tar")
-
-        print("Done!")
-
     # get normal svhn
     from torchvision.datasets import SVHN
     from torchvision import transforms
@@ -164,53 +152,52 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        # mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        # Evaluate
-        model.eval()
-        eval_dict = {}
+        # # Evaluate
+        # model.eval()
+        # eval_dict = {}
 
-        # eval einet
-        model.einet_active = True
-        train_acc = model.eval_acc(train_dl, device)
-        mlflow.log_metric("train_acc", train_acc)
-        train_ll = model.eval_ll(train_dl, device)
-        mlflow.log_metric("train_ll", train_ll)
-        train_pred_entropy = model.eval_entropy(train_dl, device)
-        mlflow.log_metric("train_entropy", train_pred_entropy)
+        # # eval einet
+        # model.einet_active = True
+        # train_acc = model.eval_acc(train_dl, device)
+        # mlflow.log_metric("train_acc", train_acc)
+        # train_ll = model.eval_ll(train_dl, device)
+        # mlflow.log_metric("train_ll", train_ll)
+        # train_pred_entropy = model.eval_entropy(train_dl, device)
+        # mlflow.log_metric("train_entropy", train_pred_entropy)
 
-        test_acc = model.eval_acc(test_dl, device)
-        mlflow.log_metric("test_acc", test_acc)
-        orig_test_ll = model.eval_ll(test_dl, device)
-        mlflow.log_metric("test_ll", orig_test_ll)
-        orig_test_pred_entropy = model.eval_entropy(test_dl, device)
-        mlflow.log_metric("test_entropy", orig_test_pred_entropy)
+        # test_acc = model.eval_acc(test_dl, device)
+        # mlflow.log_metric("test_acc", test_acc)
+        # orig_test_ll = model.eval_ll(test_dl, device)
+        # mlflow.log_metric("test_ll", orig_test_ll)
+        # orig_test_pred_entropy = model.eval_entropy(test_dl, device)
+        # mlflow.log_metric("test_entropy", orig_test_pred_entropy)
 
-        # random noise baseline
-        random_data = np.random.rand(10000, 32, 32, 3)
-        random_data = torch.stack([svhn_transformer(img) for img in random_data], dim=0)
-        random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.labels))
-        random_dl = DataLoader(
-            random_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=False,
-            pin_memory=True,
-            num_workers=1,
-        )
-        random_acc = model.eval_acc(random_dl, device)
-        mlflow.log_metric("random_acc", random_acc)
-        random_ll = model.eval_ll(random_dl, device)
-        mlflow.log_metric("random_ll", random_ll)
-        random_pred_entropy = model.eval_entropy(random_dl, device)
-        mlflow.log_metric("random_entropy", random_pred_entropy)
+        # # random noise baseline
+        # random_data = np.random.rand(10000, 32, 32, 3)
+        # random_data = torch.stack([svhn_transformer(img) for img in random_data], dim=0)
+        # random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.labels))
+        # random_dl = DataLoader(
+        #     random_ds,
+        #     batch_size=batch_sizes["resnet"],
+        #     shuffle=False,
+        #     pin_memory=True,
+        #     num_workers=1,
+        # )
+        # random_acc = model.eval_acc(random_dl, device)
+        # mlflow.log_metric("random_acc", random_acc)
+        # random_ll = model.eval_ll(random_dl, device)
+        # mlflow.log_metric("random_ll", random_ll)
+        # random_pred_entropy = model.eval_entropy(random_dl, device)
+        # mlflow.log_metric("random_entropy", random_pred_entropy)
 
         # evaluate calibration
         print("evaluating calibration")
         model.eval_calibration(test_dl, device, name="svhn", n_bins=20)
         print("done evaluating calibration")
-        exit()
-        # TODO
 
+        exit()
         # train: 50k, 32, 32, 3
         # test: 10k, 32, 32, 3
         # test-corrupted: 10k, 32, 32, 3 per corruption level (5)
@@ -243,7 +230,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         index = 0
         for corruption in tqdm(corruptions):
             curr_svhn = np.load(f"{svhn_c_path_complete}/{corruption}.npy")
-            curr_svhn = torch.stack([test_transformer(img) for img in curr_svhn], dim=0)
+            curr_svhn = torch.stack([svhn_transformer(img) for img in curr_svhn], dim=0)
             svhn_c_ds[index : index + 10000 * 5] = curr_svhn
             index += 10000 * 5
         targets = torch.cat(

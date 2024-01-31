@@ -482,7 +482,6 @@ class EinetUtils:
         confidences, predictions = torch.max(posteriors, dim=1)
         # convert from logit to probability
         confidences = torch.exp(confidences)
-        print(len(confidences))
 
         # make a histogram of the confidences
         plt.hist(confidences.cpu().numpy(), bins=n_bins)
@@ -564,16 +563,17 @@ class EinetUtils:
             plt.clf()
 
         def compute_ece(conf, acc):
-            if len(conf) != len(acc) or len(conf) == 0 or len(acc) == 0:
-                raise ValueError(
-                    "Confidence and accuracy arrays have different lengths"
-                )
-            ece = 0.0
+            eces = []
             for i in range(len(conf)):
-                if acc[i] == torch.nan or conf[i] == torch.nan:
+                if (
+                    np.isnan(acc[i])
+                    or np.isnan(conf[i])
+                    or acc[i] is None
+                    or conf[i] is None
+                ):
                     continue
-                ece += abs(acc[i] - conf[i])
-            ece = ece / len(conf)
+                eces.append(abs(acc[i] - conf[i]))
+            ece = sum(eces) / len(eces)
             return ece
 
         # the negative ll's is simply the mean output of the einet across all samples

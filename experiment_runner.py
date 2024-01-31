@@ -16,30 +16,9 @@ mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 
 
 def suggest_hps(trial, train_params, model_params):
-    einet_depth = trial.suggest_categorical("einet_depth", [3, 5])
-    einet_rep = trial.suggest_categorical("einet_rep", [1, 3])
-    lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
-    schedule_step_size = trial.suggest_int("schedule_step_size", 5, 20)
-    schedule_gamma = trial.suggest_float("schedule_gamma", 0.5, 0.9)
-    if train_params["warmup_epochs"] > 0:
-        lr_warmup = trial.suggest_float("lr_warmup", 1e-5, 1e-1, log=True)
-        schedule_step_size_warmup = trial.suggest_int(
-            "schedule_step_size_warmup", 5, 20
-        )
-        schedule_gamma_warmup = trial.suggest_float("schedule_gamma_warmup", 0.5, 0.9)
-        train_params["lr_schedule_warmup_step_size"] = schedule_step_size_warmup
-        train_params["lr_schedule_warmup_gamma"] = schedule_gamma_warmup
-        train_params["learning_rate_warmup"] = lr_warmup
-    else:
-        train_params["learning_rate_warmup"] = 0
-        train_params["lr_schedule_warmup_step_size"] = 0
-        train_params["lr_schedule_warmup_gamma"] = 0
+    lr = trial.suggest_float("lr", 1e-4, 1e-1, log=True)
 
     train_params["learning_rate"] = lr
-    train_params["lr_schedule_step_size"] = schedule_step_size
-    train_params["lr_schedule_gamma"] = schedule_gamma
-    model_params["einet_depth"] = einet_depth
-    model_params["einet_num_repetitions"] = einet_rep
 
     return train_params, model_params
 
@@ -361,13 +340,14 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
     def objective(trial):
         batch_sizes = dict(resnet=512)
         train_params = dict(
+            learning_rate_warmup=0.05,  # irrelevant for end-to-end
             warmup_epochs=100,
             num_epochs=100,
-            early_stop=5,
+            early_stop=10,
         )
         if "mnist" in dataset:
             image_shape = (1, 28, 28)
-        elif "cifar10" in dataset:
+        elif "cifar10" in dataset or "svhn" in dataset:
             image_shape = (3, 32, 32)
         else:
             raise ValueError(
@@ -380,10 +360,10 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
             layers=[2, 2, 2, 2],
             num_classes=10,
             image_shape=image_shape,
-            einet_depth=3,  # might be overwritten by optuna
+            einet_depth=5,
             einet_num_sums=20,
             einet_num_leaves=20,
-            einet_num_repetitions=1,  # might be overwritten by optuna
+            einet_num_repetitions=5,  # might be overwritten by optuna
             einet_leaf_type="Normal",
             einet_dropout=0.0,
             spec_norm_bound=0.95,  # only for ConvResNetSPN
@@ -517,11 +497,12 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
                     train_params.copy(),
                     trial,
                 )
-                train_params["corruption_levels_train"] = [0, 1, 2, 3]
-                val_loss_4 = start_cifar10_expl_run(
-                    run_name, batch_sizes, model_params, train_params, trial
-                )
-                return (val_loss_2 + val_loss_4) / 2
+                # train_params["corruption_levels_train"] = [0, 1, 2, 3]
+                # val_loss_4 = start_cifar10_expl_run(
+                #     run_name, batch_sizes, model_params, train_params, trial
+                # )
+                # return (val_loss_2 + val_loss_4) / 2
+                return val_loss_2
             except Exception as e:
                 if type(e) == optuna.exceptions.TrialPruned:
                     raise e
@@ -541,14 +522,15 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
         query = f"attributes.run_name = '{run_name}'"
         runs = mlflow.search_runs([exp.experiment_id], query)
     n_trials = 15
-    trial_multiplier = 2 if "expl" in dataset else 1
+    # trial_multiplier = 2 if "expl" in dataset else 1
+    trial_multiplier = 1
     # only run experiment, if it wasnt run fully
     if len(runs) < n_trials * trial_multiplier:
         mlflow.set_experiment(dataset)
         study = optuna.create_study(
             direction="minimize",
             pruner=optuna.pruners.MedianPruner(
-                n_startup_trials=3,  # requires at least 3 results to start pruning
+                n_startup_trials=1,  # requires at least 3 results to start pruning
                 n_warmup_steps=10,  # trial needs to log at least 10 steps before pruning
             ),
         )
@@ -901,8 +883,8 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     # "cifar10-c-calib",
-    # "cifar10-c-expl",
-    "svhn-c-calib"
+    "cifar10-c-expl",
+    # "svhn-c-calib"
 ]
 models = [
     # "ConvResNetSPN",
@@ -977,7 +959,7 @@ trained_models = {
         },
     },
     "svhn-c-calib": {
-        "EfficientNetSPN": "553153056869580546/19585eabdd51448baa89e7aacd18b80c/artifacts/model",
+        "EfficientNetSPN": "553153056869580546/8f4c0f909da74c9ab61fd3b82dafec46/artifacts/model",
     },
 }
 
@@ -997,15 +979,16 @@ for d in dataset:
             continue
         for m in models:
             # pretrained_path = pretrained_backbones[d][m]
-            pretrained_path = trained_models[d][m]
-            # pretrained_path = trained_models[d][l][m]
-            pretrained_path = (
-                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            )
-            dataset = d
-            # run_conv(dataset, l, "seperate", m, pretrained_path)
+            # pretrained_path = trained_models[d][m]
+            # # pretrained_path = trained_models[d][l][m]
+            # pretrained_path = (
+            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            # )
+            # dataset = d
+            pretrained_path = None
+            tune_conv(d, l, "end-to-end", m, pretrained_path)
             # run_conv(dataset, l, "eval_only", m, pretrained_path)
-            run_conv(dataset, l, "einet_only", m, pretrained_path)
+            # run_conv(dataset, l, "einet_only", m, pretrained_path)
             # run_conv(dataset, l, "seperate", m)
 
 
