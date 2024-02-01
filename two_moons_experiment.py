@@ -186,33 +186,33 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         print("valid accuracy: ", valid_acc)
         mlflow.log_metric("valid accuracy", valid_acc)
 
-        pos_dl = DataLoader(
-            pos_examples,
-            batch_size=batch_sizes["resnet"],
-            pin_memory=False,
-            num_workers=1,
-        )
+        # pos_dl = DataLoader(
+        #     pos_examples,
+        #     batch_size=batch_sizes["resnet"],
+        #     pin_memory=False,
+        #     num_workers=1,
+        # )
         # get LL's
-        pos_ll = resnet_spn.eval_ll(pos_dl, device)
-        mlflow.log_metric("pos_ll", pos_ll)
-        neg_dl = DataLoader(
-            neg_examples,
-            batch_size=batch_sizes["resnet"],
-            pin_memory=False,
-            num_workers=1,
-        )
-        neg_ll = resnet_spn.eval_ll(neg_dl, device)
-        mlflow.log_metric("neg_ll", neg_ll)
-        ood_dl = DataLoader(
-            ood_examples,
-            batch_size=batch_sizes["resnet"],
-            pin_memory=False,
-            num_workers=1,
-        )
-        ood_ll = resnet_spn.eval_ll(ood_dl, device)
-        mlflow.log_metric("ood_ll", ood_ll)
+        # pos_ll = resnet_spn.eval_ll(pos_dl, device)
+        # mlflow.log_metric("pos_ll", pos_ll)
+        # neg_dl = DataLoader(
+        #     neg_examples,
+        #     batch_size=batch_sizes["resnet"],
+        #     pin_memory=False,
+        #     num_workers=1,
+        # )
+        # neg_ll = resnet_spn.eval_ll(neg_dl, device)
+        # mlflow.log_metric("neg_ll", neg_ll)
+        # ood_dl = DataLoader(
+        #     ood_examples,
+        #     batch_size=batch_sizes["resnet"],
+        #     pin_memory=False,
+        #     num_workers=1,
+        # )
+        # ood_ll = resnet_spn.eval_ll(ood_dl, device)
+        # mlflow.log_metric("ood_ll", ood_ll)
 
-        del pos_dl, neg_dl, ood_dl
+        # del pos_dl, neg_dl, ood_dl
 
         test_dl = DataLoader(
             test_examples,
@@ -222,8 +222,10 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
 
         # Visualize SPN posterior
-        posteriors = resnet_spn.eval_posterior(test_dl, device, return_all=True)
-        posteriors = torch.exp(posteriors)
+        posteriors = resnet_spn.eval_posterior(None, device, test_dl, return_all=True)
+        # posteriors = torch.exp(posteriors)
+        # use softmax instead of exp, because we want to normalize the posteriors
+        posteriors = torch.softmax(posteriors, dim=1)
         # take the probability of class 0 as the uncertainty
         # if p==1 -> no uncertainty, if p==0 -> high uncertainty
         probs_class_0 = posteriors[:, 0].cpu().detach().numpy()
@@ -259,7 +261,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         plt.title("Predictive Variance, SPN Model")
         mlflow.log_figure(fig, "posterior_predictive_variance.png")
 
-        lls = resnet_spn.eval_ll(test_dl, device, return_all=True)
+        lls = resnet_spn.eval_ll_marg(None, device, test_dl, return_all=True)
         nll = -(lls.cpu().detach().numpy())  # negative log likelihood
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -283,7 +285,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         mlflow.log_figure(fig, "nll_no_train.png")
 
         dempster_shafer = (
-            resnet_spn.eval_dempster_shafer(test_dl, device, return_all=True)
+            resnet_spn.eval_dempster_shafer(None, device, test_dl, return_all=True)
             .cpu()
             .detach()
             .numpy()
@@ -309,13 +311,12 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         plt.title("Maximum Predictive Probability, SPN Model")
         mlflow.log_figure(fig, "max_pred_prob.png")
 
-        # Test epistemic as in DDU (p(x)) (for me: mean(exp(ll))) with ll = log(p(x|y)
-        # use logsumexp trick to avoid numerical issues
-        lls = resnet_spn.eval_ll_unmarginalized(test_dl, device, return_all=True)
-        lls_lsexp = torch.logsumexp(lls, axis=1)
-        p_z_y0 = torch.exp(lls[:, 0] - lls_lsexp)
-        p_z_y1 = torch.exp(lls[:, 1] - lls_lsexp)
-        p_z = p_z_y0 * 0.5 + p_z_y1 * 0.5  # density of embedding z
+        # TODO
+        # Test epistemic as in DDU p(z)
+
+        # p_z = torch.exp(lls)  # hm cant use logsumexp here?
+        p_z = torch.exp(lls - torch.logsumexp(lls, dim=0))
+
         epistemic = p_z.cpu().detach().numpy()
         print("density p(z): ", epistemic[:5])
         print("min density p(z): ", np.min(epistemic))

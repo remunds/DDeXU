@@ -284,9 +284,8 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
         with torch.no_grad():
             # TODO for all: remove unmarginalized and uncomment marginalized
             # lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
-            lls_mnist = model.eval_ll_unmarginalized(mnist_dl, device, return_all=True)
-            lls_mnist = torch.logsumexp(lls_mnist, axis=1)
-            mlflow.log_metric("mnist ll", torch.mean(lls_mnist).item())
+            lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
+            mlflow.log_metric("mnist ll", torch.mean(lls_mnist))
             pred_entropy_mnist = model.eval_entropy(mnist_dl, device, return_all=True)
             mlflow.log_metric("mnist entropy", torch.mean(pred_entropy_mnist).item())
             highest_class_prob_mnist = model.eval_highest_class_prob(
@@ -301,11 +300,16 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             mlflow.log_metric(
                 "mnist correct class prob", torch.mean(correct_class_prob_mnist).item()
             )
-            lls_unmarg = model.eval_ll_unmarginalized(mnist_dl, device, return_all=True)
-            lls_lsexp = torch.logsumexp(lls_unmarg, axis=1)
-            p_z_y0 = torch.exp(lls_unmarg[:, 0] - lls_lsexp)
-            p_z_y1 = torch.exp(lls_unmarg[:, 1] - lls_lsexp)
+            # compute epistemic uncertainty as in DDU paper
+            # get lls without sum over y
+            lls_all = model.eval_ll_raw(mnist_dl, device, return_all=True)
+            lls_lsexp = torch.logsumexp(lls_all, axis=1)
+            # use logsumexp trick to get p(z|y_i) numerically stable (transform log to prob)
+            p_z_y0 = torch.exp(lls_all[:, 0] - lls_lsexp)
+            p_z_y1 = torch.exp(lls_all[:, 1] - lls_lsexp)
+            # compute marginal p(z) = sum_y p(z,y) = sum_y p(z|y) p(y)
             epistemic_mnist = p_z_y0 * 0.5 + p_z_y1 * 0.5  # density of embedding z
+            epistemic_mnist = torch.softmax(lls_all, dim=1)
             mlflow.log_metric("mnist epistemic", torch.mean(epistemic_mnist).item())
 
             backbone_logits = model.backbone_logits(mnist_dl, device, return_all=True)

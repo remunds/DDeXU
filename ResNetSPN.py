@@ -263,25 +263,14 @@ class EinetUtils:
         return correct / total
 
     def eval_ll(self, dl, device, return_all=False):
+        """
+        Returns logP(x|y_i)
+        - log likelihood of all classes.
+        Output tensor has shape (N, C) or (C)
+        """
         self.eval()
         index = 0
-        lls = torch.zeros(len(dl.dataset))
-        with torch.no_grad():
-            for data in dl:
-                if type(data) is tuple or type(data) is list:
-                    data = data[0]
-                data = data.to(device)
-                ll = self(data)
-                lls[index : index + len(ll)] = ll.mean(dim=1)
-                index += len(ll)
-        if return_all:
-            return lls
-        return torch.mean(lls).item()
-
-    def eval_ll_unmarginalized(self, dl, device, return_all=False):
-        self.eval()
-        index = 0
-        lls = torch.zeros(len(dl.dataset), self.num_classes)
+        lls = torch.zeros(len(dl.dataset), self.num_classes).to(device)
         with torch.no_grad():
             for data in dl:
                 if type(data) is tuple or type(data) is list:
@@ -291,14 +280,37 @@ class EinetUtils:
                 lls[index : index + len(ll)] = ll
                 index += len(ll)
         if return_all:
-            return lls
-        return torch.mean(lls, dim=0).item()
+            return lls  # (N, C)
+        return torch.mean(lls, dim=0)  # (C)
+
+    def eval_ll_marg(self, log_p_x_g_y, device, dl=None, return_all=False):
+        """
+        Returns logP(x)
+        - marginal log likelihood of the input data.
+        P(x) = sum_y P(x,y) = sum_y P(x|y)P(y)
+        or in log:
+        log P(x) = logsumexp_y log P(x,y) = logsumexp_y log P(x|y) + log P(y)
+        Output tensor has shape (N) or is scalar
+
+        """
+        self.eval()
+        assert log_p_x_g_y is not None or dl is not None
+        if log_p_x_g_y is None:
+            # use dl to compute log_p_x_g_y
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
+        log_y = torch.log(torch.tensor(1.0 / self.num_classes)).to(device)
+        log_p_x_y = log_p_x_g_y + log_y
+        # marginalize over y
+        log_p_x = torch.logsumexp(log_p_x_y, dim=1)
+        if return_all:
+            return log_p_x  # (N)
+        return torch.mean(log_p_x).item()  # scalar
 
     def backbone_logits(self, dl, device, return_all=False):
         self.deactivate_uncert_head()
         self.eval()
         index = 0
-        logits = torch.zeros(len(dl.dataset), self.num_classes)
+        logits = torch.zeros(len(dl.dataset), self.num_classes).to(device)
         with torch.no_grad():
             for data in dl:
                 if type(data) is tuple or type(data) is list:
@@ -309,179 +321,99 @@ class EinetUtils:
                 index += len(output)
         self.activate_uncert_head()
         if return_all:
-            return logits
-        return torch.mean(logits, dim=0).item()
+            return logits  # (N, C)
+        return torch.mean(logits, dim=0)  # (C)
 
-    def eval_posterior(self, dl, device, return_all=False):
+    # def eval_posterior(self, dl, device, return_all=False):
+    def eval_posterior(self, log_p_x_g_y, device, dl=None, return_all=False):
         self.eval()
-        index = 0
-        posteriors = torch.zeros(len(dl.dataset), self.num_classes)
-        with torch.no_grad():
-            for data in dl:
-                if type(data) is tuple or type(data) is list:
-                    data = data[0]
-                data = data.to(device)
-                lls = self(data)  # this sets the einet_input
-                posterior = self.einet.posterior(self.einet_input)
-                posteriors[index : index + len(posterior)] = posterior
-                index += len(posterior)
-        if return_all:
-            return posteriors
-        return torch.mean(posteriors).item()
+        assert log_p_x_g_y is not None or dl is not None
+        if log_p_x_g_y is None:
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
+        from simple_einet.einet import posterior
 
-    def eval_entropy(self, dl, device, return_all=False):
-        posteriors_log = self.eval_posterior(dl, device, return_all=True)
-        # convert log probs to probs
-        posteriors = torch.exp(posteriors_log)
-        entropy = -torch.sum(posteriors * posteriors_log, dim=1)
+        posteriors = posterior(log_p_x_g_y, self.num_classes)
         if return_all:
-            return entropy
-        return torch.mean(entropy).item()
+            return posteriors  # (N, C)
+        return torch.mean(posteriors, dim=0)  # (C)
 
-    def eval_highest_class_prob(self, dl, device, return_all=False):
-        posteriors_log = self.eval_posterior(dl, device, return_all=True)
-        # convert log probs to probs
-        posteriors = torch.exp(posteriors_log)
+    def eval_entropy(self, log_p_x_g_y, device, dl=None, return_all=False):
+        assert log_p_x_g_y is not None or dl is not None
+        if log_p_x_g_y is None:
+            # use dl to compute log_p_x_g_y
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
+        posteriors_log = self.eval_posterior(log_p_x_g_y, device, dl, return_all=True)
+        # use softmax to convert logs to probs
+        posteriors = torch.softmax(posteriors_log, dim=1)
+        entropy = -torch.sum(posteriors * torch.log(posteriors), dim=1)
+        if return_all:
+            return entropy  # (N)
+        return torch.mean(entropy).item()  # scalar
+
+    def eval_highest_class_prob(self, log_p_x_g_y, device, dl=None, return_all=False):
+        assert log_p_x_g_y is not None or dl is not None
+        if log_p_x_g_y is None:
+            # use dl to compute log_p_x_g_y
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
+        posteriors_log = self.eval_posterior(log_p_x_g_y, device, dl, return_all=True)
+        # use softmax to convert logs to probs
+        posteriors = torch.softmax(posteriors_log, dim=1)
         highest_prob = torch.max(posteriors, dim=1)[0]
         if return_all:
-            return highest_prob
-        return torch.mean(highest_prob).item()
+            return highest_prob  # (N)
+        return torch.mean(highest_prob).item()  # scalar
 
-    def eval_correct_class_prob(self, dl, device, return_all=False):
-        posteriors_log = self.eval_posterior(dl, device, return_all=True)
-        # convert log probs to probs
-        posteriors = torch.exp(posteriors_log).to(device)
+    def eval_correct_class_prob(self, log_p_x_g_y, device, dl, return_all=False):
+        assert dl is not None
+        if log_p_x_g_y is None:
+            # use dl to compute log_p_x_g_y
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
+        posteriors_log = self.eval_posterior(log_p_x_g_y, device, dl, return_all=True)
+        # use softmax to convert logs to probs
+        posteriors = torch.softmax(posteriors_log, dim=1)
         # get correct class
         labels = torch.cat([labels for _, labels in dl], dim=0).to(device)
         correct_class_prob = posteriors[
             torch.arange(len(labels), device=device), labels.to(device)
         ]
         if return_all:
-            return correct_class_prob
-        return torch.mean(correct_class_prob).item()
+            return correct_class_prob  # (N)
+        return torch.mean(correct_class_prob).item()  # scalar
 
-    def eval_pred_variance(self, dl, device, return_all=False):
-        self.eval()
-        index = 0
-        pred_vars = torch.zeros(len(dl.dataset))
-        with torch.no_grad():
-            for data, _ in dl:
-                data = data.to(device)
-                pred_logit = self(data)
-                pred = torch.softmax(pred_logit, dim=1)
-                pred = torch.max(pred, dim=1)[0]
-                pred_var = pred * (1 - pred)
-                pred_vars[index : index + len(pred_var)] = pred_var
-                index += len(pred_var)
-        if return_all:
-            return pred_vars
-        return torch.mean(pred_vars).item()
-
-    # def eval_pred_entropy(self, dl, device, return_all=False):
-    #     self.eval()
-    #     index = 0
-    #     pred_entropies = torch.zeros(len(dl.dataset))
-    #     with torch.no_grad():
-    #         for data, _ in dl:
-    #             data = data.to(device)
-    #             pred_logit = self(data)
-    #             pred = torch.softmax(pred_logit, dim=1)
-    #             pred_entropy = -torch.sum(pred * torch.log(pred), dim=1)
-    #             pred_entropies[index : index + len(pred_entropy)] = pred_entropy
-    #             index += len(pred_entropy)
-    #     if return_all:
-    #         return pred_entropies
-    #     return torch.mean(pred_entropies).item()
-
-    def eval_dempster_shafer(self, dl, device, return_all=False):
+    def eval_dempster_shafer(self, log_p_x_g_y, device, dl=None, return_all=False):
         """
         SNGP: better for distance aware models, where
         magnitude of logits reflects distance from observed data manifold
         https://arxiv.org/pdf/2006.10108.pdf
         """
-        num_classes = self.einet.config.num_classes
         self.eval()
-        index = 0
-        uncertainties = torch.zeros(len(dl.dataset))
-        with torch.no_grad():
-            for data in dl:
-                if type(data) is tuple or type(data) is list:
-                    data = data[0]
-                data = data.to(device)
-                lls = self(data)
-                posterior = self.einet.posterior(self.einet_input)
-                uncertainty = num_classes / (
-                    num_classes + torch.sum(torch.exp(posterior), dim=1)
-                )
-                uncertainties[index : index + len(uncertainty)] = uncertainty
-                index += len(uncertainty)
+        assert log_p_x_g_y is not None or dl is not None
+        if log_p_x_g_y is None:
+            # use dl to compute log_p_x_g_y
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
+        posteriors_log = self.eval_posterior(log_p_x_g_y, device, dl, return_all=True)
+        uncertainty = self.num_classes / (
+            self.num_classes + torch.sum(torch.exp(posteriors_log), dim=1)
+        )
         if return_all:
-            return uncertainties
-        return torch.mean(uncertainties).item()
+            return uncertainty  # (N)
+        return torch.mean(uncertainty).item()  # scalar
 
-    def explain_ll(self, dl, device, return_all=False):
-        """
-        Check each explaining variable individually.
-        Returns the difference in log likelihood between the default model and the marginalized model.
-        Use, when the explaining variables are given in the data.
-        """
-        ll_default = self.eval_ll(dl, device, return_all)
-        explanations = []
-        for i in self.explaining_vars:
-            self.marginalized_scopes = [i]
-            ll_marg = self.eval_ll(dl, device, return_all)
-            explanations.append((ll_marg - ll_default))
-        self.marginalized_scopes = None
-        if return_all:
-            return torch.stack(explanations, dim=1)
-        return explanations
-
-    def explain_mpe(self, dl, device, return_all=False):
-        """
-        Explain the explaining variables by computing their most probable explanation (MPE).
-        Use, when the explaining variables are not given in the data.
-        """
-        expl_var_mpes = []
-        for data, _ in dl:
-            data = data.to(device)
-            # extract explaining vars
-            exp_vars = data[:, self.explaining_vars]
-            # mask out explaining vars for backbone
-            mask = torch.ones_like(data, dtype=torch.bool)
-            mask[:, self.explaining_vars] = False
-            data = data[mask]
-            if self.image_shape is not None:
-                # ConvResNets
-                # reshape to image
-                data = data.reshape(
-                    -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
-                )
-            else:
-                # DenseResNetSPN
-                data = data.reshape(-1, self.input_dim)
-
-            # extract most probable explanation of current input
-            hidden = self.forward_hidden(data)
-            hidden = torch.cat([exp_vars, hidden], dim=1)
-            mpe: torch.Tensor = self.einet.mpe(
-                evidence=hidden, marginalized_scopes=self.explaining_vars
-            )
-            expl_var_mpes.append(mpe[:, self.explaining_vars])
-        if return_all:
-            return expl_var_mpes
-        return torch.cat(expl_var_mpes, dim=0).mean(dim=0)
-
-    def eval_calibration(self, dl, device, name, n_bins=10):
+    # def eval_calibration(self, dl, device, name, n_bins=10):
+    def eval_calibration(self, log_p_x_g_y, device, name, dl, n_bins=20):
         """Computes the expected calibration error and plots the calibration curve."""
         self.eval()
+        assert dl is not None
+        if log_p_x_g_y is None:
+            # use dl to compute log_p_x_g_y
+            log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
 
         # get posteriors p(y_i | x) via bayes rule
-        posteriors = self.eval_posterior(dl, device, return_all=True)
-
-        # get confidences and predictions via max/argmax
-        confidences, predictions = torch.max(posteriors, dim=1)
-        # convert from logit to probability
-        confidences = torch.exp(confidences)
+        posteriors_log = self.eval_posterior(log_p_x_g_y, device, dl, return_all=True)
+        # (N, C)
+        # use softmax to convert logs to probs
+        probs = torch.softmax(posteriors_log, dim=1)
+        confidences, predictions = torch.max(probs, dim=1)
         print(confidences[:5])
 
         # make a histogram of the confidences
@@ -492,7 +424,7 @@ class EinetUtils:
         # predictions = torch.argmax(posteriors, dim=1)
 
         # this assumes that the dl does not shuffle the data
-        labels = torch.cat([labels for _, labels in dl], dim=0)
+        labels = torch.cat([labels for _, labels in dl], dim=0).to(device)
 
         def equal_frequency_binning(confidences, predictions, labels, num_bins):
             # Sort confidences and predictions
@@ -577,23 +509,78 @@ class EinetUtils:
             ece = sum(eces) / len(eces)
             return ece
 
-        # the negative ll's is simply the mean output of the einet across all samples
-        # output is likelihood: P(x | y_i) for each class y_i
-        # taking the mean over the classes gives the marginal likelihood P(x)
-        # do that for each sample and take the mean over all samples
-        nll = -self.eval_ll(dl, device, return_all=False)
+        # NLL = -logP(x|y)
+        # nll = -self.eval_ll(dl, device, return_all=False)
+        # nll = - sum log von richtigem entry
+        mean_nll = -torch.mean(
+            torch.log(
+                self.eval_correct_class_prob(log_p_x_g_y, device, dl, return_all=True)
+            )
+        )
 
         # equal frequency binning
         conf, acc = equal_frequency_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
         ece = compute_ece(conf, acc)
-        plot_calibration_curve(conf, acc, ece, nll, f"equal_frequency_{name}")
+        plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_frequency_{name}")
         conf, acc = equal_width_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
         ece = compute_ece(conf, acc)
-        plot_calibration_curve(conf, acc, ece, nll, f"equal_width_{name}")
+        plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_width_{name}")
+
+    def explain_ll(self, dl, device, return_all=False):
+        """
+        Check each explaining variable individually.
+        Returns the difference in log likelihood between the default model and the marginalized model.
+        Use, when the explaining variables are given in the data.
+        """
+        ll_default = self.eval_ll(dl, device, return_all)
+        explanations = []
+        for i in self.explaining_vars:
+            self.marginalized_scopes = [i]
+            ll_marg = self.eval_ll(dl, device, return_all)
+            explanations.append((ll_marg - ll_default))
+        self.marginalized_scopes = None
+        if return_all:
+            return torch.stack(explanations, dim=1)
+        return explanations
+
+    def explain_mpe(self, dl, device, return_all=False):
+        """
+        Explain the explaining variables by computing their most probable explanation (MPE).
+        Use, when the explaining variables are not given in the data.
+        """
+        expl_var_mpes = []
+        for data, _ in dl:
+            data = data.to(device)
+            # extract explaining vars
+            exp_vars = data[:, self.explaining_vars]
+            # mask out explaining vars for backbone
+            mask = torch.ones_like(data, dtype=torch.bool)
+            mask[:, self.explaining_vars] = False
+            data = data[mask]
+            if self.image_shape is not None:
+                # ConvResNets
+                # reshape to image
+                data = data.reshape(
+                    -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
+                )
+            else:
+                # DenseResNetSPN
+                data = data.reshape(-1, self.input_dim)
+
+            # extract most probable explanation of current input
+            hidden = self.forward_hidden(data)
+            hidden = torch.cat([exp_vars, hidden], dim=1)
+            mpe: torch.Tensor = self.einet.mpe(
+                evidence=hidden, marginalized_scopes=self.explaining_vars
+            )
+            expl_var_mpes.append(mpe[:, self.explaining_vars])
+        if return_all:
+            return expl_var_mpes
+        return torch.cat(expl_var_mpes, dim=0).mean(dim=0)
 
 
 class DenseResnet(nn.Module):
@@ -1632,34 +1619,34 @@ class GMMUtils:
             return None
         return gmm_get_logits(self.gmm, embeddings)
 
-    def eval_posterior(self, dl, device, return_all=False):
-        self.eval()
-        index = 0
-        self.gmm_active = True
-        lls = torch.zeros(len(dl.dataset), self.num_classes)
-        with torch.no_grad():
-            for data in dl:
-                if type(data) is tuple or type(data) is list:
-                    data = data[0]
-                data = data.to(device)
-                ll = self(data)
-                lls[index : index + len(ll)] = ll
-                index += len(ll)
-        # convert lls to posterior
-        # p(y|x) = p(x|y) * p(y) / p(x)
-        # p(y) = 1 / num_classes, p(x) = sum_y p(x|y) * p(y)
-        # or in log-space:
-        # log p(y|x) = log p(x|y) + log p(y) - log p(x)
-        # log p(y) = log 1 / num_classes
-        # log p(x) = logsumexp_y log p(x|y) + log p(y)
-        l_y = torch.log(torch.tensor(1 / self.num_classes))
-        l_x_y = lls + l_y
-        l_x = torch.logsumexp(l_x_y, dim=1).unsqueeze(1)
-        log_posteriors = lls + l_y - l_x
+    # def eval_posterior(self, dl, device, return_all=False):
+    #     self.eval()
+    #     index = 0
+    #     self.gmm_active = True
+    #     lls = torch.zeros(len(dl.dataset), self.num_classes)
+    #     with torch.no_grad():
+    #         for data in dl:
+    #             if type(data) is tuple or type(data) is list:
+    #                 data = data[0]
+    #             data = data.to(device)
+    #             ll = self(data)
+    #             lls[index : index + len(ll)] = ll
+    #             index += len(ll)
+    #     # convert lls to posterior
+    #     # p(y|x) = p(x|y) * p(y) / p(x)
+    #     # p(y) = 1 / num_classes, p(x) = sum_y p(x|y) * p(y)
+    #     # or in log-space:
+    #     # log p(y|x) = log p(x|y) + log p(y) - log p(x)
+    #     # log p(y) = log 1 / num_classes
+    #     # log p(x) = logsumexp_y log p(x|y) + log p(y)
+    #     l_y = torch.log(torch.tensor(1 / self.num_classes))
+    #     l_x_y = lls + l_y
+    #     l_x = torch.logsumexp(l_x_y, dim=1).unsqueeze(1)
+    #     log_posteriors = lls + l_y - l_x
 
-        if return_all:
-            return log_posteriors
-        return torch.mean(log_posteriors).item()
+    #     if return_all:
+    #         return log_posteriors
+    #     return torch.mean(log_posteriors).item()
 
 
 class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):

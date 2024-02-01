@@ -9,7 +9,6 @@ from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
-from mnist_calib_experiment_gmm import start_mnist_calib_run_gmm
 from cifar10_calib_experiment_gmm import start_cifar10_calib_run_gmm
 
 torch.manual_seed(0)
@@ -221,9 +220,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
     elif training == "seperate":
-        train_params["warmup_epochs"] = 10
+        train_params["warmup_epochs"] = 100
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 10
+        train_params["num_epochs"] = 100
     elif training == "warmup":
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
@@ -256,18 +255,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
         )
     train_params["learning_rate"] = lr
-    if "gmm-mnist-calib" in dataset:
-        try:
-            start_mnist_calib_run_gmm(
-                run_name, batch_sizes, model_params, train_params, None
-            )
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
-            mlflow.set_tag("pruned", e)
-            mlflow.end_run()
-
-    elif "mnist-calib" in dataset:
+    if "mnist-calib" in dataset:
         try:
             start_mnist_calib_run(
                 run_name, batch_sizes, model_params, train_params, None
@@ -901,21 +889,20 @@ loss = [
     # "hybrid_mid_high",
 ]
 dataset = [
-    # "two-moons",
+    "two-moons",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
     # "cifar10-c-expl",
     # "svhn-c-calib"
-    # "gmm-mnist-calib",
-    "gmm-cifar10-c-calib",
+    # "gmm-cifar10-c-calib",
 ]
 models = [
     # "ConvResNetSPN",
     # "EfficientNetSPN",
     # "ConvResNetDDU",
     "EfficientNetGMM",
-    "ConvResNetDDUGMM",
+    # "ConvResNetDDUGMM",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -927,8 +914,6 @@ pretrained_backbones = {
         "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
         # val-acc: 0.9918
         "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
-    },
-    "gmm-mnist-calib": {
         # val-acc: 0.9918
         "EfficientNetGMM": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
     },
@@ -996,7 +981,7 @@ trained_models = {
         },
     },
     "svhn-c-calib": {
-        "EfficientNetSPN": "553153056869580546/8f4c0f909da74c9ab61fd3b82dafec46/artifacts/model",
+        "EfficientNetSPN": "553153056869580546/4ce6a9e8ce354487992891072555ba94/artifacts/model"
     },
 }
 

@@ -235,6 +235,13 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetGMM":
+            from ResNetSPN import EfficientNetGMM
+
+            model = EfficientNetGMM(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)
@@ -250,34 +257,37 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        if model_name == "EfficientNetGMM":
+            model.fit_gmm(train_dl, device)
+        else:
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # evaluate
         model.eval()
-        model.einet_active = False
+        model.deactivate_uncert_head()
         train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy resnet", train_acc)
         test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy resnet", test_acc)
 
-        model.einet_active = True
+        model.activate_uncert_head()
         train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train accuracy", train_acc)
         test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy", test_acc)
 
-        train_ll = model.eval_ll(train_dl, device)
-        mlflow.log_metric("train ll", train_ll)
-        test_ll = model.eval_ll(test_dl, device)
-        mlflow.log_metric("test ll", test_ll)
+        train_ll_marg = model.eval_ll_marg(None, device, train_dl)
+        mlflow.log_metric("train ll marg", train_ll_marg)
+        test_ll_marg = model.eval_ll_marg(None, device, test_dl)
+        mlflow.log_metric("test ll marg", test_ll_marg)
 
         ood_ds_flat = ood_ds.data.reshape(-1, 28 * 28).to(dtype=torch.float32)
         ood_ds_flat = TensorDataset(ood_ds_flat, ood_ds.targets)
         ood_dl = DataLoader(ood_ds_flat, batch_size=batch_sizes["resnet"], shuffle=True)
         ood_acc = model.eval_acc(ood_dl, device)
         mlflow.log_metric("ood accuracy", ood_acc)
-        ood_ll = model.eval_ll(ood_dl, device)
-        mlflow.log_metric("ood ll", ood_ll)
+        ood_ll_marg = model.eval_ll_marg(None, device, ood_dl)
+        mlflow.log_metric("ood ll marg", ood_ll_marg)
 
         del (
             ood_ds_flat,
@@ -299,7 +309,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             num_workers=1,
             pin_memory=True,
         )
-        model.eval_calibration(test_dl_rot, device, "rotation", 20)
+        model.eval_calibration(None, device, "rotation", dl=test_dl_rot)
         del test_dl_rot
 
         test_ds_cutoff = TensorDataset(test_ds_cutoff, test_ds.targets)
@@ -310,7 +320,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             num_workers=1,
             pin_memory=True,
         )
-        model.eval_calibration(test_dl_cutoff, device, "cutoff", 20)
+        model.eval_calibration(None, device, "cutoff", dl=test_dl_cutoff)
         del test_dl_cutoff
 
         test_ds_noise = TensorDataset(test_ds_noise, test_ds.targets)
@@ -322,7 +332,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             pin_memory=True,
         )
 
-        model.eval_calibration(test_dl_noise, device, "noise", 20)
+        model.eval_calibration(None, device, "noise", dl=test_dl_noise)
         del test_dl_noise
         print("done creating calibration plots")
 
@@ -352,13 +362,14 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             )
 
             severity = get_severity(test_ds, s - 1)
-            model.deactivate_einet()
+            model.deactivate_uncert_head()
             backbone_acc = model.eval_acc(test_dl_rot, device)
-            model.activate_einet()
+            model.activate_uncert_head()
             einet_acc = model.eval_acc(test_dl_rot, device)
-            ll = model.eval_ll(test_dl_rot, device)
-            entropy = model.eval_entropy(test_dl_rot, device)
-            highest_class_prob = model.eval_highest_class_prob(test_dl_rot, device)
+            ll = model.eval_ll(test_dl_rot, device, return_all=True)
+            ll_marg = model.eval_ll_marg(ll, device)
+            entropy = model.eval_entropy(ll, device)
+            highest_class_prob = model.eval_highest_class_prob(ll, device)
             # correct_class_prob = model.eval_correct_class_prob(test_dl_rot, device)
             # dempster_shafer = model.eval_dempster_shafer(test_dl_rot, device)
 
@@ -367,7 +378,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             eval_dict["rotation"][severity] = {
                 "backbone_acc": backbone_acc,
                 "einet_acc": einet_acc,
-                "ll": ll,
+                "ll_marg": ll_marg,
                 "entropy": entropy,
                 "highest_class_prob": highest_class_prob,
                 # "correct_class_prob": correct_class_prob,
@@ -385,26 +396,27 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 pin_memory=True,
             )
             severity = get_severity(test_ds, s - 1)
-            model.deactivate_einet()
+            model.deactivate_uncert_head()
             backbone_acc = model.eval_acc(test_dl_cutoff, device)
-            model.activate_einet()
+            model.activate_uncert_head()
             einet_acc = model.eval_acc(test_dl_cutoff, device)
-            ll = model.eval_ll(test_dl_cutoff, device)
-            entropy = model.eval_entropy(test_dl_cutoff, device)
-            highest_class_prob = model.eval_highest_class_prob(test_dl_cutoff, device)
-            correct_class_prob = model.eval_correct_class_prob(test_dl_cutoff, device)
-            dempster_shafer = model.eval_dempster_shafer(test_dl_cutoff, device)
+            ll = model.eval_ll(test_dl_cutoff, device, return_all=True)
+            ll_marg = model.eval_ll_marg(ll, device)
+            entropy = model.eval_entropy(ll, device)
+            highest_class_prob = model.eval_highest_class_prob(ll, device)
+            # correct_class_prob = model.eval_correct_class_prob(test_dl_cutoff, device)
+            # dempster_shafer = model.eval_dempster_shafer(test_dl_cutoff, device)
 
             if "cutoff" not in eval_dict:
                 eval_dict["cutoff"] = {}
             eval_dict["cutoff"][severity] = {
                 "backbone_acc": backbone_acc,
                 "einet_acc": einet_acc,
-                "ll": ll,
+                "ll_marg": ll_marg,
                 "entropy": entropy,
                 "highest_class_prob": highest_class_prob,
-                "correct_class_prob": correct_class_prob,
-                "dempster_shafer": dempster_shafer,
+                # "correct_class_prob": correct_class_prob,
+                # "dempster_shafer": dempster_shafer,
             }
 
             test_ds_noise_s = TensorDataset(
@@ -419,13 +431,14 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 pin_memory=True,
             )
             severity = get_severity(test_ds, s - 1)
-            model.deactivate_einet()
+            model.deactivate_uncert_head()
             einet_acc = model.eval_acc(test_dl_noise, device)
-            model.activate_einet()
+            model.activate_uncert_head()
             backbone_acc = model.eval_acc(test_dl_noise, device)
-            ll = model.eval_ll(test_dl_noise, device)
-            entropy = model.eval_entropy(test_dl_noise, device)
-            highest_class_prob = model.eval_highest_class_prob(test_dl_noise, device)
+            ll = model.eval_ll(test_dl_noise, device, return_all=True)
+            ll_marg = model.eval_ll_marg(ll, device)
+            entropy = model.eval_entropy(ll, device)
+            highest_class_prob = model.eval_highest_class_prob(ll, device)
             # correct_class_prob = model.eval_correct_class_prob(test_dl_noise, device)
             # dempster_shafer = model.eval_dempster_shafer(test_dl_noise, device)
 
@@ -434,7 +447,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             eval_dict["noise"][severity] = {
                 "backbone_acc": backbone_acc,
                 "einet_acc": einet_acc,
-                "ll": ll,
+                "ll_marg": ll_marg,
                 "entropy": entropy,
                 "highest_class_prob": highest_class_prob,
                 # "correct_class_prob": correct_class_prob,
@@ -459,9 +472,9 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 for severity in eval_dict[m]
             ]
         )
-        ll = np.mean(
+        ll_marg = np.mean(
             [
-                eval_dict[m][severity]["ll"]
+                eval_dict[m][severity]["ll_marg"]
                 for m in eval_dict
                 for severity in eval_dict[m]
             ]
@@ -497,7 +510,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
 
         mlflow.log_metric("manip_backbone_acc", backbone_acc)
         mlflow.log_metric("manip_einet_acc", einet_acc)
-        mlflow.log_metric("manip_ll", ll)
+        mlflow.log_metric("manip_ll_marg", ll_marg)
         mlflow.log_metric("manip_entropy", entropy)
         mlflow.log_metric("manip_highest_class_prob", highest_class_prob)
         # mlflow.log_metric("manip_correct_class_prob", correct_class_prob)
@@ -516,8 +529,9 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 eval_dict[m][severity]["backbone_acc"]
                 for severity in sorted(eval_dict[m].keys())
             ]
-            lls = [
-                eval_dict[m][severity]["ll"] for severity in sorted(eval_dict[m].keys())
+            lls_marg = [
+                eval_dict[m][severity]["ll_marg"]
+                for severity in sorted(eval_dict[m].keys())
             ]
             ents = [
                 eval_dict[m][severity]["entropy"]
@@ -549,7 +563,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             ax.grid(False)
 
             ax2 = ax.twinx()
-            ax2.plot(lls, label="ll", color="blue")
+            ax2.plot(lls_marg, label="ll", color="blue")
             ax2.tick_params(axis="y", labelcolor="blue")
             # ax2.set_ylim([0, 1])
 

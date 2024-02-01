@@ -109,6 +109,13 @@ def start_cifar10_calib_run_gmm(
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "ConvResnetDDUGMM":
+            from ResNetSPN import ConvResnetDDUGMM
+
+            model = ConvResnetDDUGMM(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)

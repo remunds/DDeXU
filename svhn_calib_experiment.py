@@ -6,7 +6,7 @@ import mlflow
 
 
 dataset_dir = "/data_docker/datasets/"
-svhn_c_path = "svhn-c"
+svhn_c_path = "svhn_c"
 svhn_c_path_complete = dataset_dir + svhn_c_path
 
 
@@ -152,55 +152,56 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
-        # mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        # # Evaluate
-        # model.eval()
-        # eval_dict = {}
+        # Evaluate
+        model.eval()
+        eval_dict = {}
 
-        # # eval einet
-        # model.einet_active = True
-        # train_acc = model.eval_acc(train_dl, device)
-        # mlflow.log_metric("train_acc", train_acc)
-        # train_ll = model.eval_ll(train_dl, device)
-        # mlflow.log_metric("train_ll", train_ll)
-        # train_pred_entropy = model.eval_entropy(train_dl, device)
-        # mlflow.log_metric("train_entropy", train_pred_entropy)
+        # eval einet
+        model.einet_active = True
+        train_acc = model.eval_acc(train_dl, device)
+        mlflow.log_metric("train_acc", train_acc)
+        train_ll = model.eval_ll(train_dl, device, return_all=True)
+        train_ll_marg = model.eval_ll_marg(train_ll, device)
+        mlflow.log_metric("train_ll_marg", train_ll_marg)
+        train_pred_entropy = model.eval_entropy(train_ll, device)
+        mlflow.log_metric("train_entropy", train_pred_entropy)
 
-        # test_acc = model.eval_acc(test_dl, device)
-        # mlflow.log_metric("test_acc", test_acc)
-        # orig_test_ll = model.eval_ll(test_dl, device)
-        # mlflow.log_metric("test_ll", orig_test_ll)
-        # orig_test_pred_entropy = model.eval_entropy(test_dl, device)
-        # mlflow.log_metric("test_entropy", orig_test_pred_entropy)
+        test_acc = model.eval_acc(test_dl, device)
+        mlflow.log_metric("test_acc", test_acc)
+        orig_test_ll = model.eval_ll(test_dl, device, return_all=True)
+        orig_test_ll_marg = model.eval_ll_marg(orig_test_ll, device)
+        mlflow.log_metric("test_ll_marg", orig_test_ll_marg)
+        orig_test_pred_entropy = model.eval_entropy(orig_test_ll, device)
+        mlflow.log_metric("test_entropy", orig_test_pred_entropy)
 
-        # # random noise baseline
-        # random_data = np.random.rand(10000, 32, 32, 3)
-        # random_data = torch.stack([svhn_transformer(img) for img in random_data], dim=0)
-        # random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.labels))
-        # random_dl = DataLoader(
-        #     random_ds,
-        #     batch_size=batch_sizes["resnet"],
-        #     shuffle=False,
-        #     pin_memory=True,
-        #     num_workers=1,
-        # )
-        # random_acc = model.eval_acc(random_dl, device)
-        # mlflow.log_metric("random_acc", random_acc)
-        # random_ll = model.eval_ll(random_dl, device)
-        # mlflow.log_metric("random_ll", random_ll)
-        # random_pred_entropy = model.eval_entropy(random_dl, device)
-        # mlflow.log_metric("random_entropy", random_pred_entropy)
+        # random noise baseline
+        random_data = np.random.rand(10000, 32, 32, 3)
+        random_data = torch.stack([svhn_transformer(img) for img in random_data], dim=0)
+        random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.labels))
+        random_dl = DataLoader(
+            random_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=1,
+        )
+        random_acc = model.eval_acc(random_dl, device)
+        mlflow.log_metric("random_acc", random_acc)
+        random_ll = model.eval_ll(random_dl, device, return_all=True)
+        random_ll_marg = model.eval_ll_marg(random_ll, device)
+        mlflow.log_metric("random_ll_marg", random_ll_marg)
+        random_pred_entropy = model.eval_entropy(random_ll, device)
+        mlflow.log_metric("random_entropy", random_pred_entropy)
 
         # evaluate calibration
         print("evaluating calibration")
-        model.eval_calibration(test_dl, device, name="svhn", n_bins=20)
+        model.eval_calibration(orig_test_ll, device, name="svhn", dl=test_dl)
         print("done evaluating calibration")
 
-        exit()
-        # train: 50k, 32, 32, 3
-        # test: 10k, 32, 32, 3
-        # test-corrupted: 10k, 32, 32, 3 per corruption level (5)
+        # test: 26032, 32, 32, 3
+        # test-corrupted: 26032, 32, 32, 3 per corruption level (5)
 
         corruptions = [
             "brightness",
@@ -209,32 +210,40 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             "elastic_transform",
             "fog",  # was broken -> reload?
             "frost",
-            "gaussian_blur",
+            # "gaussian_blur",
             "gaussian_noise",
             "glass_blur",
             "impulse_noise",
             "jpeg_compression",
             "motion_blur",
             "pixelate",
-            "saturate",
+            # "saturate",
             "shot_noise",
             "snow",
-            "spatter",
-            "speckle_noise",
+            # "spatter",
+            # "speckle_noise",
             "zoom_blur",
         ]
         from tqdm import tqdm
 
+        levels = [1, 2, 3, 4, 5]
+        num_samples = 26032
+
         print("loading all corrupted data")
-        svhn_c_ds = torch.zeros((10000 * len(corruptions) * 5, 32 * 32 * 3))
+        svhn_c_ds = torch.zeros((num_samples * len(corruptions) * 5, 32 * 32 * 3))
         index = 0
         for corruption in tqdm(corruptions):
-            curr_svhn = np.load(f"{svhn_c_path_complete}/{corruption}.npy")
-            curr_svhn = torch.stack([svhn_transformer(img) for img in curr_svhn], dim=0)
-            svhn_c_ds[index : index + 10000 * 5] = curr_svhn
-            index += 10000 * 5
+            for l in levels:
+                curr_svhn = np.load(
+                    f"{svhn_c_path_complete}/svhn_test_{corruption}_l{l}.npy"
+                )
+                curr_svhn = torch.stack(
+                    [svhn_transformer(img) for img in curr_svhn], dim=0
+                )
+                svhn_c_ds[index : index + num_samples] = curr_svhn
+                index += num_samples
         targets = torch.cat(
-            [torch.tensor(test_ds.targets) for _ in range(len(corruptions) * 5)], dim=0
+            [torch.tensor(test_ds.labels) for _ in range(len(corruptions) * 5)], dim=0
         )
 
         print("shapes of corrupted stuff: ", svhn_c_ds.shape, targets.shape)
@@ -254,28 +263,29 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         )
 
         # evaluate calibration
-        print("evaluating calibration")
-        model.eval_calibration(svhn_c_dl, device, name="svhn-c", n_bins=20)
-        print("done evaluating calibration")
+        print("evaluating calibration on corrupted data")
+        model.eval_calibration(None, device, name="svhn-c", dl=svhn_c_dl)
+        print("done evaluating calibration on corrupted data")
 
         del svhn_c_ds, svhn_c_dl
 
         # iterate over all corruptions, load dataset, evaluate
         for corruption in tqdm(corruptions):
             # load dataset
-            data = np.load(f"{svhn_c_path_complete}/{corruption}.npy")
             eval_dict[corruption] = {}
             # iterate over severity levels
-            for severity in range(5):
-                current_data = data[severity * 10000 : (severity + 1) * 10000]
+            for l in levels:
+                current_data = np.load(
+                    f"{svhn_c_path_complete}/svhn_test_{corruption}_l{l}.npy"
+                )
                 # transform with svhn_transformer
                 current_data = torch.stack(
-                    [test_transformer(img) for img in current_data], dim=0
+                    [svhn_transformer(img) for img in current_data], dim=0
                 )
                 corrupt_test_ds = list(
                     zip(
                         current_data,
-                        test_ds.targets,
+                        test_ds.labels,
                     )
                 )
                 test_dl = DataLoader(
@@ -291,14 +301,15 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 backbone_acc = model.eval_acc(test_dl, device)
                 model.einet_active = True
                 acc = model.eval_acc(test_dl, device)
-                test_ll = model.eval_ll(test_dl, device)
-                test_entropy = model.eval_entropy(test_dl, device)
-                highest_class_prob = model.eval_highest_class_prob(test_dl, device)
+                test_ll = model.eval_ll(test_dl, device, return_all=True)
+                test_ll_marg = model.eval_ll_marg(test_ll, device)
+                test_entropy = model.eval_entropy(test_ll, device)
+                highest_class_prob = model.eval_highest_class_prob(test_ll, device)
 
-                eval_dict[corruption][severity] = {
+                eval_dict[corruption][l] = {
                     "backbone_acc": backbone_acc,
                     "einet_acc": acc,
-                    "ll": test_ll,
+                    "ll_marg": test_ll_marg,
                     "entropy": test_entropy,
                     "highest_class_prob": highest_class_prob,
                 }
@@ -320,9 +331,9 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             ]
         )
 
-        ll = np.mean(
+        ll_marg = np.mean(
             [
-                eval_dict[corruption][severity]["ll"]
+                eval_dict[corruption][severity]["ll_marg"]
                 for corruption in eval_dict
                 for severity in eval_dict[corruption]
             ]
@@ -346,7 +357,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
 
         mlflow.log_metric("manip_einet_acc", einet_acc)
         mlflow.log_metric("manip_backbone_acc", backbone_acc)
-        mlflow.log_metric("manip_ll", ll)
+        mlflow.log_metric("manip_ll_marg", ll_marg)
         mlflow.log_metric("manip_entropy", entropy)
         mlflow.log_metric("manip_highest_class_prob", highest_class_prob)
 
@@ -365,8 +376,8 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict[corruption][severity]["einet_acc"]
                 for severity in eval_dict[corruption]
             ]
-            lls = [
-                eval_dict[corruption][severity]["ll"]
+            lls_marg = [
+                eval_dict[corruption][severity]["ll_marg"]
                 for severity in eval_dict[corruption]
             ]
             entropy = [
@@ -385,7 +396,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             ax.set_ylim([0, 1])
 
             ax2 = ax.twinx()
-            ax2.plot(lls, label="ll", color="blue")
+            ax2.plot(lls_marg, label="ll", color="blue")
             ax2.tick_params(axis="y", labelcolor="blue")
 
             ax3 = ax.twinx()
