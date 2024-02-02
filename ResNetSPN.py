@@ -165,10 +165,27 @@ class EinetUtils:
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
+                # output: logS(x|y_i) Shape: (N, C)
+
+                # generative training uses NLL: -1/n sum_n logS(x) (across all samples)
+                # logS(x) = logsumexp_y logS(x|y) + logP(y)
+                # logP(y) = log(1/C) (uniform prior)
+                # logS(x) = logsumexp_y logS(x|y) + log(1/C)
+                # output_mean = 1/N sum_n 1/C sum_c logS(x|y_c) = 1/N sum_n logS(x)
+                # so that works!
+
+                # Also: we can use the CE of S(x|y) here, because with the assumption
+                # of uniform prior, CE of S(x|y) is equivalent to S(y|x) (see equation 4 RAT paper)
+
+                # The division factor |X| is equation 5 of RAT.
+                # This is the dimension of input to SPN, so hidden + explaining vars
+                # TODO: outside of loop
+                divisor = self.hidden.shape[1] + len(self.explaining_vars)
+
                 # scale ll loss
                 loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target) + (
                     1 - lambda_v
-                ) * -(output.mean() / 100)
+                ) * -(output.mean() / divisor)
                 # mpe_expl_vars = self.einet.sample(
                 #     evidence=self.einet_input,
                 #     marginalized_scopes=self.explaining_vars,
@@ -193,9 +210,10 @@ class EinetUtils:
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
+                    divisor = self.hidden.shape[1] + len(self.explaining_vars)
                     loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target) + (
                         1 - lambda_v
-                    ) * -(output.mean() / 100)
+                    ) * -(output.mean() / divisor)
                     val_loss += loss_v.item()
                 t.set_postfix(
                     dict(
@@ -749,6 +767,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         inputs = inputs.reshape(-1, self.input_dim)
         # feed through resnet
         hidden = self.forward_hidden(inputs)
+        self.hidden = hidden
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars

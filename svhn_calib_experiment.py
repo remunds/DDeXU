@@ -137,6 +137,34 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetGMM":
+            from ResNetSPN import EfficientNetGMM
+
+            model = EfficientNetGMM(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "ConvResnetDDUGMM":
+            from ResNetSPN import ConvResnetDDUGMM
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            model = ConvResnetDDUGMM(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)
@@ -152,7 +180,10 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        if "GMM" in model_name:
+            model.fit_gmm(train_dl, device)
+        else:
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
         model.eval()

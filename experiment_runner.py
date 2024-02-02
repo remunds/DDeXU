@@ -853,7 +853,7 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 100
+        train_params["num_epochs"] = 200
     else:
         raise ValueError(
             "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
@@ -877,10 +877,10 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "generative",
+    "generative",
     # "hybrid_very_low",
     # "hybrid_low",
-    "hybrid",
+    # "hybrid",
     # "hybrid_high",
     # "hybrid_very_high",
     # "discriminative",
@@ -899,9 +899,9 @@ dataset = [
 ]
 models = [
     # "ConvResNetSPN",
-    # "EfficientNetSPN",
+    "EfficientNetSPN",
     # "ConvResNetDDU",
-    "EfficientNetGMM",
+    # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
 ]
 pretrained_backbones = {

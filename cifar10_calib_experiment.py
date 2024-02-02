@@ -157,6 +157,34 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetGMM":
+            from ResNetSPN import EfficientNetGMM
+
+            model = EfficientNetGMM(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "ConvResnetDDUGMM":
+            from ResNetSPN import ConvResnetDDUGMM
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            model = ConvResnetDDUGMM(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)
@@ -172,25 +200,29 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        if "GMM" in model_name:
+            model.fit_gmm(train_dl, device)
+        else:
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
         model.eval()
         eval_dict = {}
 
         # eval resnet
-        # model.einet_active = False
-        # train_acc = model.eval_acc(train_dl, device)
-        # mlflow.log_metric("train accuracy resnet", train_acc)
-        # test_acc = model.eval_acc(test_dl, device)
-        # mlflow.log_metric("test accuracy resnet", test_acc)
+        model.deactivate_uncert_head()
+        train_acc = model.eval_acc(train_dl, device)
+        mlflow.log_metric("train accuracy backbone", train_acc)
+        test_acc = model.eval_acc(test_dl, device)
+        mlflow.log_metric("test accuracy backbone", test_acc)
 
         # eval einet
-        model.einet_active = True
+        model.activate_uncert_head()
         train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train_acc", train_acc)
         train_ll = model.eval_ll(train_dl, device)
-        mlflow.log_metric("train_ll", train_ll)
+        train_ll_marg = model.eval_ll_marg(train_ll, device)
+        mlflow.log_metric("train_ll_marg", train_ll_marg)
         train_pred_entropy = model.eval_entropy(train_dl, device)
         mlflow.log_metric("train_entropy", train_pred_entropy)
 

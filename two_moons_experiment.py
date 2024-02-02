@@ -311,11 +311,9 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         plt.title("Maximum Predictive Probability, SPN Model")
         mlflow.log_figure(fig, "max_pred_prob.png")
 
-        # TODO
         # Test epistemic as in DDU p(z)
-
-        # p_z = torch.exp(lls)  # hm cant use logsumexp here?
-        p_z = torch.exp(lls - torch.logsumexp(lls, dim=0))
+        p_z = torch.exp(lls)
+        # p_z = torch.exp(lls - torch.logsumexp(lls, dim=0))
 
         epistemic = p_z.cpu().detach().numpy()
         print("density p(z): ", epistemic[:5])

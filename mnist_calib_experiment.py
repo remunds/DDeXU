@@ -242,6 +242,27 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "ConvResnetDDUGMM":
+            from ResNetSPN import ConvResnetDDUGMM
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            model = ConvResnetDDUGMM(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)
@@ -257,7 +278,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
-        if model_name == "EfficientNetGMM":
+        if "GMM" in model_name:
             model.fit_gmm(train_dl, device)
         else:
             mlflow.pytorch.log_state_dict(model.state_dict(), "model")
