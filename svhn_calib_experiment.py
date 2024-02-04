@@ -15,7 +15,16 @@ def load_datasets():
     from torchvision.datasets import SVHN
     from torchvision import transforms
 
-    svhn_transformer = transforms.Compose(
+    train_transformer = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
+            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+        ]
+    )
+    test_transformer = transforms.Compose(
         [
             transforms.ToTensor(),
             transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
@@ -27,7 +36,7 @@ def load_datasets():
         root=dataset_dir + "svhn",
         download=True,
         split="train",
-        transform=svhn_transformer,
+        transform=train_transformer,
     )
     train_ds, valid_ds = torch.utils.data.random_split(
         train_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
@@ -36,10 +45,10 @@ def load_datasets():
         root=dataset_dir + "svhn",
         download=True,
         split="test",
-        transform=svhn_transformer,
+        transform=test_transformer,
     )
 
-    return train_ds, valid_ds, test_ds, svhn_transformer
+    return train_ds, valid_ds, test_ds, test_transformer
 
 
 def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, trial):
@@ -180,6 +189,14 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
+        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
+
         if "GMM" in model_name:
             model.fit_gmm(train_dl, device)
         else:

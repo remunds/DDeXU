@@ -19,13 +19,7 @@ def get_severity(test_ds, i):
     return (
         1
         if i < index_1
-        else 2
-        if i < index_2
-        else 3
-        if i < index_3
-        else 4
-        if i < index_4
-        else 5
+        else 2 if i < index_2 else 3 if i < index_3 else 4 if i < index_4 else 5
     )
 
 
@@ -278,6 +272,14 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
+        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
         if "GMM" in model_name:
             model.fit_gmm(train_dl, device)
         else:

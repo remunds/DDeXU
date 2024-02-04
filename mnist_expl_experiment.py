@@ -54,13 +54,7 @@ def get_severity(test_ds, i):
     return (
         1
         if i < index_1
-        else 2
-        if i < index_2
-        else 3
-        if i < index_3
-        else 4
-        if i < index_4
-        else 5
+        else 2 if i < index_2 else 3 if i < index_3 else 4 if i < index_4 else 5
     )
 
 
@@ -169,7 +163,7 @@ def manipulate_single_image(img, manipulation):
 
 def mnist_expl_qualitative_evaluation(model, device):
     model.to(device)
-    model.activate_einet()
+    model.activate_uncert_head()
     # get first image of test-set
     _, test_ds, _ = get_datasets()
     image = test_ds.data[0]
@@ -391,6 +385,32 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             model = EfficientNetSPN(
                 **model_params,
             )
+        elif model_name == "ConvResNetDDUGMM":
+            from ResNetSPN import ConvResnetDDUGMM
+            from net.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spec_norm_bound"]
+            model = ConvResnetDDUGMM(
+                block,
+                layers,
+                **model_params,
+            )
+        elif model_name == "EfficientNetGMM":
+            from ResNetSPN import EfficientNetGMM
+
+            model = EfficientNetGMM(
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)
@@ -406,21 +426,34 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
+
+        if "GMM" in model_name:
+            print("fitting gmm")
+            model.fit_gmm(train_dl, device)
+        else:
+            # no need to store gmm
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # evaluate
         model.eval()
 
         # eval accuracy
-        model.einet_active = False
+        model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc_resnet", valid_acc)
-        model.einet_active = True
+        model.activate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
 
-        valid_ll = model.eval_ll(valid_dl, device)
-        mlflow.log_metric("valid_ll", valid_ll)
+        valid_ll_marg = model.eval_ll_marg(None, device, valid_dl)
+        mlflow.log_metric("valid_ll_marg", valid_ll_marg)
 
         del train_dl
         del valid_dl
@@ -474,7 +507,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             )
             severity = get_severity(test_ds, s - 1)
             acc = model.eval_acc(test_dl_rot, device)
-            ll = model.eval_ll(test_dl_rot, device)
+            ll_marg = model.eval_ll_marg(None, device, test_dl_rot)
             expl_ll = model.explain_ll(test_dl_rot, device)
             expl_mpe = model.explain_mpe(test_dl_rot, device)
             # convert to list
@@ -483,7 +516,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict["rotation"] = {}
             eval_dict["rotation"][severity] = {
                 "acc": acc,
-                "ll": ll,
+                "ll_marg": ll_marg,
                 "expl_ll": expl_ll,
                 "expl_mpe": expl_mpe,
             }
@@ -496,7 +529,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             )
 
             acc = model.eval_acc(test_dl_cutoff, device)
-            ll = model.eval_ll(test_dl_cutoff, device)
+            ll_marg = model.eval_ll_marg(None, device, test_dl_cutoff)
             expl_ll = model.explain_ll(test_dl_cutoff, device)
             expl_mpe = model.explain_mpe(test_dl_cutoff, device)
             expl_mpe = expl_mpe.tolist()
@@ -504,7 +537,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict["cutoff"] = {}
             eval_dict["cutoff"][severity] = {
                 "acc": acc,
-                "ll": ll,
+                "ll_marg": ll_marg,
                 "expl_ll": expl_ll,
                 "expl_mpe": expl_mpe,
             }
@@ -517,7 +550,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             )
 
             acc = model.eval_acc(test_dl_noise, device)
-            ll = model.eval_ll(test_dl_noise, device)
+            ll_marg = model.eval_ll_marg(None, device, test_dl_noise)
             expl_ll = model.explain_ll(test_dl_noise, device)
             expl_mpe = model.explain_mpe(test_dl_noise, device)
             expl_mpe = expl_mpe.tolist()
@@ -525,7 +558,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict["noise"] = {}
             eval_dict["noise"][severity] = {
                 "acc": acc,
-                "ll": ll,
+                "ll_marg": ll_marg,
                 "expl_ll": expl_ll,
                 "expl_mpe": expl_mpe,
             }
@@ -540,15 +573,15 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 for severity in eval_dict[m]
             ]
         )
-        overall_ll = np.mean(
+        overall_ll_marg = np.mean(
             [
-                eval_dict[m][severity]["ll"]
+                eval_dict[m][severity]["ll_marg"]
                 for m in eval_dict
                 for severity in eval_dict[m]
             ]
         )
         mlflow.log_metric("manip acc", overall_acc)
-        mlflow.log_metric("manip ll", overall_ll)
+        mlflow.log_metric("manip ll marg", overall_ll_marg)
 
         # create plot for each corruption
         # x axis: severity

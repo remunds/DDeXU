@@ -2,6 +2,7 @@ import traceback
 import torch
 import mlflow
 import optuna
+from figure6 import start_figure6_run
 from two_moons_experiment import start_two_moons_run
 from mnist_calib_experiment import start_mnist_calib_run
 from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
@@ -9,7 +10,7 @@ from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
-from cifar10_calib_experiment_gmm import start_cifar10_calib_run_gmm
+from svhn_expl_experiment import start_svhn_expl_run
 
 torch.manual_seed(0)
 # Set our tracking server uri for logging
@@ -220,9 +221,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
     elif training == "seperate":
-        train_params["warmup_epochs"] = 100
+        train_params["warmup_epochs"] = 2
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 100
+        train_params["num_epochs"] = 2
     elif training == "warmup":
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
@@ -233,7 +234,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 50
+        train_params["num_epochs"] = 1
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -292,16 +293,6 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
-    elif "gmm-cifar10-c-calib" in dataset:
-        try:
-            start_cifar10_calib_run_gmm(
-                run_name, batch_sizes, model_params, train_params, None
-            )
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
-            mlflow.set_tag("pruned", e)
-            mlflow.end_run()
     elif "cifar10-c-calib" in dataset:
         try:
             start_cifar10_calib_run(
@@ -332,6 +323,22 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         try:
             start_svhn_calib_run(
                 run_name, batch_sizes, model_params, train_params, None
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+    elif "svhn-c-expl" in dataset:
+        model_params["explaining_vars"] = list(range(15))
+        train_params["corruption_levels_train"] = [0, 1]
+        try:
+            start_svhn_expl_run(
+                run_name,
+                batch_sizes.copy(),
+                model_params.copy(),
+                train_params.copy(),
+                None,
             )
         except Exception as e:
             print(e)
@@ -785,16 +792,19 @@ def run_mnist_expl(dataset, model, loss, pretrained_path):
         mlflow.end_run()
 
 
-def run_two_moons(dataset, loss, training, pretrained_path=None):
-    print("New run of two moons")
-
-    # only run experiment, if it wasnt run fully
+def run_dense_resnet(dataset, loss, training, pretrained_path=None):
     mlflow.set_experiment(dataset)
     run_name = f"{loss}_{training}"
 
     batch_sizes = dict(resnet=512)
+    if "two-moons" in dataset:
+        num_classes = 2
+    elif "figure6" in dataset:
+        num_classes = 3
+    else:
+        num_classes = 10
     model_params_dense = dict(
-        num_classes=2,
+        num_classes=num_classes,
         input_dim=2,
         num_layers=3,
         num_hidden=32,
@@ -808,9 +818,9 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
     )
     train_params = dict(
         num_epochs=100,
-        early_stop=10,
-        learning_rate_warmup=0.05,
-        learning_rate=0.09,
+        early_stop=100,
+        learning_rate_warmup=0.03,
+        learning_rate=0.025,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -820,18 +830,12 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
         train_params["lambda_v"] = 0.5
     elif loss == "hybrid_low":
         train_params["lambda_v"] = 0.1
-    elif loss == "hybrid_very_low":
-        train_params["lambda_v"] = 0.01
+    elif loss == "hybrid_mid_low":
+        train_params["lambda_v"] = 0.3
     elif loss == "hybrid_mid_high":
-        train_params["lambda_v"] = 0.8
+        train_params["lambda_v"] = 0.7
     elif loss == "hybrid_high":
         train_params["lambda_v"] = 0.9
-    elif loss == "hybrid_very_high":
-        train_params["lambda_v"] = 0.99
-    elif loss == "hybrid_super_high":
-        train_params["lambda_v"] = 0.999
-    elif loss == "hybrid_super_super_high":
-        train_params["lambda_v"] = 0.9999
     else:
         raise ValueError(
             "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
@@ -840,62 +844,79 @@ def run_two_moons(dataset, loss, training, pretrained_path=None):
     if training == "end-to-end":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
+        train_params["num_epochs"] = 200
     elif training == "seperate":
-        train_params["warmup_epochs"] = 100
+        train_params["warmup_epochs"] = 300
         train_params["deactivate_backbone"] = True
+        train_params["num_epochs"] = 200
     elif training == "warmup":
         train_params["warmup_epochs"] = 100
         train_params["deactivate_backbone"] = False
+        train_params["num_epochs"] = 100
     elif training == "backbone_only":
-        train_params["warmup_epochs"] = 50
+        train_params["warmup_epochs"] = 100
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 0
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 200
+        train_params["num_epochs"] = 400
     else:
         raise ValueError(
             "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
         )
     if pretrained_path is not None:
         train_params["pretrained_path"] = pretrained_path
-    try:
-        start_two_moons_run(
-            run_name,
-            batch_sizes,
-            model_params_dense,
-            train_params,
-            None,
-        )
-    except Exception as e:
-        print(e)
-        traceback.print_exc()
-        mlflow.set_tag("pruned", e)
-        mlflow.end_run()
+    if "two-moons" in dataset:
+        try:
+            start_two_moons_run(
+                run_name,
+                batch_sizes,
+                model_params_dense,
+                train_params,
+                None,
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+    elif "figure6" in dataset:
+        try:
+            start_figure6_run(
+                run_name,
+                batch_sizes,
+                model_params_dense,
+                train_params,
+                None,
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
 
 
 # Zweites Tuning
 loss = [
-    "generative",
-    # "hybrid_very_low",
+    # "generative",
     # "hybrid_low",
+    "hybrid_mid_low",
     # "hybrid",
+    "hybrid_mid_high",
     # "hybrid_high",
-    # "hybrid_very_high",
     # "discriminative",
-    # "hybrid_super_super_high",
-    # "hybrid_super_high",
-    # "hybrid_mid_high",
 ]
 dataset = [
+    # "figure6",
     "two-moons",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
+    # "cifar10-c-calib",
     # "cifar10-c-expl",
     # "svhn-c-calib"
-    # "gmm-cifar10-c-calib",
+    # "svhn-c-expl"
 ]
 models = [
     # "ConvResNetSPN",
@@ -907,11 +928,13 @@ models = [
 pretrained_backbones = {
     # acc: 1
     "two-moons": "814351535813234998/48fe608aa28642968dfcaad0201a47e0/artifacts/model",
+    "figure6": "155846836899219289/3772e86556b449fe9c763d42e87a69bd/artifacts/model",
     "mnist-calib": {
         # val-acc: 0.9919
         "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
         # val-acc: 0.9953
         "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
+        "ConvResNetDDUGMM": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
         # val-acc: 0.9918
         "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
         # val-acc: 0.9918
@@ -921,7 +944,9 @@ pretrained_backbones = {
     "mnist-expl": {
         "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
         "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
+        "ConvResNetDDUGMM": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
         "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+        "EfficientNetGMM": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
     },
     "dirty-mnist": {
         # val-acc: 0.8954
@@ -938,13 +963,9 @@ pretrained_backbones = {
         "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
         # val-acc: 0.8850
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
-        # val-acc: 0.8496
-        "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
-    },
-    "gmm-cifar10-c-calib": {
-        # val-acc: 0.8850
         "ConvResNetDDUGMM": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         # val-acc: 0.8496
+        "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
         "EfficientNetGMM": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
     },
     # same as calib
@@ -991,26 +1012,26 @@ trained_models = {
 
 for d in dataset:
     for l in loss:
-        if d == "two-moons":
+        if d == "two-moons" or d == "figure6":
             pretrained_path = pretrained_backbones[d]
             pretrained_path = (
                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             )
-            dataset = d + "-newLeafKwargs"
-            run_two_moons(dataset, l, "einet_only", pretrained_path)
+            # pretrained_path = None
+            run_dense_resnet(d, l, "einet_only", pretrained_path)
             continue
         for m in models:
-            pretrained_path = pretrained_backbones[d][m]
+            # pretrained_path = pretrained_backbones[d][m]
             # pretrained_path = trained_models[d][m]
             # pretrained_path = trained_models[d][l][m]
-            pretrained_path = (
-                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            )
+            # pretrained_path = (
+            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            # )
             # dataset = d
-            # pretrained_path = None
+            pretrained_path = None
             # tune_conv(d, l, "end-to-end", m, pretrained_path)
             # run_conv(dataset, l, "eval_only", m, pretrained_path)
-            run_conv(d, l, "eval_only", m, pretrained_path)
+            run_conv(d, l, "seperate", m, pretrained_path)
             # run_conv(dataset, l, "seperate", m)
 
 

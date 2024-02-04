@@ -176,43 +176,22 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             trial=trial,
             **train_params,
         )
+        # before costly evaluation, make sure that the model is not completely off
+        resnet_spn.deactivate_uncert_head()
+        valid_acc = resnet_spn.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
+
+        resnet_spn.activate_uncert_head()
         mlflow.pytorch.log_state_dict(resnet_spn.state_dict(), "model")
 
         if train_params["num_epochs"] == 0:
             return lowest_val_loss
+
         # evaluate
         resnet_spn.eval()
-        valid_acc = resnet_spn.eval_acc(valid_dl, device)
-        print("valid accuracy: ", valid_acc)
-        mlflow.log_metric("valid accuracy", valid_acc)
-
-        # pos_dl = DataLoader(
-        #     pos_examples,
-        #     batch_size=batch_sizes["resnet"],
-        #     pin_memory=False,
-        #     num_workers=1,
-        # )
-        # get LL's
-        # pos_ll = resnet_spn.eval_ll(pos_dl, device)
-        # mlflow.log_metric("pos_ll", pos_ll)
-        # neg_dl = DataLoader(
-        #     neg_examples,
-        #     batch_size=batch_sizes["resnet"],
-        #     pin_memory=False,
-        #     num_workers=1,
-        # )
-        # neg_ll = resnet_spn.eval_ll(neg_dl, device)
-        # mlflow.log_metric("neg_ll", neg_ll)
-        # ood_dl = DataLoader(
-        #     ood_examples,
-        #     batch_size=batch_sizes["resnet"],
-        #     pin_memory=False,
-        #     num_workers=1,
-        # )
-        # ood_ll = resnet_spn.eval_ll(ood_dl, device)
-        # mlflow.log_metric("ood_ll", ood_ll)
-
-        # del pos_dl, neg_dl, ood_dl
 
         test_dl = DataLoader(
             test_examples,

@@ -2,10 +2,12 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import numpy as np
+import mlflow
+
+import os
 
 
-def generate_data():
-    samples = 1000
+def generate_data(samples=1000):
     # 2d gaussian with torch
     mean = torch.tensor([-1.8, -1.8])
     cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
@@ -123,101 +125,123 @@ def plot_uncertainty_surface(
     return pcm
 
 
-train = generate_data()
-test = generate_data()
+def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
+    print("starting new figure6 run: ", run_name)
+    with mlflow.start_run(run_name=run_name):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        mlflow.log_param("device", device)
 
-from ResNetSPN import EfficientNetSPN
+        ckpt_dir = f"ckpts/figure6/{run_name}/"
+        os.makedirs(ckpt_dir, exist_ok=True)
+        mlflow.log_param("ckpt_dir", ckpt_dir)
 
-model_params_dense = dict(
-    num_classes=3,
-    input_dim=2,
-    num_layers=5,
-    num_hidden=32,
-    spec_norm_bound=0.95,
-    einet_depth=5,
-    einet_num_sums=20,
-    einet_num_leaves=20,
-    einet_num_repetitions=5,
-    einet_leaf_type="Normal",
-    einet_dropout=0.0,
-)
-train_params = dict(
-    num_epochs=200,
-    early_stop=15,
-    learning_rate_warmup=0.05,
-    learning_rate=0.03,
-    lambda_v=0.7,
-    warmup_epochs=100,
-)
-batch_sizes = dict(resnet=512)
+        # log all params
+        mlflow.log_params(batch_sizes)
+        mlflow.log_params(model_params)
+        mlflow.log_params(train_params)
 
-from ResNetSPN import DenseResNetSPN
+        train = generate_data(1000)
+        valid = generate_data(100)
 
-model = DenseResNetSPN(**model_params_dense)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+        train_dl = torch.utils.data.DataLoader(
+            train, batch_size=batch_sizes["resnet"], shuffle=True
+        )
+        valid_dl = torch.utils.data.DataLoader(
+            valid, batch_size=batch_sizes["resnet"], shuffle=True
+        )
 
-train_dl = torch.utils.data.DataLoader(train, batch_size=32, shuffle=True)
-test_dl = torch.utils.data.DataLoader(test, batch_size=32, shuffle=False)
-model.start_train(
-    train_dl, train_dl, device, checkpoint_dir=None, trial=None, **train_params
-)
-model.deactivate_uncert_head()
-print("backbone: ", model.eval_acc(test_dl, device))
-model.activate_uncert_head()
-print("uncert: ", model.eval_acc(test_dl, device))
+        from ResNetSPN import EfficientNetSPN
 
-test_data = make_testing_data()
-test_dl = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False)
-ll_marg = model.eval_ll_marg(None, device, test_dl, return_all=True)
-ll_marg = ll_marg.cpu().detach().numpy()
+        from ResNetSPN import DenseResNetSPN
 
-test_data = np.array([x[0].cpu().detach().numpy() for x in test])
-test_labels = np.array([x[1].cpu().detach().numpy() for x in test])
+        model = DenseResNetSPN(**model_params)
+        mlflow.set_tag("model", model.__class__.__name__)
+        model.to(device)
 
-fig, ax = plt.subplots(figsize=(7, 5.5))
-pcm = plot_uncertainty_surface(test_data, test_labels, ll_marg, ax=ax)
-plt.colorbar(pcm, ax=ax)
-plt.title("NLL, SPN model")
-plt.savefig("figure6_nll.png")
+        lowest_val_loss = model.start_train(
+            train_dl,
+            valid_dl,
+            device,
+            checkpoint_dir=ckpt_dir,
+            trial=trial,
+            **train_params,
+        )
+        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc_backbone", valid_acc)
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
 
-fig, ax = plt.subplots(figsize=(7, 5.5))
-pcm = plot_uncertainty_surface(test_data, test_labels, ll_marg, ax=ax, plot_train=False)
-plt.colorbar(pcm, ax=ax)
-plt.title("NLL, SPN model")
-plt.savefig("figure6_nll_notrain.png")
+        model.activate_uncert_head()
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-entropy = model.eval_entropy(None, device, test_dl, return_all=True)
-entropy = entropy.cpu().detach().numpy()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
 
-fig, ax = plt.subplots(figsize=(7, 5.5))
-pcm = plot_uncertainty_surface(test_data, test_labels, entropy, ax=ax)
-plt.colorbar(pcm, ax=ax)
-plt.title("Entropy, SPN model")
-plt.savefig("figure6_entr.png")
-fig, ax = plt.subplots(figsize=(7, 5.5))
-pcm = plot_uncertainty_surface(test_data, test_labels, entropy, ax=ax, plot_train=False)
-plt.colorbar(pcm, ax=ax)
-plt.title("Entropy, SPN model")
-plt.savefig("figure6_entr_notrain.png")
+        test = make_testing_data()
+        test_dl = torch.utils.data.DataLoader(
+            test,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+        )
+        train_data = torch.stack([x[0] for x in train])
+        train_labels = torch.stack([x[1] for x in train])
 
-class_probability = model.eval_highest_class_prob(
-    None, device, test_dl, return_all=True
-)
-class_probability = class_probability.cpu().detach().numpy()
+        ll_marg = model.eval_ll_marg(None, device, test_dl, return_all=True)
+        print(ll_marg.shape)
+        ll_marg = ll_marg.cpu().detach().numpy()
 
-fig, ax = plt.subplots(figsize=(7, 5.5))
-pcm = plot_uncertainty_surface(test_data, test_labels, class_probability, ax=ax)
-plt.colorbar(pcm, ax=ax)
-plt.title("Highest class prob, SPN model")
-plt.savefig("figure6_class_prob.png")
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(train_data, train_labels, ll_marg, ax=ax)
+        plt.colorbar(pcm, ax=ax)
+        plt.title("NLL, SPN model")
+        mlflow.log_figure(fig, "nll.png")
 
-logits = model.backbone_logits(test_dl, device, return_all=True)
-probs = torch.softmax(logits, dim=1)
-aleatoric = -torch.sum(probs * torch.log(probs), axis=1).cpu().detach().numpy()
-print(aleatoric[:5])
-fig, ax = plt.subplots(figsize=(7, 5.5))
-pcm = plot_uncertainty_surface(test_data, test_labels, aleatoric, ax=ax)
-plt.colorbar(pcm, ax=ax)
-plt.title("Aleatoric, SPN model")
-plt.savefig("figure6_aleatoric.png")
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, ll_marg, ax=ax, plot_train=False
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("NLL, SPN model")
+        mlflow.log_figure(fig, "nll_notrain.png")
+
+        entropy = model.eval_entropy(None, device, test_dl, return_all=True)
+        entropy = entropy.cpu().detach().numpy()
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(train_data, train_labels, entropy, ax=ax)
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Entropy, SPN model")
+        mlflow.log_figure(fig, "entr.png")
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, entropy, ax=ax, plot_train=False
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Entropy, SPN model")
+        mlflow.log_figure(fig, "entr_notrain.png")
+
+        class_probability = model.eval_highest_class_prob(
+            None, device, test_dl, return_all=True
+        )
+        class_probability = class_probability.cpu().detach().numpy()
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, class_probability, ax=ax
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Highest class prob, SPN model")
+        mlflow.log_figure(fig, "class_prob.png")
+
+        logits = model.backbone_logits(test_dl, device, return_all=True)
+        probs = torch.softmax(logits, dim=1)
+        aleatoric = -torch.sum(probs * torch.log(probs), axis=1).cpu().detach().numpy()
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(train_data, train_labels, aleatoric, ax=ax)
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Aleatoric, SPN model")
+        mlflow.log_figure(fig, "aleatoric.png")

@@ -200,6 +200,14 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             trial=trial,
             **train_params,
         )
+        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
         if "GMM" in model_name:
             model.fit_gmm(train_dl, device)
         else:
@@ -220,17 +228,18 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         model.activate_uncert_head()
         train_acc = model.eval_acc(train_dl, device)
         mlflow.log_metric("train_acc", train_acc)
-        train_ll = model.eval_ll(train_dl, device)
+        train_ll = model.eval_ll(train_dl, device, return_all=True)
         train_ll_marg = model.eval_ll_marg(train_ll, device)
         mlflow.log_metric("train_ll_marg", train_ll_marg)
-        train_pred_entropy = model.eval_entropy(train_dl, device)
+        train_pred_entropy = model.eval_entropy(train_ll, device)
         mlflow.log_metric("train_entropy", train_pred_entropy)
 
         test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test_acc", test_acc)
-        orig_test_ll = model.eval_ll(test_dl, device)
-        mlflow.log_metric("test_ll", orig_test_ll)
-        orig_test_pred_entropy = model.eval_entropy(test_dl, device)
+        orig_test_ll = model.eval_ll(test_dl, device, return_all=True)
+        orig_test_ll_marg = model.eval_ll_marg(orig_test_ll, device)
+        mlflow.log_metric("test_ll_marg", orig_test_ll_marg)
+        orig_test_pred_entropy = model.eval_entropy(orig_test_ll, device)
         mlflow.log_metric("test_entropy", orig_test_pred_entropy)
 
         # random noise baseline
@@ -246,9 +255,10 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         )
         random_acc = model.eval_acc(random_dl, device)
         mlflow.log_metric("random_acc", random_acc)
-        random_ll = model.eval_ll(random_dl, device)
-        mlflow.log_metric("random_ll", random_ll)
-        random_pred_entropy = model.eval_entropy(random_dl, device)
+        random_ll = model.eval_ll(random_dl, device, return_all=True)
+        random_ll_marg = model.eval_ll_marg(random_ll, device)
+        mlflow.log_metric("random_ll_marg", random_ll_marg)
+        random_pred_entropy = model.eval_entropy(random_ll, device)
         mlflow.log_metric("random_entropy", random_pred_entropy)
 
         # train: 50k, 32, 32, 3
@@ -310,7 +320,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # evaluate calibration
         print("evaluating calibration")
-        model.eval_calibration(cifar10_c_dl, device, name="cifar10-c", n_bins=20)
+        model.eval_calibration(None, device, "cifar10-c", cifar10_c_dl)
         print("done evaluating calibration")
 
         del cifar10_c_ds, cifar10_c_dl
@@ -342,18 +352,18 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 )
 
                 # evaluate
-                model.einet_active = False
+                model.deactivate_uncert_head()
                 backbone_acc = model.eval_acc(test_dl, device)
-                model.einet_active = True
+                model.activate_uncert_head()
                 acc = model.eval_acc(test_dl, device)
-                test_ll = model.eval_ll(test_dl, device)
-                test_entropy = model.eval_entropy(test_dl, device)
-                highest_class_prob = model.eval_highest_class_prob(test_dl, device)
-
+                test_ll = model.eval_ll(test_dl, device, return_all=True)
+                test_ll_marg = model.eval_ll_marg(test_ll, device)
+                test_entropy = model.eval_entropy(test_ll, device)
+                highest_class_prob = model.eval_highest_class_prob(test_ll, device)
                 eval_dict[corruption][severity] = {
                     "backbone_acc": backbone_acc,
                     "einet_acc": acc,
-                    "ll": test_ll,
+                    "ll_marg": test_ll_marg,
                     "entropy": test_entropy,
                     "highest_class_prob": highest_class_prob,
                 }
@@ -375,9 +385,9 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             ]
         )
 
-        ll = np.mean(
+        ll_marg = np.mean(
             [
-                eval_dict[corruption][severity]["ll"]
+                eval_dict[corruption][severity]["ll_marg"]
                 for corruption in eval_dict
                 for severity in eval_dict[corruption]
             ]
@@ -401,7 +411,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         mlflow.log_metric("manip_einet_acc", einet_acc)
         mlflow.log_metric("manip_backbone_acc", backbone_acc)
-        mlflow.log_metric("manip_ll", ll)
+        mlflow.log_metric("manip_ll_marg", ll_marg)
         mlflow.log_metric("manip_entropy", entropy)
         mlflow.log_metric("manip_highest_class_prob", highest_class_prob)
 
@@ -420,8 +430,8 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 eval_dict[corruption][severity]["einet_acc"]
                 for severity in eval_dict[corruption]
             ]
-            lls = [
-                eval_dict[corruption][severity]["ll"]
+            lls_marg = [
+                eval_dict[corruption][severity]["ll_marg"]
                 for severity in eval_dict[corruption]
             ]
             entropy = [
@@ -440,7 +450,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             ax.set_ylim([0, 1])
 
             ax2 = ax.twinx()
-            ax2.plot(lls, label="ll", color="blue")
+            ax2.plot(lls_marg, label="ll_marg", color="blue")
             ax2.tick_params(axis="y", labelcolor="blue")
 
             ax3 = ax.twinx()

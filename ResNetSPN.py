@@ -390,9 +390,15 @@ class EinetUtils:
         # use softmax to convert logs to probs
         posteriors = torch.softmax(posteriors_log, dim=1)
         # get correct class
-        labels = torch.cat([labels for _, labels in dl], dim=0).to(device)
+        labels = (
+            torch.cat([labels for _, labels in dl], dim=0).to(device).to(torch.long)
+        )
+        print(posteriors.shape)
+        print(labels.shape)
+        print(torch.arange(len(labels), device=device).shape)
+        print(labels.shape)
         correct_class_prob = posteriors[
-            torch.arange(len(labels), device=device), labels.to(device)
+            torch.arange(len(labels), device=device), labels
         ]
         if return_all:
             return correct_class_prob  # (N)
@@ -551,14 +557,14 @@ class EinetUtils:
     def explain_ll(self, dl, device, return_all=False):
         """
         Check each explaining variable individually.
-        Returns the difference in log likelihood between the default model and the marginalized model.
+        Returns the difference in data log likelihood between the default model and the marginalized model.
         Use, when the explaining variables are given in the data.
         """
-        ll_default = self.eval_ll(dl, device, return_all)
+        ll_default = self.eval_ll_marg(None, device, dl, return_all)
         explanations = []
         for i in self.explaining_vars:
             self.marginalized_scopes = [i]
-            ll_marg = self.eval_ll(dl, device, return_all)
+            ll_marg = self.eval_ll_marg(None, device, dl, return_all)
             explanations.append((ll_marg - ll_default))
         self.marginalized_scopes = None
         if return_all:

@@ -225,6 +225,13 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             trial=trial,
             **train_params,
         )
+        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc", valid_acc)
+        if valid_acc < 0.5:
+            # let optuna know that this is a bad trial
+            return lowest_val_loss
         if "GMM" in model_name:
             print("fitting gmm")
             model.fit_gmm(train_dl, device)
@@ -248,10 +255,10 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
         test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test accuracy", test_acc)
 
-        train_ll = model.eval_ll(train_dl, device)
-        mlflow.log_metric("train ll", train_ll)
-        test_ll = model.eval_ll(test_dl, device)
-        mlflow.log_metric("test ll", test_ll)
+        train_ll_marg = model.eval_ll_marg(None, device, train_dl)
+        mlflow.log_metric("train ll_marg", train_ll_marg)
+        test_ll_marg = model.eval_ll_marg(None, device, test_dl)
+        mlflow.log_metric("test ll_marg", test_ll_marg)
 
         # create dataloaders
         mnist_dl = DataLoader(
@@ -282,107 +289,92 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
 
         # get log-likelihoods for all datasets
         with torch.no_grad():
-            # TODO for all: remove unmarginalized and uncomment marginalized
-            # lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
             lls_mnist = model.eval_ll(mnist_dl, device, return_all=True)
-            mlflow.log_metric("mnist ll", torch.mean(lls_mnist))
-            pred_entropy_mnist = model.eval_entropy(mnist_dl, device, return_all=True)
+            lls_mnist_marg = model.eval_ll_marg(lls_mnist, device, return_all=True)
+            mlflow.log_metric("mnist ll marg", torch.mean(lls_mnist_marg))
+            pred_entropy_mnist = model.eval_entropy(lls_mnist, device, return_all=True)
             mlflow.log_metric("mnist entropy", torch.mean(pred_entropy_mnist).item())
             highest_class_prob_mnist = model.eval_highest_class_prob(
-                mnist_dl, device, return_all=True
+                lls_mnist, device, return_all=True
             )
             mlflow.log_metric(
                 "mnist highest class prob", torch.mean(highest_class_prob_mnist).item()
             )
             correct_class_prob_mnist = model.eval_correct_class_prob(
-                mnist_dl, device, return_all=True
+                lls_mnist, device, mnist_dl, return_all=True
             )
             mlflow.log_metric(
                 "mnist correct class prob", torch.mean(correct_class_prob_mnist).item()
             )
             # compute epistemic uncertainty as in DDU paper
-            # get lls without sum over y
-            lls_all = model.eval_ll_raw(mnist_dl, device, return_all=True)
-            lls_lsexp = torch.logsumexp(lls_all, axis=1)
-            # use logsumexp trick to get p(z|y_i) numerically stable (transform log to prob)
-            p_z_y0 = torch.exp(lls_all[:, 0] - lls_lsexp)
-            p_z_y1 = torch.exp(lls_all[:, 1] - lls_lsexp)
-            # compute marginal p(z) = sum_y p(z,y) = sum_y p(z|y) p(y)
-            epistemic_mnist = p_z_y0 * 0.5 + p_z_y1 * 0.5  # density of embedding z
-            epistemic_mnist = torch.softmax(lls_all, dim=1)
+            # want p(z) got already logp(z) of shape N (lls_mnist_marg)
+            # p_z = torch.exp(lls_mnist_marg) -> numerically unstable
+            # so use logsumexp trick: p_z = torch.exp(logp(z) - logsumexp(logp(z)))
+            epistemic_mnist = torch.exp(
+                lls_mnist_marg - torch.logsumexp(lls_mnist_marg, axis=0)
+            )
             mlflow.log_metric("mnist epistemic", torch.mean(epistemic_mnist).item())
 
             backbone_logits = model.backbone_logits(mnist_dl, device, return_all=True)
-            probs = torch.softmax(backbone_logits, dim=1)
-            aleatoric_mnist = -torch.sum(probs * torch.log(probs), dim=1)
+            mnist_probs = torch.softmax(backbone_logits, dim=1)
+            aleatoric_mnist = -torch.sum(mnist_probs * torch.log(mnist_probs), dim=1)
             mlflow.log_metric("mnist aleatoric", torch.mean(aleatoric_mnist).item())
 
-            # lls_amb = model.eval_ll(ambiguous_dl, device, return_all=True)
-            lls_amb = model.eval_ll_unmarginalized(
-                ambiguous_dl, device, return_all=True
-            )
-            lls_amb = torch.logsumexp(lls_amb, axis=1)
-            mlflow.log_metric("ambiguous ll", torch.mean(lls_amb).item())
-            pred_entropy_amb = model.eval_entropy(ambiguous_dl, device, return_all=True)
+            lls_amb = model.eval_ll(ambiguous_dl, device, return_all=True)
+            lls_amb_marg = model.eval_ll_marg(lls_amb, device, return_all=True)
+            mlflow.log_metric("ambiguous ll_marg", torch.mean(lls_amb_marg).item())
+            pred_entropy_amb = model.eval_entropy(lls_amb, device, return_all=True)
             mlflow.log_metric("ambiguous entropy", torch.mean(pred_entropy_amb).item())
             highest_class_prob_amb = model.eval_highest_class_prob(
-                ambiguous_dl, device, return_all=True
+                lls_amb, device, return_all=True
             )
             mlflow.log_metric(
                 "ambiguous highest class prob",
                 torch.mean(highest_class_prob_amb).item(),
             )
             correct_class_prob_amb = model.eval_correct_class_prob(
-                ambiguous_dl, device, return_all=True
+                lls_amb, device, ambiguous_dl, return_all=True
             )
             mlflow.log_metric(
                 "ambiguous correct class prob",
                 torch.mean(correct_class_prob_amb).item(),
             )
-            lls_unmarg = model.eval_ll_unmarginalized(
-                ambiguous_dl, device, return_all=True
+            epistemic_amb = torch.exp(
+                lls_amb_marg - torch.logsumexp(lls_amb_marg, axis=0)
             )
-            lls_lsexp = torch.logsumexp(lls_unmarg, axis=1)
-            p_z_y0 = torch.exp(lls_unmarg[:, 0] - lls_lsexp)
-            p_z_y1 = torch.exp(lls_unmarg[:, 1] - lls_lsexp)
-            epistemic_amb = p_z_y0 * 0.5 + p_z_y1 * 0.5  # density of embedding z
             mlflow.log_metric("ambiguous epistemic", torch.mean(epistemic_amb).item())
-
             backbone_logits = model.backbone_logits(
                 ambiguous_dl, device, return_all=True
             )
-            probs = torch.softmax(backbone_logits, dim=1)
-            aleatoric_amb = -torch.sum(probs * torch.log(probs), dim=1)
+            amb_probs = torch.softmax(backbone_logits, dim=1)
+            aleatoric_amb = -torch.sum(amb_probs * torch.log(amb_probs), dim=1)
             mlflow.log_metric("ambiguous aleatoric", torch.mean(aleatoric_amb).item())
 
-            # lls_ood = model.eval_ll(ood_dl, device, return_all=True)
-            lls_ood = model.eval_ll_unmarginalized(ood_dl, device, return_all=True)
-            lls_ood = torch.logsumexp(lls_ood, axis=1)
-            mlflow.log_metric("ood ll", torch.mean(lls_ood).item())
-            pred_entropy_ood = model.eval_entropy(ood_dl, device, return_all=True)
+            lls_ood = model.eval_ll(ood_dl, device, return_all=True)
+            lls_ood_marg = model.eval_ll_marg(lls_ood, device, return_all=True)
+            mlflow.log_metric("ood ll_marg", torch.mean(lls_ood_marg).item())
+            pred_entropy_ood = model.eval_entropy(lls_ood, device, return_all=True)
             mlflow.log_metric("ood entropy", torch.mean(pred_entropy_ood).item())
             highest_class_prob_ood = model.eval_highest_class_prob(
-                ood_dl, device, return_all=True
+                lls_ood, device, return_all=True
             )
             mlflow.log_metric(
                 "ood highest class prob", torch.mean(highest_class_prob_ood).item()
             )
             correct_class_prob_ood = model.eval_correct_class_prob(
-                ood_dl, device, return_all=True
+                lls_ood, device, ood_dl, return_all=True
             )
             mlflow.log_metric(
                 "ood correct class prob", torch.mean(correct_class_prob_ood).item()
             )
-            lls_unmarg = model.eval_ll_unmarginalized(ood_dl, device, return_all=True)
-            lls_lsexp = torch.logsumexp(lls_unmarg, axis=1)
-            p_z_y0 = torch.exp(lls_unmarg[:, 0] - lls_lsexp)
-            p_z_y1 = torch.exp(lls_unmarg[:, 1] - lls_lsexp)
-            epistemic_ood = p_z_y0 * 0.5 + p_z_y1 * 0.5
+            epistemic_ood = torch.exp(
+                lls_ood_marg - torch.logsumexp(lls_ood_marg, axis=0)
+            )
             mlflow.log_metric("ood epistemic", torch.mean(epistemic_ood).item())
 
             backbone_logits = model.backbone_logits(ood_dl, device, return_all=True)
-            probs = torch.softmax(backbone_logits, dim=1)
-            aleatoric_ood = -torch.sum(probs * torch.log(probs), dim=1)
+            ood_probs = torch.softmax(backbone_logits, dim=1)
+            aleatoric_ood = -torch.sum(amb_probs * torch.log(amb_probs), dim=1)
             mlflow.log_metric("ood aleatoric", torch.mean(aleatoric_ood).item())
 
         # plot
@@ -431,10 +423,10 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
 
         # Likelihood plot
         hist_plot(
-            lls_mnist,
-            lls_amb,
-            lls_ood,
-            "Log-likelihood",
+            lls_mnist_marg,
+            lls_amb_marg,
+            lls_ood_marg,
+            "Marginal Log-likelihood",
             "Fraction of data",
             "mnist_amb_ood_ll.png",
         )
@@ -487,6 +479,16 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             "Aleatoric uncertainty",
             "Fraction of data",
             "mnist_amb_ood_aleatoric.png",
+        )
+
+        # backbone probs plot
+        hist_plot(
+            mnist_probs.max(axis=1)[0],
+            amb_probs.max(axis=1)[0],
+            ood_probs.max(axis=1)[0],
+            "Backbone Probs",
+            "Fraction of data",
+            "mnist_amb_ood_backbone.png",
         )
 
         return lowest_val_loss
