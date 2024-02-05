@@ -210,6 +210,15 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetSNGP":
+            from ResNetSPN import EfficientNetSNGP
+
+            train_num_data = len(train_ds) + len(valid_ds)
+            model = EfficientNetSNGP(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                train_num_data=train_num_data,
+                **model_params,
+            )
         else:
             raise NotImplementedError
         mlflow.set_tag("model", model.__class__.__name__)
@@ -226,7 +235,6 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             **train_params,
         )
         # before costly evaluation, make sure that the model is not completely off
-        model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
         if valid_acc < 0.5:

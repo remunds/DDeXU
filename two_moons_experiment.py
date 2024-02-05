@@ -161,14 +161,21 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             num_workers=1,
         )
 
-        from ResNetSPN import DenseResNetSPN
+        model_name = model_params["model"]
+        del model_params["model"]
+        if model_name == "DenseResNetSNGP":
+            from ResNetSPN import DenseResNetSNGP
 
-        resnet_spn = DenseResNetSPN(**model_params)
-        mlflow.set_tag("model", resnet_spn.__class__.__name__)
-        print(resnet_spn)
-        resnet_spn.to(device)
+            model = DenseResNetSNGP(**model_params)
+        elif model_name == "DenseResNetSPN":
+            from ResNetSPN import DenseResNetSPN
+
+            model = DenseResNetSPN(**model_params)
+        mlflow.set_tag("model", model.__class__.__name__)
+        print(model)
+        model.to(device)
         # it is interesting to play with lambda_v, dropout, repetition and depth
-        lowest_val_loss = resnet_spn.start_train(
+        lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
             device,
@@ -177,21 +184,20 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             **train_params,
         )
         # before costly evaluation, make sure that the model is not completely off
-        resnet_spn.deactivate_uncert_head()
-        valid_acc = resnet_spn.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc", valid_acc)
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
+        # valid_acc = model.eval_acc(valid_dl, device)
+        # mlflow.log_metric("valid_acc", valid_acc)
+        # if valid_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
 
-        resnet_spn.activate_uncert_head()
-        mlflow.pytorch.log_state_dict(resnet_spn.state_dict(), "model")
+        model.activate_uncert_head()
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         if train_params["num_epochs"] == 0:
             return lowest_val_loss
 
         # evaluate
-        resnet_spn.eval()
+        model.eval()
 
         test_dl = DataLoader(
             test_examples,
@@ -201,7 +207,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
 
         # Visualize SPN posterior
-        posteriors = resnet_spn.eval_posterior(None, device, test_dl, return_all=True)
+        posteriors = model.eval_posterior(None, device, test_dl, return_all=True)
         # posteriors = torch.exp(posteriors)
         # use softmax instead of exp, because we want to normalize the posteriors
         posteriors = torch.softmax(posteriors, dim=1)
@@ -213,7 +219,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             train_examples, train_labels, ood_examples, probs_class_0, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Class Probability, SPN model")
+        plt.title("Class Probability")
         mlflow.log_figure(fig, "posterior_class_probability.png")
 
         # Visualize SPN predictive entropy
@@ -225,7 +231,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             train_examples, train_labels, ood_examples, entropy, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Entropy, SPN Model")
+        plt.title("Predictive Entropy")
         mlflow.log_figure(fig, "posterior_predictive_entropy.png")
 
         # Visualize SPN predictive variance/uncertainty
@@ -237,17 +243,17 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             train_examples, train_labels, ood_examples, variance, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Variance, SPN Model")
+        plt.title("Predictive Variance")
         mlflow.log_figure(fig, "posterior_predictive_variance.png")
 
-        lls = resnet_spn.eval_ll_marg(None, device, test_dl, return_all=True)
+        lls = model.eval_ll_marg(None, device, test_dl, return_all=True)
         nll = -(lls.cpu().detach().numpy())  # negative log likelihood
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples, train_labels, ood_examples, nll, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL, SPN Model")
+        plt.title("NLL")
         mlflow.log_figure(fig, "nll.png")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
@@ -260,11 +266,11 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             plot_train=False,
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL, SPN Model")
+        plt.title("NLL")
         mlflow.log_figure(fig, "nll_no_train.png")
 
         dempster_shafer = (
-            resnet_spn.eval_dempster_shafer(None, device, test_dl, return_all=True)
+            model.eval_dempster_shafer(None, device, test_dl, return_all=True)
             .cpu()
             .detach()
             .numpy()
@@ -274,7 +280,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             train_examples, train_labels, ood_examples, dempster_shafer, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Dempster Shafer, SPN Model")
+        plt.title("Dempster Shafer")
         mlflow.log_figure(fig, "dempster_shafer.png")
 
         # maximum predictive probability as in Figure 3, appendix C in https://arxiv.org/pdf/2006.10108.pdf
@@ -287,12 +293,12 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             train_examples, train_labels, ood_examples, uncertainty, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Maximum Predictive Probability, SPN Model")
+        plt.title("Maximum Predictive Probability")
         mlflow.log_figure(fig, "max_pred_prob.png")
 
         # Test epistemic as in DDU p(z)
-        p_z = torch.exp(lls)
-        # p_z = torch.exp(lls - torch.logsumexp(lls, dim=0))
+        # p_z = torch.exp(lls)
+        p_z = torch.exp(lls - torch.logsumexp(lls, dim=0))
 
         epistemic = p_z.cpu().detach().numpy()
         print("density p(z): ", epistemic[:5])
@@ -312,11 +318,24 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             ax=ax,
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Epistemic Uncertainty, SPN Model")
+        plt.title("Epistemic Uncertainty")
         mlflow.log_figure(fig, "epistemic.png")
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_examples,
+            train_labels,
+            ood_examples,
+            # uncertainty,
+            epistemic,
+            ax=ax,
+            plot_train=False,
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Epistemic Uncertainty")
+        mlflow.log_figure(fig, "epistemic_notrain.png")
 
         # Test aleatoric as in DDU entropy of softmax
-        logits = resnet_spn.backbone_logits(test_dl, device, return_all=True)
+        logits = model.backbone_logits(test_dl, device, return_all=True)
         probs = torch.softmax(logits, dim=1)
         aleatoric = -torch.sum(probs * torch.log(probs), axis=1).cpu().detach().numpy()
         print(aleatoric)
@@ -325,7 +344,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             train_examples, train_labels, ood_examples, aleatoric, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Aleatoric Uncertainty, SPN Model")
+        plt.title("Aleatoric Uncertainty")
         mlflow.log_figure(fig, "aleatoric.png")
 
         plt.close()

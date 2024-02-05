@@ -182,7 +182,6 @@ class EinetUtils:
                 # TODO: outside of loop
                 divisor = self.hidden.shape[1] + len(self.explaining_vars)
 
-                # scale ll loss
                 loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target) + (
                     1 - lambda_v
                 ) * -(output.mean() / divisor)
@@ -423,7 +422,6 @@ class EinetUtils:
             return uncertainty  # (N)
         return torch.mean(uncertainty).item()  # scalar
 
-    # def eval_calibration(self, dl, device, name, n_bins=10):
     def eval_calibration(self, log_p_x_g_y, device, name, dl, n_bins=20):
         """Computes the expected calibration error and plots the calibration curve."""
         self.eval()
@@ -442,7 +440,7 @@ class EinetUtils:
 
         # make a histogram of the confidences
         plt.hist(confidences.cpu().numpy(), bins=n_bins)
-        mlflow.log_figure(plt.gcf(), f"ll_hist_{name}.png")
+        mlflow.log_figure(plt.gcf(), f"hist_{name}.png")
         plt.clf()
 
         # predictions = torch.argmax(posteriors, dim=1)
@@ -691,7 +689,6 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         else:
             raise NotImplementedError
         self.einet_dropout = einet_dropout
-
         super().__init__(**kwargs)
         self.einet = self.make_einet_output_layer()
 
@@ -734,7 +731,8 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         leaf_type = RatNormal
         leaf_kwargs = {
             "min_sigma": 0.00001,
-            "max_sigma": 10.0,
+            # "max_sigma": 10.0,
+            "max_sigma": 3.5,  # this is crucial
         }
         cfg = EinetConfig(
             num_features=self.num_hidden + len(self.explaining_vars),
@@ -760,7 +758,7 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             resid = self.dense_layers[i](hidden)
             resid = self.dropout(resid)
             hidden = hidden + resid
-
+        # hidden = self.norm(hidden)
         return hidden
 
     def forward(self, inputs):
@@ -1644,35 +1642,6 @@ class GMMUtils:
             return None
         return gmm_get_logits(self.gmm, embeddings)
 
-    # def eval_posterior(self, dl, device, return_all=False):
-    #     self.eval()
-    #     index = 0
-    #     self.gmm_active = True
-    #     lls = torch.zeros(len(dl.dataset), self.num_classes)
-    #     with torch.no_grad():
-    #         for data in dl:
-    #             if type(data) is tuple or type(data) is list:
-    #                 data = data[0]
-    #             data = data.to(device)
-    #             ll = self(data)
-    #             lls[index : index + len(ll)] = ll
-    #             index += len(ll)
-    #     # convert lls to posterior
-    #     # p(y|x) = p(x|y) * p(y) / p(x)
-    #     # p(y) = 1 / num_classes, p(x) = sum_y p(x|y) * p(y)
-    #     # or in log-space:
-    #     # log p(y|x) = log p(x|y) + log p(y) - log p(x)
-    #     # log p(y) = log 1 / num_classes
-    #     # log p(x) = logsumexp_y log p(x|y) + log p(y)
-    #     l_y = torch.log(torch.tensor(1 / self.num_classes))
-    #     l_x_y = lls + l_y
-    #     l_x = torch.logsumexp(l_x_y, dim=1).unsqueeze(1)
-    #     log_posteriors = lls + l_y - l_x
-
-    #     if return_all:
-    #         return log_posteriors
-    #     return torch.mean(log_posteriors).item()
-
 
 class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
     """
@@ -1822,3 +1791,319 @@ class ConvResnetDDUGMM(ResNet, GMMUtils, EinetUtils):
             return self.gmm_logits(x)
 
         return self.fc(x) / self.temp
+
+
+from sngp import Laplace
+
+
+class SNGPUtils:
+    def activate_uncert_head(self, deactivate_backbone=True):
+        """
+        Activates the einet output layer for second stage training and inference.
+        """
+        return
+
+    def deactivate_uncert_head(self):
+        """
+        Deactivates the einet output layer for first stage training.
+        """
+        return
+
+    def start_train(
+        self,
+        train_dl,
+        valid_dl,
+        device,
+        num_epochs,
+        learning_rate,
+        early_stop=10,
+        checkpoint_dir=None,
+        trial=None,
+        **kwargs,
+    ):
+        self.train()
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        val_increase = 0
+        lowest_val_loss = torch.inf
+        epoch = 0
+        t = tqdm(range(num_epochs))
+        for epoch in t:
+            t.set_description(f"Epoch {epoch}")
+            loss = 0.0
+            self.sngp.reset_precision_matrix()
+            for data, target in train_dl:
+                optimizer.zero_grad()
+                target = target.type(torch.LongTensor)
+                data, target = data.to(device), target.to(device)
+                output = self(data)
+                loss_v = torch.nn.CrossEntropyLoss()(output, target)
+                loss += loss_v.item()
+                loss_v.backward()
+                optimizer.step()
+            t.set_postfix(dict(train_loss=loss / len(train_dl.dataset)))
+            val_loss = 0.0
+            with torch.no_grad():
+                for data, target in valid_dl:
+                    optimizer.zero_grad()
+                    target = target.type(torch.LongTensor)
+                    data, target = data.to(device), target.to(device)
+                    output = self(data)
+                    loss_v = torch.nn.CrossEntropyLoss()(output, target)
+                    val_loss += loss_v.item()
+            t.set_postfix(
+                dict(
+                    train_loss=loss / len(train_dl.dataset),
+                    val_loss=val_loss / len(valid_dl.dataset),
+                )
+            )
+            mlflow.log_metric(
+                key="train_loss", value=loss / len(train_dl.dataset), step=epoch
+            )
+            mlflow.log_metric(
+                key="val_loss", value=val_loss / len(valid_dl.dataset), step=epoch
+            )
+            # early stopping via optuna
+            if trial is not None:
+                trial.report(val_loss, epoch)
+                if trial.should_prune():
+                    mlflow.set_tag("pruned", f"{epoch}")
+                    raise optuna.TrialPruned()
+            if val_loss <= lowest_val_loss:
+                lowest_val_loss = val_loss
+                val_increase = 0
+                if checkpoint_dir is not None:
+                    self.save(checkpoint_dir + "checkpoint.pt")
+            else:
+                # early stopping when val increases
+                val_increase += 1
+                if val_increase >= early_stop:
+                    print(
+                        f"Stopping early, val loss increased for the last {early_stop} epochs."
+                    )
+                    break
+        if checkpoint_dir is not None:
+            # load best
+            self.load(checkpoint_dir + "checkpoint.pt")
+        return lowest_val_loss
+
+    def save(self, path):
+        # create path if not exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(self.state_dict(), path)
+
+    def load(self, path):
+        state_dict = torch.load(path)
+        self.load_state_dict(state_dict, strict=False)
+
+
+class DenseResNetSNGP(DenseResnet, SNGPUtils, EinetUtils):
+    """
+    Spectral normalized ResNet with einet as the output layer.
+    """
+
+    def __init__(
+        self,
+        train_num_data,
+        train_batch_size,
+        spec_norm_bound=0.9,
+        explaining_vars=[],
+        **kwargs,
+    ):
+        self.spec_norm_bound = spec_norm_bound
+        self.explaining_vars = explaining_vars
+        self.train_num_data = train_num_data
+        self.train_batch_size = train_batch_size
+        self.num_hidden = kwargs["num_hidden"]
+
+        super().__init__(**kwargs)
+        self.sngp = self.make_sngp_output_layer()
+
+    def make_dense_layer(self):
+        """applies spectral normalization to the hidden layer."""
+        dense = nn.Linear(self.num_hidden, self.num_hidden)
+        # todo: this is different to tf, since it does not use the spec_norm_bound...
+        # note: both versions seem to work fine!
+        # return nn.Sequential(
+        #     nn.utils.parametrizations.spectral_norm(dense), self.activation
+        # )
+        return nn.Sequential(
+            spectral_norm(dense, norm_bound=self.spec_norm_bound), self.activation
+        )
+
+    def make_sngp_output_layer(self):
+        """Uses sngp as the output layer."""
+
+        # dummy feature extractor, not used
+        def dummy_feature_extractor(x):
+            return x
+
+        # num_deep_features = 640
+        # num_gp_features = 128
+        num_deep_features = self.num_hidden
+        num_gp_features = 128
+        # normalize_gp_features = True
+        normalize_gp_features = False
+        num_random_features = 512
+        mean_field_factor = 25
+        ridge_penalty = 1
+        feature_scale = 2
+
+        model = Laplace(
+            dummy_feature_extractor,
+            num_deep_features,
+            num_gp_features,
+            normalize_gp_features,
+            num_random_features,
+            self.num_classes,
+            self.train_num_data,
+            self.train_batch_size,
+            ridge_penalty,
+            feature_scale,
+            mean_field_factor,
+        )
+        return model
+
+    def forward_hidden(self, inputs):
+        hidden = self.input_layer(inputs)
+
+        # Computes the ResNet hidden representations.
+        for i in range(self.num_layers):
+            resid = self.dense_layers[i](hidden)
+            resid = self.dropout(resid)
+            hidden = hidden + resid
+
+        return hidden
+
+    def forward(self, inputs):
+        # extract explaining vars
+        exp_vars = inputs[:, self.explaining_vars]
+        # mask out explaining vars for bakcbone
+        mask = torch.ones_like(inputs, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        inputs = inputs[mask]
+        inputs = inputs.reshape(-1, self.input_dim)
+        # feed through resnet
+        hidden = self.forward_hidden(inputs)
+        self.hidden = hidden
+
+        return self.sngp(hidden)
+
+
+class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
+    """
+    Spectral normalized EfficientNetV2-S with einet as the output layer.
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        image_shape,  # (C, H, W)
+        train_batch_size,
+        train_num_data,
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        **kwargs,
+    ):
+        super(EfficientNetSNGP, self).__init__()
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.spec_norm_bound = spec_norm_bound
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.backbone = self.make_efficientnet()
+        self.train_batch_size = train_batch_size
+        self.train_num_data = train_num_data
+        self.sngp = self.make_sngp_output_layer(1280 + len(explaining_vars))
+
+    def make_efficientnet(self):
+        def replace_layers_rec(layer):
+            """Recursively apply spectral normalization to Conv and Linear layers."""
+            if len(list(layer.children())) == 0:
+                if isinstance(layer, torch.nn.Conv2d):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torch.nn.Linear):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+            else:
+                for child in list(layer.children()):
+                    replace_layers_rec(child)
+
+        model = efficientnet_v2_s()
+        model.features[0][0] = torch.nn.Conv2d(
+            self.image_shape[0],
+            24,
+            kernel_size=(3, 3),
+            stride=(2, 2),
+            padding=(1, 1),
+            bias=False,
+        )
+        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        # apply spectral normalization
+        replace_layers_rec(model)
+        return model
+
+    def activate_uncert_head(self, deactivate_backbone=True):
+        """ """
+        return
+
+    def deactivate_uncert_head(self):
+        """ """
+        return
+
+    def make_sngp_output_layer(self, in_features):
+        """Uses sngp as the output layer."""
+
+        # dummy feature extractor, not used
+        def dummy_feature_extractor(x):
+            return x
+
+        # num_deep_features = 640
+        # num_gp_features = 128
+        num_deep_features = in_features
+        num_gp_features = 128
+        normalize_gp_features = True
+        # normalize_gp_features = False
+        # num_random_features = 1024
+        num_random_features = 2048
+        mean_field_factor = 25
+        ridge_penalty = 1
+        feature_scale = 2
+
+        model = Laplace(
+            dummy_feature_extractor,
+            num_deep_features,
+            num_gp_features,
+            normalize_gp_features,
+            num_random_features,
+            self.num_classes,
+            self.train_num_data,
+            self.train_batch_size,
+            ridge_penalty,
+            feature_scale,
+            mean_field_factor,
+        )
+        return model
+
+    def forward_hidden(self, x):
+        x = self.backbone.features(x)
+        x = self.backbone.avgpool(x)
+        x = torch.flatten(x, 1)
+        return x
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+        self.hidden = x
+
+        return self.sngp(x)

@@ -150,11 +150,16 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
             valid, batch_size=batch_sizes["resnet"], shuffle=True
         )
 
-        from ResNetSPN import EfficientNetSPN
+        model_name = model_params["model"]
+        del model_params["model"]
+        if model_name == "DenseResNetSNGP":
+            from ResNetSPN import DenseResNetSNGP
 
-        from ResNetSPN import DenseResNetSPN
+            model = DenseResNetSNGP(**model_params)
+        elif model_name == "DenseResNetSPN":
+            from ResNetSPN import DenseResNetSPN
 
-        model = DenseResNetSPN(**model_params)
+            model = DenseResNetSPN(**model_params)
         mlflow.set_tag("model", model.__class__.__name__)
         model.to(device)
 
@@ -167,18 +172,13 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
             **train_params,
         )
         # before costly evaluation, make sure that the model is not completely off
-        model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc_backbone", valid_acc)
+        mlflow.log_metric("valid_acc", valid_acc)
         if valid_acc < 0.5:
             # let optuna know that this is a bad trial
             return lowest_val_loss
 
-        model.activate_uncert_head()
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
-
-        valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc", valid_acc)
 
         test = make_testing_data()
         test_dl = torch.utils.data.DataLoader(

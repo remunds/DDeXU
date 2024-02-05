@@ -297,7 +297,6 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         )
 
         # before costly evaluation, make sure that the model is not completely off
-        model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
         if valid_acc < 0.5:

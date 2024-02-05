@@ -176,22 +176,31 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             "dataset must be dirty-mnist, mnist-calib, mnist-expl or cifar10-c"
         )
 
-    model_params = dict(
-        model=model,  # ConvResNetSPN, ConvResNetDDU
-        block="basic",  # basic, bottleneck
-        layers=[2, 2, 2, 2],
-        num_classes=10,
-        image_shape=image_shape,
-        einet_depth=5,  # might be overwritten by optuna
-        einet_num_sums=20,
-        einet_num_leaves=20,
-        einet_num_repetitions=5,  # might be overwritten by optuna
-        einet_leaf_type="Normal",
-        einet_dropout=0.0,
-        spec_norm_bound=0.95,  # only for ConvResNetSPN
-        spectral_normalization=True,  # only for ConvResNetDDU
-        mod=True,  # only for ConvResNetDDU
-    )
+    if "SPN" in model or "DDU" in model:
+        model_params = dict(
+            model=model,  # ConvResNetSPN, ConvResNetDDU
+            block="basic",  # basic, bottleneck
+            layers=[2, 2, 2, 2],
+            num_classes=10,
+            image_shape=image_shape,
+            einet_depth=5,  # might be overwritten by optuna
+            einet_num_sums=20,
+            einet_num_leaves=20,
+            einet_num_repetitions=5,  # might be overwritten by optuna
+            einet_leaf_type="Normal",
+            einet_dropout=0.0,
+            spec_norm_bound=0.95,  # only for ConvResNetSPN
+            spectral_normalization=True,  # only for ConvResNetDDU
+            mod=True,  # only for ConvResNetDDU
+        )
+    elif "SNGP" in model:
+        model_params = dict(
+            model=model,
+            num_classes=10,
+            image_shape=image_shape,
+            train_batch_size=batch_sizes["resnet"],
+            spec_norm_bound=0.95,
+        )
     train_params = dict(
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.05,  # irrelevant
@@ -234,7 +243,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 1
+        train_params["num_epochs"] = 100
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -792,9 +801,9 @@ def run_mnist_expl(dataset, model, loss, pretrained_path):
         mlflow.end_run()
 
 
-def run_dense_resnet(dataset, loss, training, pretrained_path=None):
+def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
     mlflow.set_experiment(dataset)
-    run_name = f"{loss}_{training}"
+    run_name = f"{loss}_{training}_{model}"
 
     batch_sizes = dict(resnet=512)
     if "two-moons" in dataset:
@@ -803,24 +812,44 @@ def run_dense_resnet(dataset, loss, training, pretrained_path=None):
         num_classes = 3
     else:
         num_classes = 10
-    model_params_dense = dict(
-        num_classes=num_classes,
-        input_dim=2,
-        num_layers=3,
-        num_hidden=32,
-        spec_norm_bound=0.95,
-        einet_depth=5,
-        einet_num_sums=20,
-        einet_num_leaves=20,
-        einet_num_repetitions=5,
-        einet_leaf_type="Normal",
-        einet_dropout=0.0,
-    )
+    if "SPN" in model:
+        model_params = dict(
+            model=model,
+            num_classes=num_classes,
+            input_dim=2,
+            num_layers=3,
+            num_hidden=32,
+            spec_norm_bound=0.95,
+            einet_depth=5,
+            einet_num_sums=20,
+            einet_num_leaves=20,
+            einet_num_repetitions=5,
+            # einet_depth=0,
+            # einet_num_sums=32,
+            # einet_num_leaves=32,
+            # einet_num_repetitions=5,
+            einet_leaf_type="Normal",
+            einet_dropout=0.0,
+        )
+    elif "SNGP" in model:
+        model_params = dict(
+            model=model,
+            train_num_data=1000 if dataset == "two-moons" else 3300,
+            train_batch_size=batch_sizes["resnet"],
+            num_classes=num_classes,
+            input_dim=2,
+            num_layers=3,
+            num_hidden=32,
+            # num_hidden=640,
+            spec_norm_bound=0.95,
+        )
     train_params = dict(
-        num_epochs=100,
         early_stop=100,
         learning_rate_warmup=0.03,
-        learning_rate=0.025,
+        # learning_rate=0.025,
+        # learning_rate=0.03,  # good for sngp
+        # learning_rate=0.09,  # good for spn
+        learning_rate=0.03,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -844,15 +873,15 @@ def run_dense_resnet(dataset, loss, training, pretrained_path=None):
     if training == "end-to-end":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
-        train_params["num_epochs"] = 200
+        train_params["num_epochs"] = 400
     elif training == "seperate":
         train_params["warmup_epochs"] = 300
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 200
+        train_params["num_epochs"] = 400
     elif training == "warmup":
         train_params["warmup_epochs"] = 100
         train_params["deactivate_backbone"] = False
-        train_params["num_epochs"] = 100
+        train_params["num_epochs"] = 300
     elif training == "backbone_only":
         train_params["warmup_epochs"] = 100
         train_params["deactivate_backbone"] = False
@@ -860,7 +889,7 @@ def run_dense_resnet(dataset, loss, training, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 400
+        train_params["num_epochs"] = 300
     else:
         raise ValueError(
             "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
@@ -872,7 +901,7 @@ def run_dense_resnet(dataset, loss, training, pretrained_path=None):
             start_two_moons_run(
                 run_name,
                 batch_sizes,
-                model_params_dense,
+                model_params,
                 train_params,
                 None,
             )
@@ -886,7 +915,7 @@ def run_dense_resnet(dataset, loss, training, pretrained_path=None):
             start_figure6_run(
                 run_name,
                 batch_sizes,
-                model_params_dense,
+                model_params,
                 train_params,
                 None,
             )
@@ -901,14 +930,14 @@ def run_dense_resnet(dataset, loss, training, pretrained_path=None):
 loss = [
     # "generative",
     # "hybrid_low",
-    "hybrid_mid_low",
-    # "hybrid",
-    "hybrid_mid_high",
+    # "hybrid_mid_low",
+    "hybrid",
+    # "hybrid_mid_high",
     # "hybrid_high",
     # "discriminative",
 ]
 dataset = [
-    # "figure6",
+    "figure6",
     "two-moons",
     # "dirty-mnist",
     # "mnist-calib",
@@ -919,11 +948,14 @@ dataset = [
     # "svhn-c-expl"
 ]
 models = [
+    "DenseResNetSPN",
+    # "DenseResNetSNGP",
     # "ConvResNetSPN",
-    "EfficientNetSPN",
+    # "EfficientNetSPN",
     # "ConvResNetDDU",
     # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
+    # "EfficientNetSNGP",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -1013,25 +1045,31 @@ trained_models = {
 for d in dataset:
     for l in loss:
         if d == "two-moons" or d == "figure6":
-            pretrained_path = pretrained_backbones[d]
+            for m in models:
+                pretrained_path = pretrained_backbones[d]
+                pretrained_path = (
+                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+                )
+                pretrained_path = None
+                # run_dense_resnet(d, l, "seperate", m, pretrained_path)
+                # run_dense_resnet(d, l, "einet_only", m, pretrained_path)
+                run_dense_resnet(d, l, "end-to-end", m, pretrained_path)
+                # run_dense_resnet(d, l, "seperate", m)
+                continue
+            continue
+        for m in models:
+            pretrained_path = pretrained_backbones[d][m]
+            # pretrained_path = trained_models[d][m]
+            # pretrained_path = trained_models[d][l][m]
             pretrained_path = (
                 "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             )
-            # pretrained_path = None
-            run_dense_resnet(d, l, "einet_only", pretrained_path)
-            continue
-        for m in models:
-            # pretrained_path = pretrained_backbones[d][m]
-            # pretrained_path = trained_models[d][m]
-            # pretrained_path = trained_models[d][l][m]
-            # pretrained_path = (
-            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            # )
             # dataset = d
-            pretrained_path = None
+            # pretrained_path = None
             # tune_conv(d, l, "end-to-end", m, pretrained_path)
             # run_conv(dataset, l, "eval_only", m, pretrained_path)
-            run_conv(d, l, "seperate", m, pretrained_path)
+            # run_conv(d, l, "seperate", m, pretrained_path)
+            run_conv(d, l, "einet_only", m, pretrained_path)
             # run_conv(dataset, l, "seperate", m)
 
 
