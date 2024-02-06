@@ -3,78 +3,62 @@ import numpy as np
 from torch.utils.data import DataLoader
 import torch
 import mlflow
+from torchvision.datasets import SVHN
+from PIL import Image
 
 
 dataset_dir = "/data_docker/datasets/"
-cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
-cifar10_c_path = "CIFAR-10-C"
-cifar10_c_path_complete = dataset_dir + cifar10_c_path
+svhn_c_path = "svhn_c"
+svhn_c_path_complete = dataset_dir + svhn_c_path
 corruptions = [
-    "brightness",
-    "contrast",
-    "defocus_blur",
-    "elastic_transform",
-    "fog",
-    "frost",
-    "gaussian_blur",
+    # "brightness",
+    # "contrast",
+    # "defocus_blur",
+    # "elastic_transform",
+    # "fog",
+    # "frost",
+    # "gaussian_blur", # not available
     "gaussian_noise",
-    "glass_blur",
+    # "glass_blur",
     "impulse_noise",
-    "jpeg_compression",
-    "motion_blur",
-    "pixelate",
-    "saturate",
+    # "jpeg_compression",
+    # "motion_blur",
+    # "pixelate",
+    # "saturate", # not available
     "shot_noise",
-    "snow",
-    "spatter",
-    "speckle_noise",
-    "zoom_blur",
+    # "snow",
+    # "spatter", # not available
+    # "speckle_noise", # not available
+    # "zoom_blur",
 ]
 
 
 def load_datasets():
-    # download cifar10-c
-    if not os.path.exists(cifar10_c_path_complete + ".tar"):
-        print("Downloading CIFAR-10-C...")
-        os.system(f"wget {cifar10_c_url} -O {cifar10_c_path_complete}")
-
-        print("Extracting CIFAR-10-C...")
-        os.system(f"tar -xvf {cifar10_c_path_complete}.tar")
-
-        print("Done!")
-
-    # get normal cifar-10
-    from torchvision.datasets import CIFAR10
+    # get normal svhn
     from torchvision import transforms
 
     train_transformer = transforms.Compose(
         [
-            # transforms.ToTensor(),
-            # transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
+            # transforms.RandomCrop(32, padding=4),
+            # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
             # transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
         ]
     )
     test_transformer = transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
             # transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
         ]
     )
-
-    train_ds = CIFAR10(root=dataset_dir + "cifar10", download=True, train=True)
-    test_ds = CIFAR10(root=dataset_dir + "cifar10", download=True, train=False)
-
-    # train: 50k, 32, 32, 3
-    # test: 10k, 32, 32, 3
-    # test-corrupted: 10k, 32, 32, 3 per corruption level (5)
-
-    # train_data contains default cifar10 data, no corruptions
-    # for explanation variables: add one zero for each corruption level
+    train_ds = SVHN(
+        root=dataset_dir + "svhn",
+        download=True,
+        split="train",
+        # transform=svhn_transformer,
+    )
     train_data = [train_transformer(img).flatten() for img, _ in train_ds]
     train_data = torch.concat(
         [
@@ -83,81 +67,85 @@ def load_datasets():
         ],
         dim=1,
     )
-    train_data = list(zip(train_data, train_ds.targets))
+    train_data = list(zip(train_data, train_ds.labels))
 
-    # # same for test data
-    # test_data = [test_transformer(img).flatten() for img, _ in test_ds]
-    # test_data = torch.concat(
-    #     [
-    #         torch.zeros((test_ds.data.shape[0], len(corruptions))),
-    #         torch.stack(test_data, dim=0),
-    #     ],
-    #     dim=1,
-    # )
-    # test_data = list(zip(test_data, test_ds.targets))
+    test_ds = SVHN(
+        root=dataset_dir + "svhn",
+        download=True,
+        split="test",
+        # transform=svhn_transformer,
+    )
 
-    return train_data, test_ds, test_transformer
+    print("train-samples: ", len(train_ds))
+
+    return train_data, train_ds, test_ds, test_transformer
 
 
-def get_corrupted_cifar10(
-    all_corruption_len: int, corruptions: list, test_labels: np.ndarray, levels: list
-):
-    # available corrupted dataset: 50k*len(corruptions), 32, 32, 3
-    datasets_length = 10000 * len(levels) * len(corruptions) // 2
+def get_corrupted_svhn_train(all_corruption_len: int, corruptions: list, levels: list):
+    # TODO change sample-size
+    num_samples = 73257
+    # available corrupted dataset: 26032*len(corruptions), 32, 32, 3
+    datasets_length = num_samples * len(levels) * len(corruptions)
     train_corrupt_data = np.zeros((datasets_length, 32, 32, 3), dtype=np.uint8)
-    test_corrupt_data = np.zeros((datasets_length, 32, 32, 3), dtype=np.uint8)
     train_corrupt_levels = np.zeros(
         (datasets_length, all_corruption_len), dtype=np.uint8
     )
-    test_corrupt_levels = np.zeros(
-        (datasets_length, all_corruption_len), dtype=np.uint8
-    )
-    train_corrupt_labels = np.zeros((datasets_length), dtype=np.uint8)
-    # test_corrupt_labels = np.zeros((datasets_length) + 5000, dtype=np.uint8)
-    test_corrupt_labels = np.zeros((datasets_length), dtype=np.uint8)
     train_idx = 0
-    test_idx = 0
     for corr_idx, c in enumerate(corruptions):
-        # each corrupted dataset has shape of test: 50k, 32, 32, 3
-        data = np.load(f"{cifar10_c_path_complete}/{c}.npy")
-        # step in 5000s, because each corruption level has 5000 images
+        # each corrupted dataset has shape of test: 26032, 32, 32, 3
         for i in range(5):  # iterate over corruption levels
             if not i in levels:
                 continue
-            data_idx = i * 10000
-            new_train_idx = train_idx + 5000
-            new_test_idx = test_idx + 5000
-            train_corrupt_data[train_idx:new_train_idx] = data[
-                data_idx : (data_idx + 5000), ...
-            ]
+            data = np.load(f"{svhn_c_path_complete}/svhn_train_{c}_l{i+1}.npy")
+
+            new_train_idx = train_idx + num_samples
+            train_corrupt_data[train_idx:new_train_idx] = data[:num_samples, ...]
             train_corrupt_levels[train_idx:new_train_idx, corr_idx] = i + 1
-            train_corrupt_labels[train_idx:new_train_idx] = test_labels[:5000]
 
-            test_corrupt_data[test_idx:new_test_idx] = data[
-                (data_idx + 5000) : (data_idx + 10000), ...
-            ]
-            test_corrupt_levels[test_idx:new_test_idx, corr_idx] = i + 1
-            test_corrupt_labels[test_idx:new_test_idx] = test_labels[5000:]
             train_idx = new_train_idx
-            test_idx = new_test_idx
 
-    print("done loading corruptions")
+    print("done loading train corruptions")
     return (
         train_corrupt_data,
         train_corrupt_levels,
-        train_corrupt_labels,
-        test_corrupt_data,
-        test_corrupt_levels,
-        test_corrupt_labels,
     )
 
 
-def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, trial):
+def get_corrupted_svhn_test(all_corruption_len: int, corruptions: list, levels: list):
+    num_samples = 26032
+    # available corrupted dataset: 26032*len(corruptions), 32, 32, 3
+    datasets_length = num_samples * len(levels) * len(corruptions)
+    test_corrupt_data = np.zeros((datasets_length, 32, 32, 3), dtype=np.uint8)
+    test_corrupt_levels = np.zeros(
+        (datasets_length, all_corruption_len), dtype=np.uint8
+    )
+    test_idx = 0
+    for corr_idx, c in enumerate(corruptions):
+        # each corrupted dataset has shape of test: 26032, 32, 32, 3
+        for i in range(5):  # iterate over corruption levels
+            if not i in levels:
+                continue
+            data = np.load(f"{svhn_c_path_complete}/svhn_test_{c}_l{i+1}.npy")
+
+            new_test_idx = test_idx + num_samples
+            test_corrupt_data[test_idx:new_test_idx] = data[:num_samples, ...]
+            test_corrupt_levels[test_idx:new_test_idx, corr_idx] = i + 1
+
+            test_idx = new_test_idx
+
+    print("done loading test corruptions")
+    return (
+        test_corrupt_data,
+        test_corrupt_levels,
+    )
+
+
+def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name) as run:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
 
-        ckpt_dir = f"/data_docker/ckpts/cifar10-c_expl/{run_name}/"
+        ckpt_dir = f"/data_docker/ckpts/svhn-c_expl/{run_name}/"
         mlflow.log_param("ckpt_dir", ckpt_dir)
 
         # log all params
@@ -166,7 +154,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         mlflow.log_params(train_params)
 
         # load data
-        train_data, test_ds, test_transformer = load_datasets()
+        train_data, train_ds, test_ds, test_transformer = load_datasets()
 
         levels = train_params["corruption_levels_train"]
         del train_params["corruption_levels_train"]
@@ -177,15 +165,10 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         (
             train_corrupt_data,
             train_corrupt_levels,
-            train_corrupt_labels,
-            _,
-            _,
-            _,
-        ) = get_corrupted_cifar10(
+        ) = get_corrupted_svhn_train(
             # yes, test_ds is correct here
             len(corruptions),
             corruptions,
-            np.array(test_ds.targets),
             levels,
         )
         print("done loading corrupted data")
@@ -200,12 +183,13 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             ],
             dim=1,
         )
+        train_corrupt_labels = [l for l in train_ds.labels for _ in range(len(levels))]
+
+        # We want to train on the corrupted data, s.t. explanations are possible
         train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
-        # We want to train on some of the corrupted data, s.t. explanations are possible
-        train_data_combined = train_data + train_corrupt_data
 
         train_ds, valid_ds = torch.utils.data.random_split(
-            train_data_combined, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
+            train_corrupt_data, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
         )
         train_dl = DataLoader(
             train_ds,
@@ -214,6 +198,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             pin_memory=True,
             num_workers=4,
         )
+
         valid_dl = DataLoader(
             valid_ds,
             batch_size=batch_sizes["resnet"],
@@ -302,16 +287,9 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         if valid_acc < 0.5:
             # let optuna know that this is a bad trial
             return lowest_val_loss
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
         model.eval()
-
-        # eval accuracy
-        model.deactivate_uncert_head()
-        valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc_resnet", valid_acc)
-        model.activate_uncert_head()
 
         valid_ll_marg = model.eval_ll_marg(
             None,
@@ -324,15 +302,9 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         test_levels = [0, 1, 2, 3, 4]
         print("loading test corrupted data")
         (
-            _,
-            _,
-            _,
             test_corrupt_data,
             test_corrupt_levels,
-            test_corrupt_labels,
-        ) = get_corrupted_cifar10(
-            len(corruptions), corruptions, np.array(test_ds.targets), test_levels
-        )
+        ) = get_corrupted_svhn_test(len(corruptions), corruptions, test_levels)
         print("done loading test corrupted data")
 
         test_corrupt_data = [
@@ -345,6 +317,10 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             ],
             dim=1,
         )
+        test_corrupt_labels = [
+            l for l in test_ds.labels for _ in range(len(test_levels))
+        ]
+
         print("test_corrupt_data.shape: ", test_corrupt_data.shape)
         print("test_corrupt_labels.shape: ", test_corrupt_labels.shape)
         # calibration evaluation

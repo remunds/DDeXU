@@ -5,6 +5,28 @@ from torch.utils.data import DataLoader
 import mlflow
 
 
+def load_svhn_test():
+    from torchvision.datasets import SVHN
+    from torchvision import transforms
+
+    test_transformer = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
+            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+        ]
+    )
+
+    test_ds = SVHN(
+        root=dataset_dir + "svhn",
+        split="test",
+        download=True,
+        transform=test_transformer,
+    )
+
+    return test_ds
+
+
 dataset_dir = "/data_docker/datasets/"
 cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?download=1"
 cifar10_c_path = "CIFAR-10-C"
@@ -247,8 +269,10 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         orig_test_ll = model.eval_ll(test_dl, device, return_all=True)
         orig_test_ll_marg = model.eval_ll_marg(orig_test_ll, device)
         mlflow.log_metric("test_ll_marg", orig_test_ll_marg)
-        orig_test_pred_entropy = model.eval_entropy(orig_test_ll, device)
-        mlflow.log_metric("test_entropy", orig_test_pred_entropy)
+        orig_test_pred_entropy = model.eval_entropy(
+            orig_test_ll, device, return_all=True
+        )
+        mlflow.log_metric("test_entropy", torch.mean(orig_test_pred_entropy))
 
         # random noise baseline
         random_data = np.random.rand(10000, 32, 32, 3)
@@ -268,6 +292,25 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         mlflow.log_metric("random_ll_marg", random_ll_marg)
         random_pred_entropy = model.eval_entropy(random_ll, device)
         mlflow.log_metric("random_entropy", random_pred_entropy)
+
+        # AUROC and AUPR for OOD detection vs SVHN
+        svhn_test_ds = load_svhn_test()
+        svhn_test_dl = DataLoader(
+            svhn_test_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+        print("evaluating OOD detection")
+        svhn_entropy = model.eval_entropy(None, device, svhn_test_dl, return_all=True)
+
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_pred_entropy, svhn_entropy, device
+        )
+        mlflow.log_metric("auroc_svhn", auroc)
+        mlflow.log_metric("auprc_svhn", auprc)
+        print("done evaluating OOD detection")
 
         # train: 50k, 32, 32, 3
         # test: 10k, 32, 32, 3

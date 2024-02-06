@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import mlflow
 import optuna
 import matplotlib.pyplot as plt
+from sklearn import metrics
 
 
 class EinetUtils:
@@ -185,6 +186,7 @@ class EinetUtils:
                 loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target) + (
                     1 - lambda_v
                 ) * -(output.mean() / divisor)
+
                 # mpe_expl_vars = self.einet.sample(
                 #     evidence=self.einet_input,
                 #     marginalized_scopes=self.explaining_vars,
@@ -194,7 +196,7 @@ class EinetUtils:
                 # # reconstruction loss
                 # expl_vars_vals = data[:, self.explaining_vars]
                 # mpe_reconstruction_loss = F.mse_loss(mpe_expl_vars, expl_vars_vals)
-                # loss_v = 0.001 * loss_v + 0.999 * mpe_reconstruction_loss
+                # loss_v = loss_v + 10 * mpe_reconstruction_loss
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
@@ -551,6 +553,38 @@ class EinetUtils:
         )
         ece = compute_ece(conf, acc)
         plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_width_{name}")
+
+    # taken from https://github.com/omegafragger/DDU/blob/main/metrics/ood_metrics.py
+    def eval_ood(self, uncert_id, uncert_ood, device, confidence=False):
+        uncertainties = uncert_id
+        ood_uncertainties = uncert_ood
+
+        # In-distribution
+        bin_labels = torch.zeros(uncertainties.shape[0]).to(device)
+        in_scores = uncertainties
+
+        # OOD
+        bin_labels = torch.cat(
+            (bin_labels, torch.ones(ood_uncertainties.shape[0]).to(device))
+        )
+
+        if confidence:
+            bin_labels = 1 - bin_labels
+        ood_scores = ood_uncertainties  # entropy(ood_logits)
+        scores = torch.cat((in_scores, ood_scores))
+
+        fpr, tpr, thresholds = metrics.roc_curve(
+            bin_labels.cpu().numpy(), scores.cpu().numpy()
+        )
+        precision, recall, prc_thresholds = metrics.precision_recall_curve(
+            bin_labels.cpu().numpy(), scores.cpu().numpy()
+        )
+        auroc = metrics.roc_auc_score(bin_labels.cpu().numpy(), scores.cpu().numpy())
+        auprc = metrics.average_precision_score(
+            bin_labels.cpu().numpy(), scores.cpu().numpy()
+        )
+
+        return (fpr, tpr, thresholds), (precision, recall, prc_thresholds), auroc, auprc
 
     def explain_ll(self, dl, device, return_all=False):
         """
@@ -1549,7 +1583,16 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             )
             leaf_kwargs = {
                 "scopes_to_dist": [
-                    (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
+                    (
+                        scopes_a,
+                        RatNormal,
+                        {
+                            "min_sigma": 0.00001,
+                            "max_sigma": 20.0,
+                            "min_mean": 0.0,
+                            "max_mean": 6.0,
+                        },
+                    ),
                     # (scopes_a, Categorical, {"num_bins": 5}),
                     (
                         scopes_b,
