@@ -183,7 +183,9 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             ],
             dim=1,
         )
-        train_corrupt_labels = [l for l in train_ds.labels for _ in range(len(levels))]
+        train_corrupt_labels = [
+            l for _ in corruptions for _ in range(len(levels)) for l in train_ds.labels
+        ]
 
         # We want to train on the corrupted data, s.t. explanations are possible
         train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
@@ -282,11 +284,29 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         )
 
         # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
+        valid_acc_backbone = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc_backbone", valid_acc_backbone)
+
+        model.activate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
+
         if valid_acc < 0.5:
             # let optuna know that this is a bad trial
             return lowest_val_loss
+        if "GMM" in model_name:
+            model.fit_gmm(train_dl, device)
+        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+
+        print("explaining mpe of train")
+        train_expl_mpe = model.explain_mpe(train_dl, device, return_all=True)
+        train_expl_mpe = torch.cat(train_expl_mpe, dim=0)
+        print("mean train_expl_mpe: ", torch.mean(train_expl_mpe, axis=0))
+        print("std train_expl_mpe: ", torch.std(train_expl_mpe, axis=0))
+        print("lowest train_expl_mpe: ", torch.min(train_expl_mpe, axis=0))
+        print("highest train_expl_mpe: ", torch.max(train_expl_mpe, axis=0))
 
         # Evaluate
         model.eval()
@@ -317,12 +337,16 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             ],
             dim=1,
         )
+        # create labels for corrupted data
         test_corrupt_labels = [
-            l for l in test_ds.labels for _ in range(len(test_levels))
+            l
+            for _ in corruptions
+            for _ in range(len(test_levels))
+            for l in test_ds.labels
         ]
-
+        test_corrupt_labels = torch.tensor(test_corrupt_labels, dtype=torch.int64)
         print("test_corrupt_data.shape: ", test_corrupt_data.shape)
-        print("test_corrupt_labels.shape: ", test_corrupt_labels.shape)
+        print("test_corrupt_labels: ", test_corrupt_labels.shape)
         # calibration evaluation
         dl = DataLoader(
             list(zip(test_corrupt_data, test_corrupt_labels)),
@@ -330,7 +354,15 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             shuffle=False,
             pin_memory=True,
         )
+        print("eval calibration")
         model.eval_calibration(None, device, "corrupt_test", dl)
+
+        test_expl_mpe = model.explain_mpe(dl, device, return_all=True)
+        test_expl_mpe = torch.cat(test_expl_mpe, dim=0)
+        print("mean test_expl_mpe: ", torch.mean(test_expl_mpe, axis=0))
+        print("std test_expl_mpe: ", torch.std(test_expl_mpe, axis=0))
+        print("lowest test_expl_mpe: ", torch.min(test_expl_mpe, axis=0))
+        print("highest test_expl_mpe: ", torch.max(test_expl_mpe, axis=0))
 
         # test_corrupt_levels.shape = [num_data_points, num_corruptions]
         from tqdm import tqdm

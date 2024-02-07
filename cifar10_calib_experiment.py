@@ -231,6 +231,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             trial=trial,
             **train_params,
         )
+        model.eval()
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
@@ -240,11 +241,10 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             return lowest_val_loss
         if "GMM" in model_name:
             model.fit_gmm(train_dl, device)
-        else:
+        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
             mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
-        model.eval()
         eval_dict = {}
 
         # eval resnet
@@ -272,26 +272,11 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         orig_test_pred_entropy = model.eval_entropy(
             orig_test_ll, device, return_all=True
         )
-        mlflow.log_metric("test_entropy", torch.mean(orig_test_pred_entropy))
+        mlflow.log_metric("test_entropy", torch.mean(orig_test_pred_entropy).item())
 
-        # random noise baseline
-        random_data = np.random.rand(10000, 32, 32, 3)
-        random_data = torch.stack([test_transformer(img) for img in random_data], dim=0)
-        random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.targets))
-        random_dl = DataLoader(
-            random_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=False,
-            pin_memory=True,
-            num_workers=1,
-        )
-        random_acc = model.eval_acc(random_dl, device)
-        mlflow.log_metric("random_acc", random_acc)
-        random_ll = model.eval_ll(random_dl, device, return_all=True)
-        random_ll_marg = model.eval_ll_marg(random_ll, device)
-        mlflow.log_metric("random_ll_marg", random_ll_marg)
-        random_pred_entropy = model.eval_entropy(random_ll, device)
-        mlflow.log_metric("random_entropy", random_pred_entropy)
+        # Calibration of test
+        print("evaluating calibration")
+        model.eval_calibration(orig_test_ll, device, "test", test_dl)
 
         # AUROC and AUPR for OOD detection vs SVHN
         svhn_test_ds = load_svhn_test()
@@ -303,13 +288,18 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             num_workers=2,
         )
         print("evaluating OOD detection")
-        svhn_entropy = model.eval_entropy(None, device, svhn_test_dl, return_all=True)
+        svhn_ll = model.eval_ll(svhn_test_dl, device, return_all=True)
+        svhn_ll_marg = model.eval_ll_marg(svhn_ll, device)
+        mlflow.log_metric("svhn_ll_marg", svhn_ll_marg)
+        svhn_entropy = model.eval_entropy(svhn_ll, device, return_all=True)
+        mlflow.log_metric("svhn_entropy", torch.mean(svhn_entropy).item())
 
         (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
             orig_test_pred_entropy, svhn_entropy, device
         )
         mlflow.log_metric("auroc_svhn", auroc)
         mlflow.log_metric("auprc_svhn", auprc)
+
         print("done evaluating OOD detection")
 
         # train: 50k, 32, 32, 3
@@ -371,7 +361,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # evaluate calibration
         print("evaluating calibration")
-        model.eval_calibration(None, device, "cifar10-c", cifar10_c_dl)
+        model.eval_calibration(None, device, "test-c", cifar10_c_dl)
         print("done evaluating calibration")
 
         del cifar10_c_ds, cifar10_c_dl

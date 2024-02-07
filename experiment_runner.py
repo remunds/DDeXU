@@ -207,7 +207,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.05,
         num_epochs=100,
-        early_stop=20,
+        early_stop=3,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -231,23 +231,22 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     if training == "end-to-end":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
-        train_params["num_epochs"] = 400
+        train_params["num_epochs"] = 10
     elif training == "seperate":
-        train_params["warmup_epochs"] = 400
+        train_params["warmup_epochs"] = 10
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 400
+        train_params["num_epochs"] = 10
     elif training == "warmup":
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
     elif training == "backbone_only":
-        train_params["warmup_epochs"] = 50
+        train_params["warmup_epochs"] = 10
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 0
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        # train_params["num_epochs"] = 400
-        train_params["num_epochs"] = 20
+        train_params["num_epochs"] = 10
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -881,7 +880,7 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 400
     elif training == "seperate":
-        train_params["warmup_epochs"] = 300
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = True
         train_params["num_epochs"] = 400
     elif training == "warmup":
@@ -889,13 +888,13 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 300
     elif training == "backbone_only":
-        train_params["warmup_epochs"] = 100
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 0
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 300
+        train_params["num_epochs"] = 400
     else:
         raise ValueError(
             "training must be end-to-end, seperate, warmup, backbone_only or einet_only"
@@ -943,25 +942,27 @@ loss = [
     # "discriminative",
 ]
 dataset = [
-    # "figure6",
-    # "two-moons",
-    # "dirty-mnist",
-    # "mnist-calib",
-    # "mnist-expl",
-    # "cifar10-c-calib",
-    # "cifar10-c-expl",
-    # "svhn-c-calib",
-    "svhn-c-expl"
+    "figure6",
+    "two-moons",
+    "dirty-mnist",
+    "mnist-calib",
+    "mnist-expl",
+    "cifar10-c-calib",
+    "cifar10-c-expl",
+    "svhn-c-calib",
+    "svhn-c-expl",
+]
+dense_models = [
+    "DenseResNetSPN",
+    "DenseResNetSNGP",
 ]
 models = [
-    # "DenseResNetSPN",
-    # "DenseResNetSNGP",
     "EfficientNetSPN",
-    "ConvResNetSPN",
+    # "ConvResNetSPN",
     # "ConvResNetDDU",
-    # "EfficientNetGMM",
+    "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    # "EfficientNetSNGP",
+    "EfficientNetSNGP",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -1012,6 +1013,9 @@ pretrained_backbones = {
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
     },
+    "svhn-c-expl": {
+        "EfficientNetSPN": "771929259740930885/1e90f7dc2772423abe88c2b287a21daf/artifacts/model",
+    },
 }
 
 trained_models = {
@@ -1043,6 +1047,9 @@ trained_models = {
     "svhn-c-calib": {
         "EfficientNetSPN": "553153056869580546/4ce6a9e8ce354487992891072555ba94/artifacts/model"
     },
+    "svhn-c-expl": {
+        "EfficientNetSPN": "771929259740930885/16febed0e959487abfed47f75907ad9b/artifacts/model"
+    },
 }
 
 # pretrained_path = pretrained_backbones["two-moons"]
@@ -1050,32 +1057,54 @@ trained_models = {
 # run_two_moons("hybrid_high", "einet_only", pretrained_path)
 
 for d in dataset:
-    for l in loss:
-        if d == "two-moons" or d == "figure6":
-            for m in models:
-                pretrained_path = pretrained_backbones[d]
-                pretrained_path = (
-                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-                )
-                pretrained_path = None
-                # run_dense_resnet(d, l, "seperate", m, pretrained_path)
-                # run_dense_resnet(d, l, "einet_only", m, pretrained_path)
-                run_dense_resnet(d, l, "end-to-end", m, pretrained_path)
-                # run_dense_resnet(d, l, "seperate", m)
+    if d == "two-moons" or d == "figure6":
+        for m in dense_models:
+            # pretrained_path = None
+            # run_dense_resnet(d, l, "seperate", m, pretrained_path)
+            # run_dense_resnet(d, l, "einet_only", m, pretrained_path)
+            if "SNGP" in m:
+                l = "discriminative"
+                run_dense_resnet(d, l, "end-to-end", m, pretrained_path=None)
                 continue
+
+            pretrained_path = pretrained_backbones[d]
+            pretrained_path = (
+                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            )
+            if "GMM" in m:
+                l = "discriminative"
+                run_dense_resnet(d, l, "eval_only", m, pretrained_path)
+            elif "SPN" in m:
+                for l in loss:
+                    run_dense_resnet(d, l, "einet_only", m, pretrained_path)
+            # run_dense_resnet(d, l, "seperate", m)
             continue
-        for m in models:
-            # pretrained_path = pretrained_backbones[d][m]
-            # pretrained_path = trained_models[d][m]
-            # # pretrained_path = trained_models[d][l][m]
-            # pretrained_path = (
-            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            # )
-            pretrained_path = None
-            # tune_conv(d, l, "end-to-end", m, pretrained_path)
-            # run_conv(dataset, l, "eval_only", m, pretrained_path)
-            run_conv(d, l, "seperate", m, pretrained_path)
-            # run_conv(dataset, l, "seperate", m)
+        continue
+    for m in models:
+        if "SNGP" in m:
+            l = "discriminative"
+            run_conv(d, l, "end-to-end", m, pretrained_path=None)
+            continue
+        elif "GMM" in m:
+            l = "discriminative"
+            run_conv(d, l, "backbone_only", m, pretrained_path=None)
+            continue
+        elif "SPN" in m:
+            for l in loss:
+                run_conv(d, l, "seperate", m, pretrained_path=None)
+            continue
+        # pretrained_path = pretrained_backbones[d][m]
+        # pretrained_path = trained_models[d][m]
+        # pretrained_path = trained_models[d][l][m]
+        # pretrained_path = (
+        #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+        # )
+        # pretrained_path = None
+        # tune_conv(d, l, "end-to-end", m, pretrained_path)
+        # run_conv(d, l, "einet_only", m, pretrained_path)
+        # run_conv(d, l, "eval_only", m, pretrained_path)
+        # run_conv(d, l, "seperate", m, pretrained_path)
+        # run_conv(dataset, l, "seperate", m)
 
 
 # path = (

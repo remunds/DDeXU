@@ -309,16 +309,27 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
 
         train_ll_marg = model.eval_ll_marg(None, device, train_dl)
         mlflow.log_metric("train ll marg", train_ll_marg)
-        test_ll_marg = model.eval_ll_marg(None, device, test_dl)
+        test_ll = model.eval_ll(None, device, test_dl, return_all=True)
+        test_ll_marg = model.eval_ll_marg(test_ll, device)
         mlflow.log_metric("test ll marg", test_ll_marg)
+        test_entropy = model.eval_entropy(test_ll, device, return_all=True)
+        mlflow.log_metric("test entropy", torch.mean(test_entropy))
 
         ood_ds_flat = ood_ds.data.reshape(-1, 28 * 28).to(dtype=torch.float32)
         ood_ds_flat = TensorDataset(ood_ds_flat, ood_ds.targets)
         ood_dl = DataLoader(ood_ds_flat, batch_size=batch_sizes["resnet"], shuffle=True)
-        ood_acc = model.eval_acc(ood_dl, device)
-        mlflow.log_metric("ood accuracy", ood_acc)
-        ood_ll_marg = model.eval_ll_marg(None, device, ood_dl)
+        ood_ll = model.eval_ll(ood_dl, device, return_all=True)
+        ood_ll_marg = model.eval_ll_marg(ood_ll, device)
         mlflow.log_metric("ood ll marg", ood_ll_marg)
+
+        print("evaluating calibration")
+        model.eval_calibration(test_ll, device, "test", test_dl)
+
+        # OOD eval
+        ood_entropy = model.eval_entropy(ood_ll, device, return_all=True)
+        mlflow.log_metric("fashion_entropy", torch.mean(ood_entropy))
+
+        (_, _, _), (_,_,_), auroc, auprc = model.eval_ood(test_entropy, ood_entropy, device)
 
         del (
             ood_ds_flat,
@@ -330,7 +341,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
             valid_ds,
         )
 
-        print("creating calibration plots")
+        print("eval calibration plots")
         # calibration plots
         test_ds_rot = TensorDataset(test_ds_rot, test_ds.targets)
         test_dl_rot = DataLoader(

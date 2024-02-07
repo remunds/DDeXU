@@ -193,10 +193,14 @@ class EinetUtils:
                 #     is_differentiable=True,
                 #     is_mpe=True,
                 # )[:, self.explaining_vars]
+                # mpe_expl_vars += 1
                 # # reconstruction loss
-                # expl_vars_vals = data[:, self.explaining_vars]
-                # mpe_reconstruction_loss = F.mse_loss(mpe_expl_vars, expl_vars_vals)
-                # loss_v = loss_v + 10 * mpe_reconstruction_loss
+                # expl_vars_vals = data[:, self.explaining_vars] + 1
+                # # mpe_reconstruction_loss = F.mse_loss(mpe_expl_vars, expl_vars_vals)
+                # mpe_reconstruction_loss = torch.nn.CrossEntropyLoss()(
+                #     mpe_expl_vars, expl_vars_vals
+                # )
+                # loss_v = loss_v + 100 * mpe_reconstruction_loss
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
@@ -394,10 +398,6 @@ class EinetUtils:
         labels = (
             torch.cat([labels for _, labels in dl], dim=0).to(device).to(torch.long)
         )
-        print(posteriors.shape)
-        print(labels.shape)
-        print(torch.arange(len(labels), device=device).shape)
-        print(labels.shape)
         correct_class_prob = posteriors[
             torch.arange(len(labels), device=device), labels
         ]
@@ -541,17 +541,20 @@ class EinetUtils:
                 self.eval_correct_class_prob(log_p_x_g_y, device, dl, return_all=True)
             )
         )
+        mlflow.log_metric(key=f"mean_nll_{name}", value=mean_nll)
 
         # equal frequency binning
         conf, acc = equal_frequency_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
         ece = compute_ece(conf, acc)
+        mlflow.log_metric(key=f"ece_eq_freq_{name}", value=ece)
         plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_frequency_{name}")
         conf, acc = equal_width_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
         ece = compute_ece(conf, acc)
+        mlflow.log_metric(key=f"ece_eq_width_{name}", value=ece)
         plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_width_{name}")
 
     # taken from https://github.com/omegafragger/DDU/blob/main/metrics/ood_metrics.py
@@ -920,13 +923,20 @@ class ConvResNetSPN(ResNet, EinetUtils):
         if len(self.explaining_vars) > 0:
             leaf_type = MultiDistributionLayer
             scopes_a = torch.arange(0, len(self.explaining_vars))
-            scopes_b = torch.arange(
-                len(self.explaining_vars), 1280 + len(self.explaining_vars)
-            )
+            scopes_b = torch.arange(len(self.explaining_vars), in_features)
             leaf_kwargs = {
                 "scopes_to_dist": [
-                    (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
-                    # (scopes_a, Categorical, {"num_bins": 5}),
+                    # (
+                    #     scopes_a,
+                    #     RatNormal,
+                    #     {
+                    #         "min_sigma": 0.00001,
+                    #         "max_sigma": 20.0,
+                    #         "min_mean": 0.0,
+                    #         "max_mean": 6.0,
+                    #     },
+                    # ),
+                    (scopes_a, Categorical, {"num_bins": 6}),
                     (
                         scopes_b,
                         RatNormal,
@@ -1072,13 +1082,11 @@ class ConvResnetDDU(ResNet, EinetUtils):
         if len(self.explaining_vars) > 0:
             leaf_type = MultiDistributionLayer
             scopes_a = torch.arange(0, len(self.explaining_vars))
-            scopes_b = torch.arange(
-                len(self.explaining_vars), 1280 + len(self.explaining_vars)
-            )
+            scopes_b = torch.arange(len(self.explaining_vars), in_features)
             leaf_kwargs = {
                 "scopes_to_dist": [
-                    (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
-                    # (scopes_a, Categorical, {"num_bins": 5}),
+                    # (scopes_a, RatNormal, {"min_mean": 0.0, "max_mean": 6.0}),
+                    (scopes_a, Categorical, {"num_bins": 6}),
                     (
                         scopes_b,
                         RatNormal,
@@ -1089,6 +1097,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
         else:
             leaf_type = RatNormal
             leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
+
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,
@@ -1131,6 +1140,7 @@ class ConvResnetDDU(ResNet, EinetUtils):
 
         # feed through resnet
         x = self.forward_hidden(x)
+        self.hidden = x
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars
@@ -1578,22 +1588,20 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         if len(self.explaining_vars) > 0:
             leaf_type = MultiDistributionLayer
             scopes_a = torch.arange(0, len(self.explaining_vars))
-            scopes_b = torch.arange(
-                len(self.explaining_vars), 1280 + len(self.explaining_vars)
-            )
+            scopes_b = torch.arange(len(self.explaining_vars), in_features)
             leaf_kwargs = {
                 "scopes_to_dist": [
-                    (
-                        scopes_a,
-                        RatNormal,
-                        {
-                            "min_sigma": 0.00001,
-                            "max_sigma": 20.0,
-                            "min_mean": 0.0,
-                            "max_mean": 6.0,
-                        },
-                    ),
-                    # (scopes_a, Categorical, {"num_bins": 5}),
+                    # (
+                    #     scopes_a,
+                    #     RatNormal,
+                    #     {
+                    #         "min_sigma": 0.00001,
+                    #         "max_sigma": 20.0,
+                    #         "min_mean": 0.0,
+                    #         "max_mean": 6.0,
+                    #     },
+                    # ),
+                    (scopes_a, Categorical, {"num_bins": 6}),
                     (
                         scopes_b,
                         RatNormal,
@@ -1604,7 +1612,6 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         else:
             leaf_type = RatNormal
             leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
-
         cfg = EinetConfig(
             num_features=in_features,
             num_channels=1,

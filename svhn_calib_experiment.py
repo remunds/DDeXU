@@ -5,6 +5,28 @@ from torch.utils.data import DataLoader
 import mlflow
 
 
+def load_cifar10_test():
+    from torchvision.datasets import CIFAR10
+    from torchvision import transforms
+
+    test_transformer = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+        ]
+    )
+
+    test_ds = CIFAR10(
+        root="/data_docker/datasets/cifar10",
+        download=True,
+        train=False,
+        transform=test_transformer,
+    )
+
+    return test_ds
+
+
 dataset_dir = "/data_docker/datasets/"
 svhn_c_path = "svhn_c"
 svhn_c_path_complete = dataset_dir + svhn_c_path
@@ -198,6 +220,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             trial=trial,
             **train_params,
         )
+        model.eval()
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
@@ -207,11 +230,10 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
 
         if "GMM" in model_name:
             model.fit_gmm(train_dl, device)
-        else:
+        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
             mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
-        model.eval()
         eval_dict = {}
 
         # eval einet
@@ -229,32 +251,37 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         orig_test_ll = model.eval_ll(test_dl, device, return_all=True)
         orig_test_ll_marg = model.eval_ll_marg(orig_test_ll, device)
         mlflow.log_metric("test_ll_marg", orig_test_ll_marg)
-        orig_test_pred_entropy = model.eval_entropy(orig_test_ll, device)
-        mlflow.log_metric("test_entropy", orig_test_pred_entropy)
-
-        # random noise baseline
-        random_data = np.random.rand(10000, 32, 32, 3)
-        random_data = torch.stack([svhn_transformer(img) for img in random_data], dim=0)
-        random_ds = list(zip(random_data.to(dtype=torch.float32), test_ds.labels))
-        random_dl = DataLoader(
-            random_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=False,
-            pin_memory=True,
-            num_workers=1,
+        orig_test_pred_entropy = model.eval_entropy(
+            orig_test_ll, device, return_all=True
         )
-        random_acc = model.eval_acc(random_dl, device)
-        mlflow.log_metric("random_acc", random_acc)
-        random_ll = model.eval_ll(random_dl, device, return_all=True)
-        random_ll_marg = model.eval_ll_marg(random_ll, device)
-        mlflow.log_metric("random_ll_marg", random_ll_marg)
-        random_pred_entropy = model.eval_entropy(random_ll, device)
-        mlflow.log_metric("random_entropy", random_pred_entropy)
+        mlflow.log_metric("test_entropy", torch.mean(orig_test_pred_entropy).item())
 
-        # evaluate calibration
+        # calibration of test
         print("evaluating calibration")
         model.eval_calibration(orig_test_ll, device, name="svhn", dl=test_dl)
         print("done evaluating calibration")
+
+        # eval OOD
+        cifar10_test_ds = load_cifar10_test()
+        cifar10_test_dl = DataLoader(
+            cifar10_test_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+        print("evaluating OOD")
+        cifar_ll = model.eval_ll(cifar10_test_dl, device, return_all=True)
+        cifar_ll_marg = model.eval_ll_marg(cifar_ll, device)
+        mlflow.log_metric("cifar_ll_marg", cifar_ll_marg)
+        cifar_entropy = model.eval_entropy(cifar_ll, device, return_all=True)
+        mlflow.log_metric("cifar_entropy", torch.mean(cifar_entropy).item())
+
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_pred_entropy, cifar_entropy, device
+        )
+        mlflow.log_metric("auroc_cifar", auroc)
+        mlflow.log_metric("auprc_cifar", auprc)
 
         # test: 26032, 32, 32, 3
         # test-corrupted: 26032, 32, 32, 3 per corruption level (5)
@@ -320,7 +347,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
 
         # evaluate calibration
         print("evaluating calibration on corrupted data")
-        model.eval_calibration(None, device, name="svhn-c", dl=svhn_c_dl)
+        model.eval_calibration(None, device, name="test-c", dl=svhn_c_dl)
         print("done evaluating calibration on corrupted data")
 
         del svhn_c_ds, svhn_c_dl
