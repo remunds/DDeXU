@@ -3,6 +3,7 @@ import torch
 import mlflow
 import optuna
 from figure6 import start_figure6_run
+from simple_einet.layers.distributions.normal import RatNormal
 from two_moons_experiment import start_two_moons_run
 from mnist_calib_experiment import start_mnist_calib_run
 from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
@@ -178,7 +179,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             "dataset must be dirty-mnist, mnist-calib, mnist-expl or cifar10-c"
         )
 
-    if "SPN" in model or "DDU" in model:
+    if "SPN" in model or "DDU" in model or "GMM" in model:
         model_params = dict(
             model=model,  # ConvResNetSPN, ConvResNetDDU
             block="basic",  # basic, bottleneck
@@ -207,7 +208,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.05,
         num_epochs=100,
-        early_stop=3,
+        early_stop=20,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -233,9 +234,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 10
     elif training == "seperate":
-        train_params["warmup_epochs"] = 10
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 10
+        train_params["num_epochs"] = 400
     elif training == "warmup":
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
@@ -818,6 +819,29 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
     else:
         num_classes = 10
     if "SPN" in model:
+        leaf_type = RatNormal
+        leaf_kwargs = {
+            "min_sigma": 0.000001,
+            "max_sigma": 5.0,  # good for twomoons
+            # "max_sigma": 50.0,  # good for figure6
+            # "max_sigma": 20.0,
+        }
+        if "figure6" in dataset:
+            # lambda should be 0.3 or 0.5
+            einet_depth = 3
+            einet_num_sums = 10
+            einet_num_leaves = 15
+            einet_num_repetitions = 11
+        elif "two-moons" in dataset:
+            # (also works for figure6 with dropout=0.01, but occams razor: worse model is better)
+            # lambda should be 0.5 or 0.7
+            einet_depth = 5
+            einet_num_sums = 10
+            einet_num_leaves = 15
+            einet_num_repetitions = 11
+        else:
+            raise NotImplementedError()
+
         model_params = dict(
             model=model,
             num_classes=num_classes,
@@ -825,16 +849,13 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
             num_layers=3,
             num_hidden=32,
             spec_norm_bound=0.95,
-            einet_depth=5,
-            einet_num_sums=20,
-            einet_num_leaves=20,
-            einet_num_repetitions=5,
-            # einet_depth=0,
-            # einet_num_sums=32,
-            # einet_num_leaves=32,
-            # einet_num_repetitions=5,
-            einet_leaf_type="Normal",
-            einet_dropout=0.0,
+            einet_depth=einet_depth,
+            einet_num_sums=einet_num_sums,
+            einet_num_leaves=einet_num_leaves,
+            einet_num_repetitions=einet_num_repetitions,
+            einet_leaf_type=leaf_type,
+            einet_leaf_kwargs=leaf_kwargs,
+            einet_dropout=0.00,
         )
     elif "SNGP" in model:
         model_params = dict(
@@ -942,27 +963,27 @@ loss = [
     # "discriminative",
 ]
 dataset = [
-    "figure6",
-    "two-moons",
-    "dirty-mnist",
-    "mnist-calib",
-    "mnist-expl",
-    "cifar10-c-calib",
-    "cifar10-c-expl",
-    "svhn-c-calib",
+    # "figure6",
+    # "two-moons",
+    # "dirty-mnist",
+    # "mnist-calib",
+    # "mnist-expl",
+    # "cifar10-c-calib",
+    # "cifar10-c-expl",
+    # "svhn-c-calib",
     "svhn-c-expl",
 ]
 dense_models = [
     "DenseResNetSPN",
-    "DenseResNetSNGP",
+    # "DenseResNetSNGP",
 ]
 models = [
     "EfficientNetSPN",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
-    "EfficientNetGMM",
+    # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    "EfficientNetSNGP",
+    # "EfficientNetSNGP",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -1067,17 +1088,18 @@ for d in dataset:
                 run_dense_resnet(d, l, "end-to-end", m, pretrained_path=None)
                 continue
 
-            pretrained_path = pretrained_backbones[d]
-            pretrained_path = (
-                "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-            )
+            # pretrained_path = pretrained_backbones[d]
+            # pretrained_path = (
+            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            # )
+            pretrained_path = None
             if "GMM" in m:
                 l = "discriminative"
                 run_dense_resnet(d, l, "eval_only", m, pretrained_path)
             elif "SPN" in m:
                 for l in loss:
-                    run_dense_resnet(d, l, "einet_only", m, pretrained_path)
-            # run_dense_resnet(d, l, "seperate", m)
+                    # run_dense_resnet(d, l, "einet_only", m, pretrained_path)
+                    run_dense_resnet(d, l, "seperate", m, pretrained_path)
             continue
         continue
     for m in models:

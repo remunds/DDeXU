@@ -309,7 +309,7 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
 
         train_ll_marg = model.eval_ll_marg(None, device, train_dl)
         mlflow.log_metric("train ll marg", train_ll_marg)
-        test_ll = model.eval_ll(None, device, test_dl, return_all=True)
+        test_ll = model.eval_ll(None, device, return_all=True)
         test_ll_marg = model.eval_ll_marg(test_ll, device)
         mlflow.log_metric("test ll marg", test_ll_marg)
         test_entropy = model.eval_entropy(test_ll, device, return_all=True)
@@ -329,7 +329,9 @@ def start_mnist_calib_run(run_name, batch_sizes, model_params, train_params, tri
         ood_entropy = model.eval_entropy(ood_ll, device, return_all=True)
         mlflow.log_metric("fashion_entropy", torch.mean(ood_entropy))
 
-        (_, _, _), (_,_,_), auroc, auprc = model.eval_ood(test_entropy, ood_entropy, device)
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            test_entropy, ood_entropy, device
+        )
 
         del (
             ood_ds_flat,

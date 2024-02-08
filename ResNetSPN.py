@@ -41,6 +41,7 @@ class EinetUtils:
         checkpoint_dir=None,
         trial=None,
         pretrained_path=None,
+        use_mpe_reconstruction_loss=False,
     ):
         if pretrained_path is not None:
             print(f"loading pretrained model from {pretrained_path}")
@@ -187,20 +188,21 @@ class EinetUtils:
                     1 - lambda_v
                 ) * -(output.mean() / divisor)
 
-                # mpe_expl_vars = self.einet.sample(
-                #     evidence=self.einet_input,
-                #     marginalized_scopes=self.explaining_vars,
-                #     is_differentiable=True,
-                #     is_mpe=True,
-                # )[:, self.explaining_vars]
-                # mpe_expl_vars += 1
-                # # reconstruction loss
-                # expl_vars_vals = data[:, self.explaining_vars] + 1
-                # # mpe_reconstruction_loss = F.mse_loss(mpe_expl_vars, expl_vars_vals)
-                # mpe_reconstruction_loss = torch.nn.CrossEntropyLoss()(
-                #     mpe_expl_vars, expl_vars_vals
-                # )
-                # loss_v = loss_v + 100 * mpe_reconstruction_loss
+                if use_mpe_reconstruction_loss:
+                    mpe_expl_vars = self.einet.sample(
+                        evidence=self.einet_input,
+                        marginalized_scopes=self.explaining_vars,
+                        is_differentiable=True,
+                        is_mpe=True,
+                    )[:, self.explaining_vars]
+                    # reconstruction loss
+                    expl_vars_vals = data[:, self.explaining_vars]
+                    mpe_reconstruction_loss = F.mse_loss(mpe_expl_vars, expl_vars_vals)
+                    # they equally contribute if loss_v is divided by number of features and mpe_recon by expl_vars
+                    # since loss_v is for number of feautres, mpe_recon_loss only for expl_vars
+                    loss_v = loss_v / self.hidden.shape[
+                        1
+                    ] + mpe_reconstruction_loss / len(self.explaining_vars)
                 loss += loss_v.item()
                 loss_v.backward()
                 optimizer.step()
@@ -711,7 +713,8 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         einet_num_sums=20,
         einet_num_leaves=20,
         einet_num_repetitions=1,
-        einet_leaf_type="Normal",
+        einet_leaf_type=RatNormal,
+        einet_leaf_kwargs={},
         einet_dropout=0.0,
         **kwargs,
     ):
@@ -721,10 +724,8 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         self.einet_num_sums = einet_num_sums
         self.einet_num_leaves = einet_num_leaves
         self.einet_num_repetitions = einet_num_repetitions
-        if einet_leaf_type == "Normal":
-            self.einet_leaf_type = Normal
-        else:
-            raise NotImplementedError
+        self.einet_leaf_type = einet_leaf_type
+        self.einet_leaf_kwargs = einet_leaf_kwargs
         self.einet_dropout = einet_dropout
         super().__init__(**kwargs)
         self.einet = self.make_einet_output_layer()
@@ -765,12 +766,6 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
 
     def make_einet_output_layer(self):
         """uses einet as the output layer."""
-        leaf_type = RatNormal
-        leaf_kwargs = {
-            "min_sigma": 0.00001,
-            # "max_sigma": 10.0,
-            "max_sigma": 3.5,  # this is crucial
-        }
         cfg = EinetConfig(
             num_features=self.num_hidden + len(self.explaining_vars),
             num_channels=1,
@@ -779,8 +774,8 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
             num_classes=self.num_classes,
-            leaf_type=leaf_type,
-            leaf_kwargs=leaf_kwargs,
+            leaf_type=self.einet_leaf_type,
+            leaf_kwargs=self.einet_leaf_kwargs,
             layer_type="einsum",
             dropout=self.einet_dropout,
         )
