@@ -10,25 +10,25 @@ cifar10_c_url = "https://zenodo.org/records/2535967/files/CIFAR-10-C.tar?downloa
 cifar10_c_path = "CIFAR-10-C"
 cifar10_c_path_complete = dataset_dir + cifar10_c_path
 corruptions = [
-    "brightness",
-    "contrast",
-    "defocus_blur",
+    # "brightness",
+    # "contrast",
+    # "defocus_blur",
     "elastic_transform",
     "fog",
-    "frost",
-    "gaussian_blur",
-    "gaussian_noise",
-    "glass_blur",
-    "impulse_noise",
-    "jpeg_compression",
-    "motion_blur",
-    "pixelate",
-    "saturate",
+    # "frost",
+    # "gaussian_blur",
+    # "gaussian_noise",
+    # "glass_blur",
+    # "impulse_noise",
+    # "jpeg_compression",
+    # "motion_blur",
+    # "pixelate",
+    # "saturate",
     "shot_noise",
     "snow",
-    "spatter",
-    "speckle_noise",
-    "zoom_blur",
+    # "spatter",
+    # "speckle_noise",
+    # "zoom_blur",
 ]
 
 
@@ -202,7 +202,8 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         )
         train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
         # We want to train on some of the corrupted data, s.t. explanations are possible
-        train_data_combined = train_data + train_corrupt_data
+        # train_data_combined = train_data + train_corrupt_data
+        train_data_combined = train_corrupt_data
 
         train_ds, valid_ds = torch.utils.data.random_split(
             train_data_combined, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
@@ -296,12 +297,13 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             **train_params,
         )
 
+        model.activate_uncert_head()
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
+        # if valid_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
@@ -319,6 +321,8 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             valid_dl,
         )
         mlflow.log_metric("valid_ll_marg", valid_ll_marg)
+
+        model.compute_normalization_values(train_dl, device)
 
         # test with all corruption-levels
         test_levels = [0, 1, 2, 3, 4]

@@ -192,13 +192,15 @@ def mnist_expl_qualitative_evaluation(model, device):
     )
     expl_ll = model.explain_ll(dl, device, True)
     expl_mpe = model.explain_mpe(dl, device, True)
+    posteriors = model.eval_posterior(None, device, dl, True)
+    preds = torch.max(posteriors, 1)[1]
 
-    def create_image(explaining_vars, explanations, img, mode):
+    def create_image(explaining_vars, explanations, img, mode, pred):
         # plot image, title contains explanations
         fig, ax = plt.subplots()
         ax.imshow(img.reshape(28, 28), cmap="gray")
         ax.set_title(
-            f"rot: {explanations[0]:.3f}, cut: {explanations[1]:.3f}, noise: {explanations[2]:.3f}"
+            f"{pred}, rot: {explanations[0]:.3f}, cut: {explanations[1]:.3f}, noise: {explanations[2]:.3f}"
         )
         mlflow.log_figure(
             fig,
@@ -209,8 +211,9 @@ def mnist_expl_qualitative_evaluation(model, device):
     for i, img in enumerate(imgs):
         expl = img[:3]
         img = img[3:]
-        create_image(expl, expl_ll[i], img, "ll")
-        create_image(expl, expl_mpe[i][0].tolist(), img, "mpe")
+        pred = preds[i].item()
+        create_image(expl, expl_ll[i], img, "ll", pred)
+        create_image(expl, expl_mpe[i][0].tolist(), img, "mpe", pred)
 
 
 def mnist_expl_manual_evaluation(model_params, path, device):
@@ -429,9 +432,9 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
+        # if valid_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
 
         if "GMM" in model_name:
             print("fitting gmm")
@@ -453,6 +456,10 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
 
         valid_ll_marg = model.eval_ll_marg(None, device, valid_dl)
         mlflow.log_metric("valid_ll_marg", valid_ll_marg)
+
+        # use train_dl to compute normalization values
+        if model.mean is None or model.std is None:
+            model.compute_normalization_values(train_dl, device)
 
         del train_dl
         del valid_dl
@@ -590,7 +597,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         plt.grid(False)
         plt.rcParams["axes.grid"] = False
 
-        def create_expl_plot(corruption, mode, expl):
+        def create_expl_plot(corruption, mode, expl, accs, lls_marg):
             fig, ax = plt.subplots()
 
             ax.set_xlabel("severity")
@@ -609,7 +616,15 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             ax2.plot(expl_tensor[:, 2], label=f"{mode} expl noise", color="orange")
             ax2.tick_params(axis="y")
             ax2.set_ylabel(f"{mode} explanations")
-            ax2.set_ylim([0, 20])
+            # if "mpe" in mode:
+            #     ax2.set_ylim([0, 5])
+            # else:
+            #     ax2.set_ylim([0, 20])
+
+            ax3 = ax.twinx()
+            ax3.plot(lls_marg, label=f"lls marg", color="blue")
+            ax3.set_ylabel("lls marg", color="blue")
+            ax3.tick_params(axis="y", labelcolor="blue")
 
             fig.tight_layout()
             fig.legend(loc="upper left")
@@ -629,7 +644,11 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict[m][severity]["expl_mpe"]
                 for severity in sorted(eval_dict[m].keys())
             ]
-            create_expl_plot(m, "ll", ll_expl)
-            create_expl_plot(m, "mpe", mpe_expl)
+            lls_marg = [
+                eval_dict[m][severity]["ll_marg"]
+                for severity in sorted(eval_dict[m].keys())
+            ]
+            create_expl_plot(m, "ll", ll_expl, accs, lls_marg)
+            create_expl_plot(m, "mpe", mpe_expl, accs, lls_marg)
 
         return lowest_val_loss

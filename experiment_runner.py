@@ -3,6 +3,7 @@ import torch
 import mlflow
 import optuna
 from figure6 import start_figure6_run
+from simple_einet.layers.distributions.multidistribution import MultiDistributionLayer
 from simple_einet.layers.distributions.normal import RatNormal
 from two_moons_experiment import start_two_moons_run
 from mnist_calib_experiment import start_mnist_calib_run
@@ -218,6 +219,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["lambda_v"] = 0.5
     elif loss == "hybrid_low":
         train_params["lambda_v"] = 0.1
+    elif loss == "hybrid_mid_low":
+        train_params["lambda_v"] = 0.3
     elif loss == "hybrid_very_low":
         train_params["lambda_v"] = 0.01
     elif loss == "hybrid_high":
@@ -247,7 +250,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 10
+        train_params["num_epochs"] = 20
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -281,8 +284,10 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.end_run()
     elif "mnist-expl" in dataset:
         model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
-        train_params["highest_severity_train"] = 2
+        # train_params["highest_severity_train"] = 2
+        train_params["highest_severity_train"] = 5
         # copy here, since some params are changed in the experiment
+        # train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_mnist_expl_run(
                 run_name,
@@ -317,8 +322,10 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
     elif "cifar10-c-expl" in dataset:
-        model_params["explaining_vars"] = list(range(19))
-        train_params["corruption_levels_train"] = [0, 1]
+        # model_params["explaining_vars"] = list(range(19))
+        # train_params["corruption_levels_train"] = [0, 1]
+        model_params["explaining_vars"] = list(range(4))
+        train_params["corruption_levels_train"] = [0, 1, 2, 3]
         try:
             start_cifar10_expl_run(
                 run_name,
@@ -346,7 +353,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         # model_params["explaining_vars"] = list(range(15))
         model_params["explaining_vars"] = list(range(3))
         # train_params["corruption_levels_train"] = [0, 1]
-        train_params["corruption_levels_train"] = [0, 1, 2, 3]
+        train_params["corruption_levels_train"] = [0, 1, 2, 3, 4]
+        train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_svhn_expl_run(
                 run_name,
@@ -360,6 +368,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
+
     else:
         raise ValueError(
             "dataset must be mnist-calib, mnist-expl, dirty-mnist, cifar10-c or cifar10-c_expl"
@@ -470,7 +479,7 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
                 raise optuna.TrialPruned()
         elif "mnist-expl" in dataset:
             model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
-            train_params["highest_severity_train"] = 2
+            train_params["highest_severity_train"] = 3
             # copy here, since some params are changed in the experiment
             try:
                 val_loss_2 = start_mnist_expl_run(
@@ -969,9 +978,9 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     # "cifar10-c-calib",
-    # "cifar10-c-expl",
+    "cifar10-c-expl",
     # "svhn-c-calib",
-    "svhn-c-expl",
+    # "svhn-c-expl",
 ]
 dense_models = [
     "DenseResNetSPN",
@@ -1005,7 +1014,8 @@ pretrained_backbones = {
         "ConvResNetSPN": "175904093117473539/196a38010d6846cdacf663229314882b/artifacts/model",
         "ConvResNetDDU": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
         "ConvResNetDDUGMM": "175904093117473539/2b6023045bce4529bd3b49a4d3313e08/artifacts/model",
-        "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+        # "EfficientNetSPN": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
+        "EfficientNetSPN": "987712940205555914/79e5f60ba8644d4ebbaf0faccce19010/artifacts/model",
         "EfficientNetGMM": "175904093117473539/75ec0d48354845278b00fc8aec0e68f9/artifacts/model",
     },
     "dirty-mnist": {
@@ -1032,10 +1042,11 @@ pretrained_backbones = {
     "cifar10-c-expl": {
         "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
-        "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+        # "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+        "EfficientNetSPN": "620594555249592855/c992900064d04caeb5e71ae2f17df5f3/artifacts/model",
     },
     "svhn-c-expl": {
-        "EfficientNetSPN": "771929259740930885/1e90f7dc2772423abe88c2b287a21daf/artifacts/model",
+        "EfficientNetSPN": "771929259740930885/e2f1864ae2eb40368ccd421ff71b2a48/artifacts/model",
     },
 }
 
@@ -1046,11 +1057,13 @@ trained_models = {
     },
     "mnist-expl": {
         # "EfficientNetSPN": "764598691207333922/02852d15bd2446f5bfc021b5043f2a29/artifacts/model",
-        "EfficientNetSPN": "764598691207333922/9e133cfbafbd4df2acac15464349f1ec/artifacts/model"
+        # "EfficientNetSPN": "764598691207333922/9e133cfbafbd4df2acac15464349f1ec/artifacts/model"
+        # "EfficientNetSPN": "987712940205555914/eac48c7b7189427e904a604fb7772294/artifacts/model",
+        "EfficientNetSPN": "987712940205555914/1e17e9a931aa4217bf844d83e5f81c0f/artifacts/model"
     },
     "cifar10-c-expl": {
         # "EfficientNetSPN": "718553087440563724/d7f46d12439e4ac48a4284303ee92d40/artifacts/model",
-        # "EfficientNetSPN": "
+        "EfficientNetSPN": "620594555249592855/a300dfddeb3a4c53a6e55a27f1157656/artifacts/model"
     },
     "cifar10-c-calib": {
         "EfficientNetSPN": "232957915879295399/2a8506542b784512bc5ce588011ed044/artifacts/model"
@@ -1069,7 +1082,7 @@ trained_models = {
         "EfficientNetSPN": "553153056869580546/4ce6a9e8ce354487992891072555ba94/artifacts/model"
     },
     "svhn-c-expl": {
-        "EfficientNetSPN": "771929259740930885/16febed0e959487abfed47f75907ad9b/artifacts/model"
+        "EfficientNetSPN": "771929259740930885/3e527aa47f82443f9a076425e0c5569c/artifacts/model"
     },
 }
 
@@ -1113,7 +1126,14 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
+                pretrained_path = pretrained_backbones[d][m]
+                # pretrained_path = trained_models[d][m]
+                pretrained_path = (
+                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+                )
+                # pretrained_path = None
                 run_conv(d, l, "seperate", m, pretrained_path=None)
+                # run_conv(d, l, "einet_only", m, pretrained_path)
             continue
         # pretrained_path = pretrained_backbones[d][m]
         # pretrained_path = trained_models[d][m]
