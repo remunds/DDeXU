@@ -336,6 +336,17 @@ class EinetUtils:
             state_dict = {k: v for k, v in state_dict.items() if "einet" not in k}
         self.load_state_dict(state_dict, strict=False)
 
+    def get_embeddings(self, dl, device):
+        self.eval()
+        embeddings = []
+        with torch.no_grad():
+            for data, labels in dl:
+                data = data.to(device)
+                labels = labels.to(device)
+                pred = self(data)
+                embeddings.append(self.einet_input)
+        return torch.cat(embeddings, dim=0)
+
     def eval_acc(self, dl, device):
         self.eval()
         correct = 0
@@ -1643,10 +1654,11 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         self.einet_dropout = einet_dropout
         self.image_shape = image_shape
         self.marginalized_scopes = None
+        # self.num_hidden = 1280  # from efficientnet_s
+        self.num_hidden = 50  # from efficientnet_s
         self.backbone = self.make_efficientnet()
-        self.num_hidden = 1280  # from efficientnet_s
         self.einet = self.make_einet_output_layer(
-            1280 + len(explaining_vars), num_classes
+            self.num_hidden + len(explaining_vars), num_classes
         )
         self.mean = None
         self.std = None
@@ -1656,11 +1668,11 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    # layer = spectral_norm_torch(layer)
+                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    # layer = spectral_norm_torch(layer)
+                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):
                     replace_layers_rec(child)
@@ -1674,9 +1686,9 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             padding=(1, 1),
             bias=False,
         )
-        model.classifier = torch.nn.Linear(1280, self.num_classes)
-        # model.pre_classifier = torch.nn.Linear(1280, 50)
-        # model.classifier = torch.nn.Linear(50, self.num_classes)
+        # model.classifier = torch.nn.Linear(1280, self.num_classes)
+        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
+        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
         # apply spectral normalization
         replace_layers_rec(model)
         return model
@@ -1759,7 +1771,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         x = self.backbone.features(x)
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
-        # x = self.backbone.pre_classifier(x)
+        x = self.backbone.pre_classifier(x)
         return x
 
     def forward(self, x):

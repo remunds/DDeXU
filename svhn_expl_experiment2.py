@@ -189,9 +189,10 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
 
         # We want to train on the corrupted data, s.t. explanations are possible
         train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
+        print("len train/valid data: ", len(train_corrupt_data))
 
         train_ds, valid_ds = torch.utils.data.random_split(
-            train_corrupt_data, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
+            train_corrupt_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
         )
         train_dl = DataLoader(
             train_ds,

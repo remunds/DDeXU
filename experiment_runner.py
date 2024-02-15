@@ -187,13 +187,18 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             layers=[2, 2, 2, 2],
             num_classes=10,
             image_shape=image_shape,
-            einet_depth=5,  # might be overwritten by optuna
-            einet_num_sums=20,
-            einet_num_leaves=20,
-            einet_num_repetitions=5,  # might be overwritten by optuna
+            # einet_depth=5,
+            # einet_num_sums=20,
+            # einet_num_leaves=20,
+            # einet_num_repetitions=5,
+            einet_depth=5,
+            einet_num_sums=11,
+            einet_num_leaves=15,
+            einet_num_repetitions=10,
             einet_leaf_type="Normal",
             einet_dropout=0.0,
-            spec_norm_bound=0.95,  # only for ConvResNetSPN
+            # spec_norm_bound=0.95,  # only for ConvResNetSPN
+            spec_norm_bound=7,  # only for ConvResNetSPN
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
         )
@@ -237,9 +242,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 10
     elif training == "seperate":
-        train_params["warmup_epochs"] = 400
+        train_params["warmup_epochs"] = 100
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 400
+        train_params["num_epochs"] = 100
     elif training == "warmup":
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
@@ -266,7 +271,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif "ConvResNetDDU" in model:
         lr = 0.02
     elif "EfficientNet" in model:
-        lr = 0.015
+        # lr = 0.015
+        lr = 0.07
     else:
         raise ValueError(
             "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
@@ -353,8 +359,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         # model_params["explaining_vars"] = list(range(15))
         model_params["explaining_vars"] = list(range(3))
         # train_params["corruption_levels_train"] = [0, 1]
-        train_params["corruption_levels_train"] = [0, 1, 2, 3, 4]
-        train_params["use_mpe_reconstruction_loss"] = True
+        train_params["corruption_levels_train"] = [0, 1, 2]
+        # train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_svhn_expl_run(
                 run_name,
@@ -978,9 +984,9 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     # "cifar10-c-calib",
-    "cifar10-c-expl",
+    # "cifar10-c-expl",
     # "svhn-c-calib",
-    # "svhn-c-expl",
+    "svhn-c-expl",
 ]
 dense_models = [
     "DenseResNetSPN",

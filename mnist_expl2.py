@@ -111,9 +111,9 @@ model = EfficientNetSPN(
     image_shape=(1, 28, 28),
     explaining_vars=[0],
     einet_depth=5,
-    einet_num_sums=20,
+    einet_num_sums=15,
     einet_num_leaves=20,
-    einet_num_repetitions=5,
+    einet_num_repetitions=25,
     einet_leaf_type="Normal",
     einet_dropout=0.0,
 )
@@ -123,12 +123,12 @@ train_params = dict(
     pretrained_path=None,
     learning_rate_warmup=0.05,
     learning_rate=0.07,
-    num_epochs=50,
-    warmup_epochs=50,
+    num_epochs=0,
+    warmup_epochs=10,
     early_stop=10,
     lambda_v=0.5,
     deactivate_backbone=True,
-    use_mpe_reconstruction_loss=True,
+    # use_mpe_reconstruction_loss=True,
 )
 
 model.to(device)
@@ -144,78 +144,120 @@ model.start_train(
 
 model.eval()
 
-model.deactivate_uncert_head()
-backbone_valid_acc = model.eval_acc(valid_dl, device)
-print(f"Backbone validation accuracy: {backbone_valid_acc}")
-model.activate_uncert_head()
+embeddings = model.get_embeddings(valid_dl, device)
+
+from spn.structure.Base import Context
+from spn.structure.StatisticalTypes import MetaType
+
+print("embeddings shape: ", embeddings.shape)
+meta_types = [MetaType.REAL for _ in range(embeddings.shape[1])]
+meta_types[0] = MetaType.DISCRETE  # expl. var
+
+ds_context = Context(meta_types=meta_types)
+train_data = embeddings.cpu().detach().numpy()[:1000, :]
+train_data = embeddings[:300, :]
+ds_context.add_domains(train_data)
+
+from spn.algorithms.LearningWrappers import learn_mspn
+
+print("learning mspn")
+mspn = learn_mspn(train_data, ds_context, min_instances_slice=20)
 
 
-valid_acc = model.eval_acc(valid_dl, device)
-print(f"Validation accuracy: {valid_acc}")
+from spn.algorithms.MPE import mpe
 
-valid_ll = model.eval_ll_marg(None, device, valid_dl)
-print(f"Validation marginal log likelihood: {valid_ll}")
+mpe_data = train_data[:5].copy()
+mpe_data[:, 0] = np.nan
+print("train: ", train_data[:5, 0])
+print("mpe: ", mpe(spn, mpe_data)[:5, 0])
 
-smaller_dl = DataLoader(
-    train_smaller,
-    batch_size=512,
-    shuffle=True,
-    num_workers=2,
-    pin_memory=True,
+mpe_data = embeddings[1000:1100, :].cpu().detach().numpy()
+print("actual: ", mpe_data[:5, 0])
+mpe_data[:, 0] = np.nan
+mpe2 = mpe(spn, mpe_data)
+print("mpe: ", mpe2[:5, 0])
+
+print(
+    "difference: ",
+    np.abs(mpe2[:, 0] - embeddings[1000:1100, 0].cpu().detach().numpy()).mean(),
 )
 
-larger_dl = DataLoader(
-    train_larger,
-    batch_size=512,
-    shuffle=True,
-    num_workers=2,
-    pin_memory=True,
-)
 
-smaller_acc = model.eval_acc(smaller_dl, device)
-print(f"smaller accuracy: {smaller_acc}")
+# model.deactivate_uncert_head()
+# backbone_valid_acc = model.eval_acc(valid_dl, device)
+# print(f"Backbone validation accuracy: {backbone_valid_acc}")
+# model.activate_uncert_head()
 
-smaller_ll = model.eval_ll_marg(None, device, smaller_dl)
-print(f"smaller marginal log likelihood: {smaller_ll}")
 
-larger_acc = model.eval_acc(larger_dl, device)
-print(f"larger accuracy: {larger_acc}")
+# valid_acc = model.eval_acc(valid_dl, device)
+# print(f"Validation accuracy: {valid_acc}")
 
-larger_ll = model.eval_ll_marg(None, device, larger_dl)
-print(f"larger marginal log likelihood: {larger_ll}")
+# valid_ll = model.eval_ll_marg(None, device, valid_dl)
+# print(f"Validation marginal log likelihood: {valid_ll}")
 
-ll_expl_valid = model.explain_ll(valid_dl, device)
-total = 0
-for ll in ll_expl_valid:
-    total += ll
-print(f"Explained log likelihood valid: {total}")
+# smaller_dl = DataLoader(
+#     train_smaller,
+#     batch_size=512,
+#     shuffle=True,
+#     num_workers=2,
+#     pin_memory=True,
+# )
 
-ll_expl_smaller = model.explain_ll(smaller_dl, device)
-total = 0
-for ll in ll_expl_smaller:
-    total += ll
-print(f"Explained log likelihood smaller: {total}")
+# larger_dl = DataLoader(
+#     train_larger,
+#     batch_size=512,
+#     shuffle=True,
+#     num_workers=2,
+#     pin_memory=True,
+# )
 
-ll_expl_larger = model.explain_ll(larger_dl, device)
-total = 0
-for ll in ll_expl_larger:
-    total += ll
-print(f"Explained log likelihood larger: {total}")
+# smaller_acc = model.eval_acc(smaller_dl, device)
+# print(f"smaller accuracy: {smaller_acc}")
 
-mpe_valid = model.explain_mpe(valid_dl, device, return_all=True)
-mpe_valid = torch.concat([i.flatten() for i in mpe_valid]).cpu().detach().numpy()
-really_valid = np.array([i[0][0] for i in inside_val])
-differences = np.abs(mpe_valid - really_valid).mean()
-print(f"Mean absolute difference valid: {differences}")
+# smaller_ll = model.eval_ll_marg(None, device, smaller_dl)
+# print(f"smaller marginal log likelihood: {smaller_ll}")
 
-mpe_smaller = model.explain_mpe(smaller_dl, device, return_all=True)
-mpe_smaller = torch.concat([i.flatten() for i in mpe_smaller]).cpu().detach().numpy()
-really_smaller = np.array([i[0][0] for i in train_smaller])
-differences = np.abs(mpe_smaller - really_smaller).mean()
-print(f"Mean absolute difference smaller: {differences}")
+# larger_acc = model.eval_acc(larger_dl, device)
+# print(f"larger accuracy: {larger_acc}")
 
-mpe_larger = model.explain_mpe(larger_dl, device, return_all=True)
-mpe_larger = torch.concat([i.flatten() for i in mpe_larger]).cpu().detach().numpy()
-really_larger = np.array([i[0][0] for i in train_larger])
-differences = np.abs(mpe_larger - really_larger).mean()
-print(f"Mean absolute difference larger: {differences}")
+# larger_ll = model.eval_ll_marg(None, device, larger_dl)
+# print(f"larger marginal log likelihood: {larger_ll}")
+
+# ll_expl_valid = model.explain_ll(valid_dl, device)
+# total = 0
+# for ll in ll_expl_valid:
+#     total += ll
+# print(f"Explained log likelihood valid: {total}")
+
+# ll_expl_smaller = model.explain_ll(smaller_dl, device)
+# total = 0
+# for ll in ll_expl_smaller:
+#     total += ll
+# print(f"Explained log likelihood smaller: {total}")
+
+# ll_expl_larger = model.explain_ll(larger_dl, device)
+# total = 0
+# for ll in ll_expl_larger:
+#     total += ll
+# print(f"Explained log likelihood larger: {total}")
+
+# mpe_valid = model.explain_mpe(valid_dl, device, return_all=True)
+# mpe_valid = torch.concat([i.flatten() for i in mpe_valid]).cpu().detach().numpy()
+# print(f"First 20 MPE valid: {mpe_valid[:20]}")
+# really_valid = np.array([i[0][0] for i in inside_val])
+# differences = np.abs(mpe_valid - really_valid).mean()
+# print(f"Mean absolute difference valid: {differences}")
+
+# mpe_smaller = model.explain_mpe(smaller_dl, device, return_all=True)
+# mpe_smaller = torch.concat([i.flatten() for i in mpe_smaller]).cpu().detach().numpy()
+# print(f"First 20 MPE smaller: {mpe_smaller[:20]}")
+# really_smaller = np.array([i[0][0] for i in train_smaller])
+# differences = np.abs(mpe_smaller - really_smaller).mean()
+# print(f"Mean absolute difference smaller: {differences}")
+
+# mpe_larger = model.explain_mpe(larger_dl, device, return_all=True)
+# mpe_larger = torch.concat([i.flatten() for i in mpe_larger]).cpu().detach().numpy()
+# print(f"First 20 MPE larger: {mpe_larger[:20]}")
+# really_larger = np.array([i[0][0] for i in train_larger])
+# differences = np.abs(mpe_larger - really_larger).mean()
+# print(f"Mean absolute difference larger: {differences}")
