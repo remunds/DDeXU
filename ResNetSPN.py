@@ -338,14 +338,19 @@ class EinetUtils:
 
     def get_embeddings(self, dl, device):
         self.eval()
-        embeddings = []
+        self.activate_uncert_head()  # needs to be active for self.einet_input
+        embedding_size = self.num_hidden + len(self.explaining_vars)
+        index = 0
+        embeddings = torch.zeros(len(dl.dataset), embedding_size).to(device)
         with torch.no_grad():
-            for data, labels in dl:
+            for data in tqdm(dl):
+                if type(data) is tuple or type(data) is list:
+                    data = data[0]
                 data = data.to(device)
-                labels = labels.to(device)
-                pred = self(data)
-                embeddings.append(self.einet_input)
-        return torch.cat(embeddings, dim=0)
+                output = self(data)  # required for einet_input
+                embeddings[index : index + len(output)] = self.einet_input
+                index += len(output)
+        return embeddings
 
     def eval_acc(self, dl, device):
         self.eval()
@@ -733,18 +738,7 @@ class EinetUtils:
         """
         print("computing normalization values")
         self.eval()
-        self.activate_uncert_head()  # needs to be active for self.einet_input
-        embedding_size = self.num_hidden + len(self.explaining_vars)
-        index = 0
-        embeddings = torch.zeros(len(dl.dataset), embedding_size).to(device)
-        with torch.no_grad():
-            for data in tqdm(dl):
-                if type(data) is tuple or type(data) is list:
-                    data = data[0]
-                data = data.to(device)
-                output = self(data)  # required for einet_input
-                embeddings[index : index + len(output)] = self.einet_input
-                index += len(output)
+        embeddings = self.get_embeddings(dl, device)
         self.mean = embeddings.mean(axis=0)
         self.std = embeddings.std(axis=0)
         mean_expl = self.mean[self.explaining_vars]
@@ -1655,7 +1649,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         self.image_shape = image_shape
         self.marginalized_scopes = None
         # self.num_hidden = 1280  # from efficientnet_s
-        self.num_hidden = 50  # from efficientnet_s
+        self.num_hidden = 32  # from efficientnet_s
         self.backbone = self.make_efficientnet()
         self.einet = self.make_einet_output_layer(
             self.num_hidden + len(explaining_vars), num_classes

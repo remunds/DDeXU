@@ -161,7 +161,7 @@ ds_context.add_domains(train_data)
 from spn.algorithms.LearningWrappers import learn_mspn
 
 print("learning mspn")
-mspn = learn_mspn(train_data, ds_context, min_instances_slice=20)
+spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
 
 
 from spn.algorithms.MPE import mpe

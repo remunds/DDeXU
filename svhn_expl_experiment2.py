@@ -154,63 +154,12 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         mlflow.log_params(train_params)
 
         # load data
-        train_data, train_ds, test_ds, test_transformer = load_datasets()
+        train_data, train_ds_orig, test_ds, test_transformer = load_datasets()
 
         levels = train_params["corruption_levels_train"]
         del train_params["corruption_levels_train"]
         if type(levels) != list:
             raise ValueError("corruption_levels must be a list")
-
-        print("loading train corruption data")
-        (
-            train_corrupt_data,
-            train_corrupt_levels,
-        ) = get_corrupted_svhn_train(
-            # yes, test_ds is correct here
-            len(corruptions),
-            corruptions,
-            levels,
-        )
-        print("done loading corrupted data")
-        # use the test_transformer -> no augmentation
-        train_corrupt_data = [
-            test_transformer(img).flatten() for img in train_corrupt_data
-        ]
-        train_corrupt_data = torch.concat(
-            [
-                torch.from_numpy(train_corrupt_levels).to(dtype=torch.int32),
-                torch.stack(train_corrupt_data, dim=0).to(dtype=torch.float32),
-            ],
-            dim=1,
-        )
-        train_corrupt_labels = [
-            l for _ in corruptions for _ in range(len(levels)) for l in train_ds.labels
-        ]
-
-        # We want to train on the corrupted data, s.t. explanations are possible
-        train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
-        print("len train/valid data: ", len(train_corrupt_data))
-
-        train_ds, valid_ds = torch.utils.data.random_split(
-            train_corrupt_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
-        )
-        train_dl = DataLoader(
-            train_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=True,
-            pin_memory=True,
-            num_workers=4,
-        )
-
-        valid_dl = DataLoader(
-            valid_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=True,
-            pin_memory=True,
-            num_workers=1,
-        )
-
-        print("done loading data")
 
         # Create model
         model_name = model_params["model"]
@@ -273,7 +222,113 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         mlflow.set_tag("model", model.__class__.__name__)
         model = model.to(device)
 
+        # idea: train backbone on uncorrupted data
+
+        train_ds, valid_ds = torch.utils.data.random_split(
+            train_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
+        )
+        train_dl = DataLoader(
+            train_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=4,
+        )
+
+        valid_dl = DataLoader(
+            valid_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=1,
+        )
+
+        print("training backbone")
+
+        backup_epochs = train_params["num_epochs"]
+        train_params["num_epochs"] = 0
+
+        # train model
+        lowest_val_loss = model.start_train(
+            train_dl,
+            valid_dl,
+            device,
+            checkpoint_dir=ckpt_dir,
+            trial=trial,
+            **train_params,
+        )
+
+        print("done backbone training")
+
+        model.deactivate_uncert_head()
+        valid_acc_backbone = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc_backbone", valid_acc_backbone)
+
+        model.activate_uncert_head()
+
+        # now train only SPN on corrupted data
+        train_params["num_epochs"] = backup_epochs
+        train_params["warmup_epochs"] = 0
+
+        print("loading train corruption data")
+        (
+            train_corrupt_data,
+            train_corrupt_levels,
+        ) = get_corrupted_svhn_train(
+            # yes, test_ds is correct here
+            len(corruptions),
+            corruptions,
+            levels,
+        )
+        print("done loading corrupted data")
+        # use the test_transformer -> no augmentation
+        train_corrupt_data = [
+            test_transformer(img).flatten() for img in train_corrupt_data
+        ]
+        train_corrupt_data = torch.concat(
+            [
+                torch.from_numpy(train_corrupt_levels).to(dtype=torch.int32),
+                torch.stack(train_corrupt_data, dim=0).to(dtype=torch.float32),
+            ],
+            dim=1,
+        )
+        train_corrupt_labels = [
+            l
+            for _ in corruptions
+            for _ in range(len(levels))
+            for l in train_ds_orig.labels
+        ]
+
+        # We want to train on the corrupted data, s.t. explanations are possible
+        train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
+        print("len train/valid data: ", len(train_corrupt_data))
+
+        train_ds, valid_ds = torch.utils.data.random_split(
+            train_corrupt_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
+        )
+        train_dl = DataLoader(
+            train_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=4,
+        )
+
+        valid_dl = DataLoader(
+            valid_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=True,
+            pin_memory=True,
+            num_workers=1,
+        )
+
+        # compute mean and std of corrupted data, s.t. we can use it to normalize it for SPN training
+        model.compute_normalization_values(train_dl, device)
+
+        print("done loading data")
+
         print("training model")
+
         # train model
         lowest_val_loss = model.start_train(
             train_dl,
@@ -286,20 +341,20 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
 
         # before costly evaluation, make sure that the model is not completely off
         model.deactivate_uncert_head()
-        valid_acc_backbone = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc_backbone", valid_acc_backbone)
+        valid_corrupt_acc_backbone = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_corrupt_acc_backbone", valid_corrupt_acc_backbone)
 
         model.activate_uncert_head()
-        valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc", valid_acc)
+        valid_corrupt_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_corrupt_acc", valid_corrupt_acc)
 
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
-        if "GMM" in model_name:
-            model.fit_gmm(train_dl, device)
-        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
-            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        # if valid_corrupt_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
+        # if "GMM" in model_name:
+        #     model.fit_gmm(train_dl, device)
+        # elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
+        #     mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         print("explaining mpe of train")
         train_expl_mpe = model.explain_mpe(train_dl, device, return_all=True)
