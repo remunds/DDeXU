@@ -7,13 +7,17 @@ from simple_einet.layers.distributions.multidistribution import MultiDistributio
 from simple_einet.layers.distributions.normal import RatNormal
 from two_moons_experiment import start_two_moons_run
 from mnist_calib_experiment import start_mnist_calib_run
-from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
+
+# from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
+
+from mnist_expl_experiment2 import start_mnist_expl_run, mnist_expl_manual_evaluation
 from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
 
 # from svhn_expl_experiment import start_svhn_expl_run
+
 from svhn_expl_experiment2 import start_svhn_expl_run
 
 torch.manual_seed(0)
@@ -214,7 +218,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.05,
         num_epochs=100,
-        early_stop=20,
+        early_stop=5,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -230,6 +234,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["lambda_v"] = 0.01
     elif loss == "hybrid_high":
         train_params["lambda_v"] = 0.9
+    elif loss == "hybrid_mid_high":
+        train_params["lambda_v"] = 0.7
     elif loss == "hybrid_very_high":
         train_params["lambda_v"] = 0.99
     else:
@@ -271,8 +277,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif "ConvResNetDDU" in model:
         lr = 0.02
     elif "EfficientNet" in model:
-        # lr = 0.015
-        lr = 0.07
+        lr = 0.015
+        # lr = 0.05
     else:
         raise ValueError(
             "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
@@ -800,7 +806,7 @@ def run_mnist_expl(dataset, model, loss, pretrained_path):
     model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
     train_params["highest_severity_train"] = 2
     training = "einet_only"
-    run_name = f"{loss}_{training}_{model}_manual"
+    run_name = f"{loss}_{training}_{model}_mspn"
     try:
         val_loss_2 = start_mnist_expl_run(
             run_name,
@@ -969,10 +975,10 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "generative",
+    "generative",
     # "hybrid_low",
     # "hybrid_mid_low",
-    "hybrid",
+    # "hybrid",
     # "hybrid_mid_high",
     # "hybrid_high",
     # "discriminative",
@@ -1052,7 +1058,8 @@ pretrained_backbones = {
         "EfficientNetSPN": "620594555249592855/c992900064d04caeb5e71ae2f17df5f3/artifacts/model",
     },
     "svhn-c-expl": {
-        "EfficientNetSPN": "771929259740930885/e2f1864ae2eb40368ccd421ff71b2a48/artifacts/model",
+        # "EfficientNetSPN": "771929259740930885/e2f1864ae2eb40368ccd421ff71b2a48/artifacts/model",
+        "EfficientNetSPN": "771929259740930885/1ba1455653c24ce8bde7ee2b51873a5b/artifacts/model"
     },
 }
 
@@ -1088,7 +1095,8 @@ trained_models = {
         "EfficientNetSPN": "553153056869580546/4ce6a9e8ce354487992891072555ba94/artifacts/model"
     },
     "svhn-c-expl": {
-        "EfficientNetSPN": "771929259740930885/3e527aa47f82443f9a076425e0c5569c/artifacts/model"
+        # "EfficientNetSPN": "771929259740930885/3e527aa47f82443f9a076425e0c5569c/artifacts/model"
+        "EfficientNetSPN": "771929259740930885/0f6f37dec26441988df9a51563de5f28/artifacts/model"
     },
 }
 
@@ -1132,14 +1140,14 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
-                pretrained_path = pretrained_backbones[d][m]
-                # pretrained_path = trained_models[d][m]
+                # pretrained_path = pretrained_backbones[d][m]
+                pretrained_path = trained_models[d][m]
                 pretrained_path = (
                     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
                 )
                 # pretrained_path = None
                 run_conv(d, l, "seperate", m, pretrained_path=None)
-                # run_conv(d, l, "einet_only", m, pretrained_path)
+                # run_conv(d, l, "eval_only", m, pretrained_path)
             continue
         # pretrained_path = pretrained_backbones[d][m]
         # pretrained_path = trained_models[d][m]

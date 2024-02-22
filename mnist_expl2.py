@@ -104,6 +104,23 @@ valid_dl = DataLoader(
 )
 
 
+smaller_dl = DataLoader(
+    train_smaller,
+    batch_size=512,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True,
+)
+
+larger_dl = DataLoader(
+    train_larger,
+    batch_size=512,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True,
+)
+
+
 from ResNetSPN import EfficientNetSPN
 
 model = EfficientNetSPN(
@@ -124,7 +141,7 @@ train_params = dict(
     learning_rate_warmup=0.05,
     learning_rate=0.07,
     num_epochs=0,
-    warmup_epochs=10,
+    warmup_epochs=100,
     early_stop=10,
     lambda_v=0.5,
     deactivate_backbone=True,
@@ -144,43 +161,114 @@ model.start_train(
 
 model.eval()
 
-embeddings = model.get_embeddings(valid_dl, device)
+embeddings = model.get_embeddings(train_dl, device)
+# embeddings = model.get_embeddings(valid_dl, device)
 
 from spn.structure.Base import Context
 from spn.structure.StatisticalTypes import MetaType
 
 print("embeddings shape: ", embeddings.shape)
 meta_types = [MetaType.REAL for _ in range(embeddings.shape[1])]
-meta_types[0] = MetaType.DISCRETE  # expl. var
+# meta_types[0] = MetaType.DISCRETE  # expl. var
 
 ds_context = Context(meta_types=meta_types)
-train_data = embeddings.cpu().detach().numpy()[:1000, :]
-train_data = embeddings[:300, :]
+# normalization
+embeddings = model.quantify(embeddings)
+
+train_data = embeddings.cpu().detach().numpy()
 ds_context.add_domains(train_data)
 
 from spn.algorithms.LearningWrappers import learn_mspn
 
+# TODO: test normalizing the embeddings
+
 print("learning mspn")
-spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
+spn = learn_mspn(train_data, ds_context, min_instances_slice=200)
 
 
 from spn.algorithms.MPE import mpe
 
-mpe_data = train_data[:5].copy()
-mpe_data[:, 0] = np.nan
-print("train: ", train_data[:5, 0])
-print("mpe: ", mpe(spn, mpe_data)[:5, 0])
-
-mpe_data = embeddings[1000:1100, :].cpu().detach().numpy()
-print("actual: ", mpe_data[:5, 0])
+mpe_data = embeddings.cpu().detach().numpy()
+print("actual: ", model.dequantify(mpe_data)[:5, 0])
 mpe_data[:, 0] = np.nan
 mpe2 = mpe(spn, mpe_data)
-print("mpe: ", mpe2[:5, 0])
+print("mpe: ", model.dequantify(mpe2)[:5, 0])
+
+from spn.algorithms.Inference import log_likelihood
+
+mean_mpe_expl = model.dequantify(mpe2)[:, 0].mean()
+print("train mean mpe expl: ", mean_mpe_expl)
+
+embeddings_val = model.get_embeddings(valid_dl, device)
+mpe_data_val = embeddings_val.cpu().detach().numpy()
+mpe_data_val[:, 0] = np.nan
+mpe2_val = mpe(spn, mpe_data_val)
+mean_mpe_expl = model.dequantify(mpe2_val)[:, 0].mean()
+print("val mean mpe expl: ", mean_mpe_expl)
 
 print(
-    "difference: ",
-    np.abs(mpe2[:, 0] - embeddings[1000:1100, 0].cpu().detach().numpy()).mean(),
+    "difference expl train: ",
+    np.abs(
+        model.dequantify(mpe2)[:, 0]
+        - model.dequantify(embeddings)[:, 0].cpu().detach().numpy()
+    ).mean(),
 )
+print(
+    "difference all train: ",
+    np.abs(
+        model.dequantify(mpe2) - model.dequantify(embeddings).cpu().detach().numpy()
+    ).mean(),
+)
+ll_train = log_likelihood(spn, mpe_data)
+print("ll train: ", ll_train.mean())
+
+embeddings_smaller = model.get_embeddings(smaller_dl, device)
+embeddings_smaller = model.quantify(embeddings_smaller)
+mpe_data = embeddings_smaller.cpu().detach().numpy()
+mpe_data[:, 0] = np.nan
+mpe2 = mpe(spn, mpe_data)
+mean_mpe_expl = model.dequantify(mpe2)[:, 0].mean()
+print("smaller mean mpe expl: ", mean_mpe_expl)
+print(
+    "difference expl smaller: ",
+    np.abs(
+        model.dequantify(mpe2)[:, 0]
+        - model.dequantify(embeddings_smaller)[:, 0].cpu().detach().numpy()
+    ).mean(),
+)
+print(
+    "difference all smaller: ",
+    np.abs(
+        model.dequantify(mpe2)
+        - model.dequantify(embeddings_smaller).cpu().detach().numpy()
+    ).mean(),
+)
+ll_smaller = log_likelihood(spn, mpe_data)
+print("ll smaller: ", ll_smaller.mean())
+
+embeddings_larger = model.get_embeddings(larger_dl, device)
+embeddings_larger = model.quantify(embeddings_larger)
+mpe_data = embeddings_larger.cpu().detach().numpy()
+mpe_data[:, 0] = np.nan
+mpe2 = mpe(spn, mpe_data)
+mean_mpe_expl = model.dequantify(mpe2)[:, 0].mean()
+print("larger mean mpe expl: ", mean_mpe_expl)
+print(
+    "difference expl larger: ",
+    np.abs(
+        model.dequantify(mpe2)[:, 0]
+        - model.dequantify(embeddings_larger)[:, 0].cpu().detach().numpy()
+    ).mean(),
+)
+print(
+    "difference all larger: ",
+    np.abs(
+        model.dequantify(mpe2)
+        - model.dequantify(embeddings_larger).cpu().detach().numpy()
+    ).mean(),
+)
+ll_larger = log_likelihood(spn, mpe_data)
+print("ll larger: ", ll_larger.mean())
 
 
 # model.deactivate_uncert_head()

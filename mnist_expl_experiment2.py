@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Subset
 from torchvision import datasets, transforms
 import numpy as np
 import os
@@ -397,6 +397,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         manipulations = torch.stack([rot, cut, nois], dim=1)
         # add rot, cut, noise in front of each image in train_ds
         train_ds = torch.cat([manipulations, train_ds], dim=1)
+        # train_ds = list(zip(train_ds, mnist_ds.targets))
         train_ds = TensorDataset(train_ds, mnist_ds.targets)
         train_ds, valid_ds = torch.utils.data.random_split(
             train_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
@@ -417,7 +418,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             pin_memory=True,
             num_workers=2,
         )
-        print("train backbone on mnist")
+        print("train backbone on manipulated mnist")
         train_params["num_epochs"] = 0
         model.start_train(
             train_dl,
@@ -435,6 +436,24 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
 
         # MSPN
         model.eval()
+        # TODO remove
+        train_dl = DataLoader(
+            # Subset(train_ds, range(100)),
+            train_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+
+        valid_dl = DataLoader(
+            # Subset(valid_ds, range(100)),
+            valid_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=1,
+        )
         print("getting embeddings")
         embeddings = model.get_embeddings(train_dl, device)
         from spn.structure.Base import Context
@@ -449,7 +468,7 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         meta_types[3] = MetaType.DISCRETE  # expl. var
 
         ds_context = Context(meta_types=meta_types)
-        targets = train_ds.tensors[1].cpu().detach().numpy()
+        targets = np.array([t[1] for t in train_ds])
         train_data = embeddings.cpu().detach().numpy()
         train_data = np.concatenate([targets[:, None], train_data], axis=1)
         ds_context.add_domains(train_data)
@@ -457,7 +476,8 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         from spn.algorithms.LearningWrappers import learn_mspn
 
         print("learning mspn")
-        spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
+        # spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
+        spn = learn_mspn(train_data, ds_context, min_instances_slice=200)
         print("done learning mspn")
 
         from spn.algorithms.MPE import mpe
@@ -466,30 +486,31 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
         print("evaluating acc of train")
         train_class = train_data.copy()
         train_class[:, 0] = np.nan
-        train_mpe = mpe(spn, train_data)
-        class_acc = (train_mpe[:, 0] == train_data[:, 0]).mean()
-        mlflow.log_metric("mspn_train_class_acc", class_acc)
+        train_mpe = mpe(spn, train_class)
+        train_class_acc = (train_mpe[:, 0] == train_data[:, 0]).mean()
+        mlflow.log_metric("mspn_train_class_acc", train_class_acc)
 
         print("evaluating acc of valid")
-        valid_targets = valid_ds.tensors[1].cpu().detach().numpy()
+        valid_targets = np.array([t[1] for t in valid_ds])
         valid_embeddings = model.get_embeddings(valid_dl, device)
         valid_data = valid_embeddings.cpu().detach().numpy()
         valid_data = np.concatenate([valid_targets[:, None], valid_data], axis=1)
         valid_class = valid_data.copy()
         valid_class[:, 0] = np.nan
-        valid_mpe = mpe(spn, valid_data)
-        class_acc = (valid_mpe[:, 0] == valid_data[:, 0]).mean()
-        mlflow.log_metric("mspn_valid_class_acc", class_acc)
+        valid_mpe = mpe(spn, valid_class)
+        val_class_acc = (valid_mpe[:, 0] == valid_data[:, 0]).mean()
+        mlflow.log_metric("mspn_valid_class_acc", val_class_acc)
 
         # evaluate LLs
         print("evaluating ll of train")
-        from spn.gpu.TensorFlow import eval_tf
+        # from spn.gpu.TensorFlow import eval_tf
+        from spn.algorithms.Inference import log_likelihood
 
-        lltf = eval_tf(spn, train_data)
+        lltf = log_likelihood(spn, train_data)
         mlflow.log_metric("mspn_train_ll", lltf.mean())
 
         print("evaluating ll of valid")
-        lltf = eval_tf(spn, valid_data)
+        lltf = log_likelihood(spn, valid_data)
         mlflow.log_metric("mspn_valid_ll", lltf.mean())
 
         # evaluate
@@ -555,23 +576,42 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             )
             test_dl_rot_class = test_dl_rot_data.copy()
             test_dl_rot_class[:, 0] = np.nan
-            test_dl_rot_mpe = mpe(spn, test_dl_rot_data)
+            test_dl_rot_mpe = mpe(spn, test_dl_rot_class)
             acc = (test_dl_rot_mpe[:, 0] == test_dl_rot_data[:, 0]).mean()
 
-            ll_marg = eval_tf(spn, test_dl_rot_data).mean()
+            ll_marg = log_likelihood(spn, test_dl_rot_data).mean()
             test_dl_rot_marg = test_dl_rot_data.copy()
-            test_dl_rot_marg[:, 0] = np.nan # label
-            test_dl_rot_marg[:, 1] = np.nan # expl var 1 (rotation)
-            ll_marg_rot =  eval_tf(spn, test_dl_rot_marg).mean()
-            # TODO:
-            expl_ll = 
+            test_dl_rot_marg[:, 0] = np.nan  # label
+            test_dl_rot_marg[:, 1] = np.nan  # expl var 1 (rotation)
+            ll_marg_rot = log_likelihood(spn, test_dl_rot_marg).mean()
+            test_dl_rot_marg = test_dl_rot_data.copy()
+            test_dl_rot_marg[:, 0] = np.nan  # label
+            test_dl_rot_marg[:, 2] = np.nan  # expl var 2 (cutoff)
+            ll_marg_cut = log_likelihood(spn, test_dl_rot_marg).mean()
+            test_dl_rot_marg = test_dl_rot_data.copy()
+            test_dl_rot_marg[:, 0] = np.nan  # label
+            test_dl_rot_marg[:, 3] = np.nan  # expl var 3 (noise)
+            ll_marg_noise = log_likelihood(spn, test_dl_rot_marg).mean()
+
+            test_dl_rot_marg[:, 1] = np.nan
+            test_dl_rot_marg[:, 2] = np.nan
+            expl_mpe = mpe(spn, test_dl_rot_marg)
+
+            expl_ll = [
+                ll_marg_rot - ll_marg,
+                ll_marg_cut - ll_marg,
+                ll_marg_noise - ll_marg,
+            ]
+            expl_mpe: np.ndarray = expl_mpe[:, 1:4].mean(axis=0)
 
             # acc = model.eval_acc(test_dl_rot, device)
             # ll_marg = model.eval_ll_marg(None, device, test_dl_rot)
-            expl_ll = model.explain_ll(test_dl_rot, device)
-            expl_mpe = model.explain_mpe(test_dl_rot, device)
+            # expl_ll = model.explain_ll(test_dl_rot, device)
+            # expl_mpe = model.explain_mpe(test_dl_rot, device)
+
             # convert to list
             expl_mpe = expl_mpe.tolist()
+
             if "rotation" not in eval_dict:
                 eval_dict["rotation"] = {}
             eval_dict["rotation"][severity] = {
@@ -588,10 +628,46 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 test_ds_cutoff_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
 
-            acc = model.eval_acc(test_dl_cutoff, device)
-            ll_marg = model.eval_ll_marg(None, device, test_dl_cutoff)
-            expl_ll = model.explain_ll(test_dl_cutoff, device)
-            expl_mpe = model.explain_mpe(test_dl_cutoff, device)
+            test_dl_cutoff_targets = test_ds_cutoff_s.tensors[1].cpu().detach().numpy()
+            test_dl_cutoff_embeddings = model.get_embeddings(test_dl_cutoff, device)
+            test_dl_cutoff_data = test_dl_cutoff_embeddings.cpu().detach().numpy()
+            test_dl_cutoff_data = np.concatenate(
+                [test_dl_cutoff_targets[:, None], test_dl_cutoff_data], axis=1
+            )
+            test_dl_cutoff_class = test_dl_cutoff_data.copy()
+            test_dl_cutoff_class[:, 0] = np.nan
+            test_dl_cutoff_mpe = mpe(spn, test_dl_cutoff_class)
+            acc = (test_dl_cutoff_mpe[:, 0] == test_dl_cutoff_data[:, 0]).mean()
+
+            ll_marg = log_likelihood(spn, test_dl_cutoff_data).mean()
+            test_dl_cutoff_marg = test_dl_cutoff_data.copy()
+            test_dl_cutoff_marg[:, 0] = np.nan  # label
+            test_dl_cutoff_marg[:, 1] = np.nan  # expl var 1 (rotation)
+            ll_marg_rot = log_likelihood(spn, test_dl_cutoff_marg).mean()
+            test_dl_cutoff_marg = test_dl_cutoff_data.copy()
+            test_dl_cutoff_marg[:, 0] = np.nan  # label
+            test_dl_cutoff_marg[:, 2] = np.nan  # expl var 2 (cutoff)
+            ll_marg_cut = log_likelihood(spn, test_dl_cutoff_marg).mean()
+            test_dl_cutoff_marg = test_dl_cutoff_data.copy()
+            test_dl_cutoff_marg[:, 0] = np.nan  # label
+            test_dl_cutoff_marg[:, 3] = np.nan  # expl var 3 (noise)
+            ll_marg_noise = log_likelihood(spn, test_dl_cutoff_marg).mean()
+
+            test_dl_cutoff_marg[:, 1] = np.nan
+            test_dl_cutoff_marg[:, 2] = np.nan
+            expl_mpe = mpe(spn, test_dl_cutoff_marg)
+
+            expl_ll = [
+                ll_marg_rot - ll_marg,
+                ll_marg_cut - ll_marg,
+                ll_marg_noise - ll_marg,
+            ]
+            expl_mpe: np.ndarray = expl_mpe[:, 1:4].mean(axis=0)
+
+            # acc = model.eval_acc(test_dl_cutoff, device)
+            # ll_marg = model.eval_ll_marg(None, device, test_dl_cutoff)
+            # expl_ll = model.explain_ll(test_dl_cutoff, device)
+            # expl_mpe = model.explain_mpe(test_dl_cutoff, device)
             expl_mpe = expl_mpe.tolist()
             if "cutoff" not in eval_dict:
                 eval_dict["cutoff"] = {}
@@ -609,10 +685,46 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
                 test_ds_noise_s, batch_size=batch_sizes["resnet"], shuffle=True
             )
 
-            acc = model.eval_acc(test_dl_noise, device)
-            ll_marg = model.eval_ll_marg(None, device, test_dl_noise)
-            expl_ll = model.explain_ll(test_dl_noise, device)
-            expl_mpe = model.explain_mpe(test_dl_noise, device)
+            test_dl_noise_targets = test_ds_noise_s.tensors[1].cpu().detach().numpy()
+            test_dl_noise_embeddings = model.get_embeddings(test_dl_noise, device)
+            test_dl_noise_data = test_dl_noise_embeddings.cpu().detach().numpy()
+            test_dl_noise_data = np.concatenate(
+                [test_dl_noise_targets[:, None], test_dl_noise_data], axis=1
+            )
+            test_dl_noise_class = test_dl_noise_data.copy()
+            test_dl_noise_class[:, 0] = np.nan
+            test_dl_noise_mpe = mpe(spn, test_dl_noise_class)
+            acc = (test_dl_noise_mpe[:, 0] == test_dl_noise_data[:, 0]).mean()
+
+            ll_marg = log_likelihood(spn, test_dl_noise_data).mean()
+            test_dl_noise_marg = test_dl_noise_data.copy()
+            test_dl_noise_marg[:, 0] = np.nan  # label
+            test_dl_noise_marg[:, 1] = np.nan  # expl var 1 (rotation)
+            ll_marg_rot = log_likelihood(spn, test_dl_noise_marg).mean()
+            test_dl_noise_marg = test_dl_noise_data.copy()
+            test_dl_noise_marg[:, 0] = np.nan  # label
+            test_dl_noise_marg[:, 2] = np.nan  # expl var 2 (noise)
+            ll_marg_cut = log_likelihood(spn, test_dl_noise_marg).mean()
+            test_dl_noise_marg = test_dl_noise_data.copy()
+            test_dl_noise_marg[:, 0] = np.nan  # label
+            test_dl_noise_marg[:, 3] = np.nan  # expl var 3 (noise)
+            ll_marg_noise = log_likelihood(spn, test_dl_noise_marg).mean()
+
+            test_dl_noise_marg[:, 1] = np.nan
+            test_dl_noise_marg[:, 2] = np.nan
+            expl_mpe = mpe(spn, test_dl_noise_marg)
+
+            expl_ll = [
+                ll_marg_rot - ll_marg,
+                ll_marg_cut - ll_marg,
+                ll_marg_noise - ll_marg,
+            ]
+            expl_mpe: np.ndarray = expl_mpe[:, 1:4].mean(axis=0)
+
+            # acc = model.eval_acc(test_dl_noise, device)
+            # ll_marg = model.eval_ll_marg(None, device, test_dl_noise)
+            # expl_ll = model.explain_ll(test_dl_noise, device)
+            # expl_mpe = model.explain_mpe(test_dl_noise, device)
             expl_mpe = expl_mpe.tolist()
             if "noise" not in eval_dict:
                 eval_dict["noise"] = {}
@@ -705,4 +817,4 @@ def start_mnist_expl_run(run_name, batch_sizes, model_params, train_params, tria
             create_expl_plot(m, "ll", ll_expl, accs, lls_marg)
             create_expl_plot(m, "mpe", mpe_expl, accs, lls_marg)
 
-        return lowest_val_loss
+        return val_class_acc

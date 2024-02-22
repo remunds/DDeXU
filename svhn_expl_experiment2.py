@@ -10,7 +10,8 @@ from PIL import Image
 dataset_dir = "/data_docker/datasets/"
 svhn_c_path = "svhn_c"
 svhn_c_path_complete = dataset_dir + svhn_c_path
-corruptions = [
+corruptions_train = [
+    "gaussian_noise",
     # "brightness",
     # "contrast",
     # "defocus_blur",
@@ -18,19 +19,52 @@ corruptions = [
     # "fog",
     # "frost",
     # "gaussian_blur", # not available
-    "gaussian_noise",
     # "glass_blur",
-    "impulse_noise",
+    # "impulse_noise",
     # "jpeg_compression",
     # "motion_blur",
     # "pixelate",
     # "saturate", # not available
-    "shot_noise",
+    # "shot_noise",
     # "snow",
     # "spatter", # not available
     # "speckle_noise", # not available
     # "zoom_blur",
 ]
+corruptions_eval = [
+    # "brightness",
+    "gaussian_noise",
+    "contrast",
+    "defocus_blur",
+    # "elastic_transform",
+    # "fog",
+    # "frost",
+    # "gaussian_blur", # not available
+    # "glass_blur",
+    # "impulse_noise",
+    # "jpeg_compression",
+    # "motion_blur",
+    # "pixelate",
+    # "saturate", # not available
+    # "shot_noise",
+    # "snow",
+    # "spatter", # not available
+    # "speckle_noise", # not available
+    # "zoom_blur",
+]
+expl_len = len(corruptions_eval)
+
+# This experiments should verify that the explanations can be used for the different kind of uncertainties
+# MPE-explanations work with examples that are within the data distribution, but ambiguous -> Aleatoric uncertainty
+# LL-explanations work with examples that are outside the data distribution -> Epistemic uncertainty
+# We train the model on uncorrupted together with one corruption-type.
+# For corruption-types it was trained on, the model should have low marginal LL uncertainty (epistemic), but high entropy (aleatoric).
+# The expectation is that the model can explain these with MPE-explanations (given nothing).
+# For corruption-types it was not trained on, the model should have high marginal LL uncertainty (epistemic).
+# The expectation is that the model can explain these with LL-explanations (given the actual values).
+
+# We train on SVHN, and Gaussian Noise of level3 on SVHN
+# We evaluate on Gaussian Noise (aleatoric, MPE) and Defocus Blur, Contrast (epistemic, LL) on level 3.
 
 
 def load_datasets():
@@ -62,7 +96,7 @@ def load_datasets():
     train_data = [train_transformer(img).flatten() for img, _ in train_ds]
     train_data = torch.concat(
         [
-            torch.zeros((train_ds.data.shape[0], len(corruptions))),
+            torch.ones((train_ds.data.shape[0], expl_len)),
             torch.stack(train_data, dim=0),
         ],
         dim=1,
@@ -79,6 +113,19 @@ def load_datasets():
     print("train-samples: ", len(train_ds))
 
     return train_data, train_ds, test_ds, test_transformer
+
+
+def get_gaussian_noise_svhn_train(level: int, train_labels: np.ndarray, transformer):
+    data = np.load(f"{svhn_c_path_complete}/svhn_train_gaussian_noise_l{level}.npy")
+    data = [transformer(img).flatten() for img in data]
+    expl_vars = torch.ones((len(data), expl_len))
+    expl_vars[:, 0] = level
+    # expl vars shape = N, 3
+    # data shape = N, 32*32*3
+    # result shape = N, 3+32*32*3
+    data = torch.concat([expl_vars, torch.stack(data, dim=0)], dim=1)
+    data = list(zip(data, train_labels))
+    return data
 
 
 def get_corrupted_svhn_train(all_corruption_len: int, corruptions: list, levels: list):
@@ -111,25 +158,27 @@ def get_corrupted_svhn_train(all_corruption_len: int, corruptions: list, levels:
     )
 
 
-def get_corrupted_svhn_test(all_corruption_len: int, corruptions: list, levels: list):
+def get_corrupted_svhn_test(all_corruptions: list, corruptions: list, levels: list):
     num_samples = 26032
     # available corrupted dataset: 26032*len(corruptions), 32, 32, 3
     datasets_length = num_samples * len(levels) * len(corruptions)
     test_corrupt_data = np.zeros((datasets_length, 32, 32, 3), dtype=np.uint8)
-    test_corrupt_levels = np.zeros(
-        (datasets_length, all_corruption_len), dtype=np.uint8
+    test_corrupt_levels = np.ones(
+        (datasets_length, len(all_corruptions)), dtype=np.uint8
     )
     test_idx = 0
-    for corr_idx, c in enumerate(corruptions):
+    for corr_idx, c in enumerate(all_corruptions):
+        if c not in corruptions:
+            continue
         # each corrupted dataset has shape of test: 26032, 32, 32, 3
-        for i in range(5):  # iterate over corruption levels
+        for i in range(1, 5 + 1):  # iterate over corruption levels
             if not i in levels:
                 continue
-            data = np.load(f"{svhn_c_path_complete}/svhn_test_{c}_l{i+1}.npy")
+            data = np.load(f"{svhn_c_path_complete}/svhn_test_{c}_l{i}.npy")
 
             new_test_idx = test_idx + num_samples
             test_corrupt_data[test_idx:new_test_idx] = data[:num_samples, ...]
-            test_corrupt_levels[test_idx:new_test_idx, corr_idx] = i + 1
+            test_corrupt_levels[test_idx:new_test_idx, corr_idx] = i
 
             test_idx = new_test_idx
 
@@ -141,6 +190,8 @@ def get_corrupted_svhn_test(all_corruption_len: int, corruptions: list, levels: 
 
 
 def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial):
+    # run_name = run_name + f"_categorical_no_quant"
+    run_name = run_name + f"_mspn"
     with mlflow.start_run(run_name=run_name) as run:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
@@ -156,10 +207,10 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         # load data
         train_data, train_ds_orig, test_ds, test_transformer = load_datasets()
 
-        levels = train_params["corruption_levels_train"]
+        # levels = train_params["corruption_levels_train"]
         del train_params["corruption_levels_train"]
-        if type(levels) != list:
-            raise ValueError("corruption_levels must be a list")
+        # if type(levels) != list:
+        #     raise ValueError("corruption_levels must be a list")
 
         # Create model
         model_name = model_params["model"]
@@ -222,7 +273,22 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         mlflow.set_tag("model", model.__class__.__name__)
         model = model.to(device)
 
-        # idea: train backbone on uncorrupted data
+        gaussian_noise_train = get_gaussian_noise_svhn_train(
+            3, train_ds_orig.labels, test_transformer
+        )  # train on level 3
+        print(
+            "gaussian_noise_train.shape: ",
+            len(gaussian_noise_train),
+            gaussian_noise_train[0][0].shape,
+        )
+        print("train_data.shape: ", len(train_data), train_data[0][0].shape)
+
+        # take only half to reduce training time
+        train_data = (
+            train_data[: len(train_data) // 2]
+            + gaussian_noise_train[len(train_data) // 2 :]
+        )
+        print("combined train_data.shape: ", len(train_data), train_data[0][0].shape)
 
         train_ds, valid_ds = torch.utils.data.random_split(
             train_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
@@ -266,257 +332,257 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
 
         model.activate_uncert_head()
 
-        # now train only SPN on corrupted data
+        # now train SPN
         train_params["num_epochs"] = backup_epochs
         train_params["warmup_epochs"] = 0
-
-        print("loading train corruption data")
-        (
-            train_corrupt_data,
-            train_corrupt_levels,
-        ) = get_corrupted_svhn_train(
-            # yes, test_ds is correct here
-            len(corruptions),
-            corruptions,
-            levels,
-        )
-        print("done loading corrupted data")
-        # use the test_transformer -> no augmentation
-        train_corrupt_data = [
-            test_transformer(img).flatten() for img in train_corrupt_data
-        ]
-        train_corrupt_data = torch.concat(
-            [
-                torch.from_numpy(train_corrupt_levels).to(dtype=torch.int32),
-                torch.stack(train_corrupt_data, dim=0).to(dtype=torch.float32),
-            ],
-            dim=1,
-        )
-        train_corrupt_labels = [
-            l
-            for _ in corruptions
-            for _ in range(len(levels))
-            for l in train_ds_orig.labels
-        ]
-
-        # We want to train on the corrupted data, s.t. explanations are possible
-        train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
-        print("len train/valid data: ", len(train_corrupt_data))
-
-        train_ds, valid_ds = torch.utils.data.random_split(
-            train_corrupt_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
-        )
-        train_dl = DataLoader(
-            train_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=True,
-            pin_memory=True,
-            num_workers=4,
-        )
-
-        valid_dl = DataLoader(
-            valid_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=True,
-            pin_memory=True,
-            num_workers=1,
-        )
 
         # compute mean and std of corrupted data, s.t. we can use it to normalize it for SPN training
         model.compute_normalization_values(train_dl, device)
 
-        print("done loading data")
+        # print("training SPN")
+        # # train model
+        # lowest_val_loss = model.start_train(
+        #     train_dl,
+        #     valid_dl,
+        #     device,
+        #     checkpoint_dir=ckpt_dir,
+        #     trial=trial,
+        #     **train_params,
+        # )
 
-        print("training model")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        # train model
-        lowest_val_loss = model.start_train(
-            train_dl,
-            valid_dl,
-            device,
-            checkpoint_dir=ckpt_dir,
-            trial=trial,
-            **train_params,
-        )
+        print("getting embeddings")
+        # embeddings = model.get_embeddings(train_dl, device)
+        embeddings = model.get_embeddings(valid_dl, device)
+        from spn.structure.Base import Context
+        from spn.structure.StatisticalTypes import MetaType
 
-        # before costly evaluation, make sure that the model is not completely off
-        model.deactivate_uncert_head()
-        valid_corrupt_acc_backbone = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_corrupt_acc_backbone", valid_corrupt_acc_backbone)
+        print("embeddings shape: ", embeddings.shape)
+        meta_types = [MetaType.REAL for _ in range(embeddings.shape[1])]
+        meta_types.append(MetaType.REAL)
+        meta_types[0] = MetaType.DISCRETE  # class
+        meta_types[1] = MetaType.DISCRETE  # expl. var gaussian noise
+        meta_types[2] = MetaType.DISCRETE  # expl. var defocus blur
+        meta_types[3] = MetaType.DISCRETE  # expl. var contrast
 
+        ds_context = Context(meta_types=meta_types)
+        # targets = np.array([t[1] for t in train_ds])
+        targets = np.array([t[1] for t in valid_ds])
+        train_data = embeddings.cpu().detach().numpy()
+        # add target on pos1
+        train_data = np.concatenate([targets[:, None], train_data], axis=1)
+        ds_context.add_domains(train_data)
+
+        from spn.algorithms.LearningWrappers import learn_mspn
+
+        print("learning mspn")
+        # spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
+        spn = learn_mspn(train_data, ds_context, min_instances_slice=500)
+        # Note: changed stuff in LearningWrapper (assert for min/max domain)
+        print("done learning mspn")
+
+        print("start evaluation")
         model.activate_uncert_head()
-        valid_corrupt_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_corrupt_acc", valid_corrupt_acc)
+        from mspn import MSPN_utils
 
-        # if valid_corrupt_acc < 0.5:
-        #     # let optuna know that this is a bad trial
-        #     return lowest_val_loss
-        # if "GMM" in model_name:
-        #     model.fit_gmm(train_dl, device)
-        # elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
-        #     mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        mspn_util = MSPN_utils(model, spn, [1, 2, 3])
 
-        print("explaining mpe of train")
-        train_expl_mpe = model.explain_mpe(train_dl, device, return_all=True)
-        train_expl_mpe = torch.cat(train_expl_mpe, dim=0)
-        print("mean train_expl_mpe: ", torch.mean(train_expl_mpe, axis=0))
-        print("std train_expl_mpe: ", torch.std(train_expl_mpe, axis=0))
-        print("lowest train_expl_mpe: ", torch.min(train_expl_mpe, axis=0))
-        print("highest train_expl_mpe: ", torch.max(train_expl_mpe, axis=0))
+        valid_data = mspn_util.create_data(valid_ds, valid_dl, device)
+        valid_corrupt_acc = mspn_util.eval_acc(valid_data)
+        mlflow.log_metric("valid_acc", valid_corrupt_acc)
 
         # Evaluate
         model.eval()
+        # train_ll_marg = model.eval_ll_marg(
+        #     None,
+        #     device,
+        #     train_dl,
+        # )
+        train_data = mspn_util.create_data(train_ds, train_dl, device)
+        train_ll_marg = mspn_util.eval_ll_marg(train_data)
+        mlflow.log_metric("train_ll_marg", train_ll_marg)
 
-        valid_ll_marg = model.eval_ll_marg(
-            None,
-            device,
-            valid_dl,
-        )
+        # valid_ll_marg = model.eval_ll_marg(
+        #     None,
+        #     device,
+        #     valid_dl,
+        # )
+        valid_ll_marg = mspn_util.eval_ll_marg(valid_data)
         mlflow.log_metric("valid_ll_marg", valid_ll_marg)
 
-        # test with all corruption-levels
-        test_levels = [0, 1, 2, 3, 4]
-        print("loading test corrupted data")
-        (
-            test_corrupt_data,
-            test_corrupt_levels,
-        ) = get_corrupted_svhn_test(len(corruptions), corruptions, test_levels)
-        print("done loading test corrupted data")
-
-        test_corrupt_data = [
-            test_transformer(img).flatten() for img in test_corrupt_data
-        ]
-        test_corrupt_data = torch.concat(
+        # eval uncorrupted
+        # expect high marginal LL, low entropy
+        # expect MPE explanations all to be 1
+        # expect LL explanations to be low
+        print("eval uncorrupted")
+        test_data = [test_transformer(img).flatten() for img, _ in test_ds]
+        test_data = torch.concat(
             [
-                torch.from_numpy(test_corrupt_levels).to(dtype=torch.int32),
-                torch.stack(test_corrupt_data, dim=0).to(dtype=torch.float32),
+                torch.ones((test_ds.data.shape[0], expl_len)),
+                torch.stack(test_data, dim=0),
             ],
             dim=1,
         )
-        # create labels for corrupted data
-        test_corrupt_labels = [
-            l
-            for _ in corruptions
-            for _ in range(len(test_levels))
-            for l in test_ds.labels
-        ]
-        test_corrupt_labels = torch.tensor(test_corrupt_labels, dtype=torch.int64)
-        print("test_corrupt_data.shape: ", test_corrupt_data.shape)
-        print("test_corrupt_labels: ", test_corrupt_labels.shape)
-        # calibration evaluation
-        dl = DataLoader(
-            list(zip(test_corrupt_data, test_corrupt_labels)),
+        test_data = list(zip(test_data, test_ds.labels))
+        test_dl = DataLoader(
+            test_data,
             batch_size=batch_sizes["resnet"],
             shuffle=False,
             pin_memory=True,
+            num_workers=2,
         )
-        print("eval calibration")
-        model.eval_calibration(None, device, "corrupt_test", dl)
-
-        test_expl_mpe = model.explain_mpe(dl, device, return_all=True)
-        test_expl_mpe = torch.cat(test_expl_mpe, dim=0)
-        print("mean test_expl_mpe: ", torch.mean(test_expl_mpe, axis=0))
-        print("std test_expl_mpe: ", torch.std(test_expl_mpe, axis=0))
-        print("lowest test_expl_mpe: ", torch.min(test_expl_mpe, axis=0))
-        print("highest test_expl_mpe: ", torch.max(test_expl_mpe, axis=0))
-
-        # test_corrupt_levels.shape = [num_data_points, num_corruptions]
-        from tqdm import tqdm
-
-        eval_dict = {}
-
-        for corr_idx, corruption in tqdm(enumerate(corruptions)):
-            eval_dict[corruption] = {}
-            for corr_level in test_levels:
-                eval_dict[corruption][corr_level] = {}
-                data_idxs = test_corrupt_levels[:, corr_idx] == corr_level + 1
-                data = test_corrupt_data[data_idxs]
-                labels = test_corrupt_labels[data_idxs]
-
-                ds = list(zip(data, labels))
-                dl = DataLoader(
-                    ds,
-                    batch_size=batch_sizes["resnet"],
-                    shuffle=False,
-                    pin_memory=False,
-                    # pin_memory=True,
-                    # num_workers=1,
-                )
-                acc = model.eval_acc(dl, device)
-                eval_dict[corruption][corr_level]["acc"] = acc
-                ll_marg = model.eval_ll_marg(None, device, dl)
-                eval_dict[corruption][corr_level]["ll_marg"] = ll_marg
-                expl_ll = model.explain_ll(dl, device)
-                # eval_dict[corruption][corr_level]["expl_ll"] = expl_ll[corr_idx]
-                eval_dict[corruption][corr_level][
-                    "expl_ll"
-                ] = expl_ll  # len: [1, num_expl_vars]
-                expl_mpe = model.explain_mpe(dl, device)
-                eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe.tolist()
-        mlflow.log_dict(eval_dict, "eval_dict")
-
-        overall_acc = np.mean(
-            [eval_dict[c][l]["acc"] for c in eval_dict for l in eval_dict[c]]
+        # test_ll_marg = model.eval_ll_marg(None, device, test_dl)
+        test_data = mspn_util.create_data(test_ds, test_dl, device)
+        test_ll_marg = mspn_util.eval_ll_marg(test_data)
+        mlflow.log_metric("test_ll_marg", test_ll_marg)
+        # test_mpe = model.explain_mpe(test_dl, device, return_all=False)
+        test_mpe = mspn_util.explain_mpe(test_data, return_all=False)
+        test_mpe = dict(
+            zip(["test_mpe_" + c for c in corruptions_eval], test_mpe.tolist())
         )
-        mlflow.log_metric("manip_acc", overall_acc)
-        overall_ll_marg = np.mean(
-            [eval_dict[c][l]["ll_marg"] for c in eval_dict for l in eval_dict[c]]
+        mlflow.log_metrics(test_mpe)
+        # test_expl_ll = model.explain_ll(test_dl, device, return_all=False)
+        test_expl_ll = mspn_util.explain_ll(test_data)
+        test_expl_ll = dict(
+            zip(["test_expl_ll_" + c for c in corruptions_eval], test_expl_ll)
         )
-        mlflow.log_metric("manip_ll_marg", overall_ll_marg)
+        mlflow.log_metrics(test_expl_ll)
 
-        import matplotlib.pyplot as plt
+        # eval gaussian corrupted
+        # expect high marginal LL, high entropy
+        # expect MPE explanations all to be 1 except for the gaussian variable, which should be 3
+        # expect LL explanations to be low
+        gauss_corruption = ["gaussian_noise"]
+        level = [3]
+        print("eval gaussian corrupted")
+        (
+            test_corrupt_data_gaussian,
+            test_corrupt_levels_gaussian,
+        ) = get_corrupted_svhn_test(corruptions_eval, gauss_corruption, level)
+        test_corrupt_data_gaussian = [
+            test_transformer(img).flatten() for img in test_corrupt_data_gaussian
+        ]
+        test_corrupt_data_gaussian = torch.concat(
+            [
+                torch.from_numpy(test_corrupt_levels_gaussian).to(dtype=torch.int32),
+                torch.stack(test_corrupt_data_gaussian, dim=0).to(dtype=torch.float32),
+            ],
+            dim=1,
+        )
+        print("gaussian corrupt shape: ", test_corrupt_data_gaussian.shape)
+        gauss_dl = DataLoader(
+            list(zip(test_corrupt_data_gaussian, test_ds.labels)),
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+        gauss_data = mspn_util.create_data(test_ds, gauss_dl, device)
+        # gauss_ll_marg = model.eval_ll_marg(None, device, gauss_dl)
+        gauss_ll_marg = mspn_util.eval_ll_marg(gauss_data)
+        mlflow.log_metric("gauss_ll_marg", gauss_ll_marg)
+        # gauss_mpe = model.explain_mpe(gauss_dl, device, return_all=False)
+        gauss_mpe = mspn_util.explain_mpe(gauss_data, return_all=False)
+        gauss_mpe = dict(
+            zip(["gauss_mpe_" + c for c in corruptions_eval], gauss_mpe.tolist())
+        )
+        mlflow.log_metrics(gauss_mpe)
+        # gauss_expl_ll = model.explain_ll(gauss_dl, device, return_all=False)
+        gauss_expl_ll = mspn_util.explain_ll(gauss_data)
+        gauss_expl_ll = dict(
+            zip(["gauss_expl_ll_" + c for c in corruptions_eval], gauss_expl_ll)
+        )
+        mlflow.log_metrics(gauss_expl_ll)
 
-        plt.set_cmap("tab20")
-        cmap = plt.get_cmap("tab20")
-        colors = cmap(np.linspace(0, 1, len(corruptions)))
+        # eval defocus blur corrupted
+        # expect low marginal LL, any (probably high) entropy
+        # expect MPE explanations all to be close to 1 (not meaningful)
+        # expect LL explanation to be high for the defocus blur variable, low for the others
+        defocus_corruption = ["defocus_blur"]
+        level = [3]
+        print("eval defocus corrupted")
+        (
+            test_corrupt_data_defocus,
+            test_corrupt_levels_defocus,
+        ) = get_corrupted_svhn_test(corruptions_eval, defocus_corruption, level)
+        test_corrupt_data_defocus = [
+            test_transformer(img).flatten() for img in test_corrupt_data_defocus
+        ]
+        test_corrupt_data_defocus = torch.concat(
+            [
+                torch.from_numpy(test_corrupt_levels_defocus).to(dtype=torch.int32),
+                torch.stack(test_corrupt_data_defocus, dim=0).to(dtype=torch.float32),
+            ],
+            dim=1,
+        )
+        print("defocus corrupt shape: ", test_corrupt_data_defocus.shape)
+        defocus_dl = DataLoader(
+            list(zip(test_corrupt_data_defocus, test_ds.labels)),
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+        defocus_data = mspn_util.create_data(test_ds, defocus_dl, device)
+        # defocus_ll_marg = model.eval_ll_marg(None, device, defocus_dl)
+        defocus_ll_marg = mspn_util.eval_ll_marg(defocus_data)
+        mlflow.log_metric("defocus_ll_marg", defocus_ll_marg)
+        # defocus_mpe = model.explain_mpe(defocus_dl, device, return_all=False)
+        defocus_mpe = mspn_util.explain_mpe(defocus_data, return_all=False)
+        defocus_mpe = dict(
+            zip(["defocus_mpe_" + c for c in corruptions_eval], defocus_mpe.tolist())
+        )
+        mlflow.log_metrics(defocus_mpe)
+        # defocus_expl_ll = model.explain_ll(defocus_dl, device, return_all=False)
+        defocus_expl_ll = mspn_util.explain_ll(defocus_data)
+        defocus_expl_ll = dict(
+            zip(["defocus_expl_ll_" + c for c in corruptions_eval], defocus_expl_ll)
+        )
+        mlflow.log_metrics(defocus_expl_ll)
 
-        def create_plot(accs, expls, corruption, mode):
-            fig, ax = plt.subplots()
-            ax.set_xlabel("severity")
-            ax.set_xticks(np.array(list(range(5))) + 1)
-
-            ax.plot(accs, label="accuracy", color="red")
-            ax.set_ylabel("accuracy", color="red")
-            ax.tick_params(axis="y", labelcolor="red")
-            ax.set_ylim([0, 1])
-
-            ax2 = ax.twinx()
-            for i in range(expls.shape[1]):
-                ax2.plot(expls[:, i], label=corruptions[i], color=colors[i])
-            ax2.tick_params(axis="y")
-            ax2.set_ylabel(f"{mode} explanations")
-            if mode == "ll":
-                ax2.set_ylim([0, 100])
-            else:
-                ax2.set_ylim([0, 4])
-
-            fig.legend()
-            fig.tight_layout()
-            mlflow.log_figure(fig, f"{corruption}_expl_{mode}.png")
-            plt.close()
-
-        # plot showing that with each corruption increase, acc and ll decrease
-        # x-axis: corruption level, y-axis: acc/ll
-        # as in calib_experiment
-        for corruption in eval_dict:
-            accs = [eval_dict[corruption][l]["acc"] for l in eval_dict[corruption]]
-            # lls = [eval_dict[corruption][l]["ll"] for l in eval_dict[corruption]]
-            # get corruption index
-            corr_idx = corruptions.index(corruption)
-            expl_ll = [
-                eval_dict[corruption][l]["expl_ll"] for l in eval_dict[corruption]
-            ]  # list of list, shape: [num_levels, num_expl_vars]
-            expl_ll = torch.tensor(expl_ll)
-            expl_mpe = [
-                eval_dict[corruption][l]["expl_mpe"] for l in eval_dict[corruption]
-            ]
-            expl_mpe = torch.tensor(expl_mpe)
-
-            create_plot(accs, expl_ll, corruption, "ll")
-            create_plot(accs, expl_mpe, corruption, "mpe")
-            # expl_ll.shape = [num_levels, num_expl_vars]
-
-        # plot showing corruption levels on x-axis and expl-ll/mpe of
-        # current corruption on y-axis
-
-        return lowest_val_loss
+        # eval contrast corrupted
+        # expect low marginal LL, any (probably high) entropy
+        # expect MPE explanations all to be close to 1 (not meaningful)
+        # expect LL explanation to be high for the contrast variable, low for the others
+        contrast_corruption = ["contrast"]
+        level = [3]
+        print("eval contrast corrupted")
+        (
+            test_corrupt_data_contrast,
+            test_corrupt_levels_contrast,
+        ) = get_corrupted_svhn_test(corruptions_eval, contrast_corruption, level)
+        test_corrupt_data_contrast = [
+            test_transformer(img).flatten() for img in test_corrupt_data_contrast
+        ]
+        test_corrupt_data_contrast = torch.concat(
+            [
+                torch.from_numpy(test_corrupt_levels_contrast).to(dtype=torch.int32),
+                torch.stack(test_corrupt_data_contrast, dim=0).to(dtype=torch.float32),
+            ],
+            dim=1,
+        )
+        print("contrast corrupt shape: ", test_corrupt_data_contrast.shape)
+        contrast_dl = DataLoader(
+            list(zip(test_corrupt_data_contrast, test_ds.labels)),
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+        contrast_data = mspn_util.create_data(test_ds, contrast_dl, device)
+        # contrast_ll_marg = model.eval_ll_marg(None, device, contrast_dl)
+        contrast_ll_marg = mspn_util.eval_ll_marg(contrast_data)
+        mlflow.log_metric("contrast_ll_marg", contrast_ll_marg)
+        # contrast_mpe = model.explain_mpe(contrast_dl, device, return_all=False)
+        contrast_mpe = mspn_util.explain_mpe(contrast_data, return_all=False)
+        contrast_mpe = dict(
+            zip(["contrast_mpe_" + c for c in corruptions_eval], contrast_mpe.tolist())
+        )
+        mlflow.log_metrics(contrast_mpe)
+        # contrast_expl_ll = model.explain_ll(contrast_dl, device, return_all=False)
+        contrast_expl_ll = mspn_util.explain_ll(contrast_data)
+        contrast_expl_ll = dict(
+            zip(["contrast_expl_ll_" + c for c in corruptions_eval], contrast_expl_ll)
+        )
+        mlflow.log_metrics(contrast_expl_ll)

@@ -190,8 +190,12 @@ class EinetUtils:
                 # This is the dimension of input to SPN, so hidden + explaining vars
                 # TODO: outside of loop
                 divisor = self.hidden.shape[1] + len(self.explaining_vars)
-                ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                ce_loss += ce_loss_v.item()
+                if lambda_v == 0:
+                    ce_loss_v = 0
+                else:
+                    ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                    ce_loss_v = ce_loss_v.item()
+                ce_loss += ce_loss_v
                 nll_loss_v = (1 - lambda_v) * -(output.mean() / divisor)
                 nll_loss += nll_loss_v.item()
 
@@ -230,8 +234,15 @@ class EinetUtils:
                     data, target = data.to(device), target.to(device)
                     output = self(data)
                     divisor = self.hidden.shape[1] + len(self.explaining_vars)
-                    ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                    val_ce_loss += ce_loss_v.item()
+                    if lambda_v == 0:
+                        ce_loss_v = 0
+                    else:
+                        ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(
+                            output, target
+                        )
+                        ce_loss_v = ce_loss_v.item()
+                    # ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                    val_ce_loss += ce_loss_v
                     nll_loss_v = (1 - lambda_v) * -(output.mean() / divisor)
                     val_nll_loss += nll_loss_v.item()
                     loss_v = ce_loss_v + nll_loss_v
@@ -343,7 +354,7 @@ class EinetUtils:
         index = 0
         embeddings = torch.zeros(len(dl.dataset), embedding_size).to(device)
         with torch.no_grad():
-            for data in tqdm(dl):
+            for data in dl:
                 if type(data) is tuple or type(data) is list:
                     data = data[0]
                 data = data.to(device)
@@ -719,14 +730,13 @@ class EinetUtils:
             hidden = self.forward_hidden(data)
             # Normalize hidden
             hidden = torch.cat([exp_vars, hidden], dim=1)
-            hidden = self.quantify(hidden)
+            # hidden = self.quantify(hidden)
             hidden[:, self.explaining_vars] = 0.0
             mpe: torch.Tensor = self.einet.mpe(
                 evidence=hidden, marginalized_scopes=self.explaining_vars
             )
-            mpe = self.dequantify(mpe)
+            # mpe = self.dequantify(mpe)
             expl_var_mpes.append(mpe[:, self.explaining_vars])
-
         if return_all:
             return expl_var_mpes
         return torch.cat(expl_var_mpes, dim=0).mean(dim=0)
@@ -755,7 +765,11 @@ class EinetUtils:
             self.mean is not None and self.std is not None
         ), "call compute_normalization_values first"
         self.std[self.std == 0] = 0.000001
+        explanations = x[:, self.explaining_vars]
         x_norm = (x - self.mean) / self.std
+        x_norm[:, self.explaining_vars] = (
+            explanations  # Do not apply normalization to explaining vars
+        )
         return x_norm
 
     def dequantify(self, x: torch.Tensor) -> torch.Tensor:
@@ -766,7 +780,14 @@ class EinetUtils:
         assert (
             self.mean is not None and self.std is not None
         ), "call compute_normalization_values first"
-        x_dequant = x * self.std + self.mean
+        explanations = x[:, self.explaining_vars]
+        if type(x) is np.ndarray:
+            x_dequant = x * self.std.cpu().numpy() + self.mean.cpu().numpy()
+        else:
+            x_dequant = x * self.std + self.mean
+        x_dequant[:, self.explaining_vars] = (
+            explanations  # Do not apply dequantization to explaining vars
+        )
         return x_dequant
 
 
@@ -855,6 +876,8 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
         self.einet_dropout = einet_dropout
         super().__init__(**kwargs)
         self.einet = self.make_einet_output_layer()
+        self.mean = None
+        self.std = None
 
     def activate_uncert_head(self, deactivate_backbone=True):
         """
@@ -1662,11 +1685,11 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    # layer = spectral_norm_torch(layer)
-                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    # layer = spectral_norm_torch(layer)
-                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):
                     replace_layers_rec(child)
@@ -1712,34 +1735,34 @@ class EfficientNetSPN(nn.Module, EinetUtils):
 
     def make_einet_output_layer(self, in_features, out_features):
         """Uses einet as the output layer."""
-        # if len(self.explaining_vars) > 0:
-        #     leaf_type = MultiDistributionLayer
-        #     scopes_a = torch.arange(0, len(self.explaining_vars))
-        #     scopes_b = torch.arange(len(self.explaining_vars), in_features)
-        #     leaf_kwargs = {
-        #         "scopes_to_dist": [
-        #             (
-        #                 scopes_a,
-        #                 RatNormal,
-        #                 {},
-        #                 # {
-        #                 #     "min_sigma": 0.00001,
-        #                 #     "max_sigma": 10.0,
-        #                 # },
-        #             ),
-        #             # (scopes_a, Categorical, {"num_bins": 6}),
-        #             (
-        #                 scopes_b,
-        #                 RatNormal,
-        #                 {"min_sigma": 0.00001, "max_sigma": 10.0},
-        #             ),  # Tuple of (scopes, class, kwargs)
-        #         ]
-        #     }
-        # else:
-        #     leaf_type = RatNormal
-        #     leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
-        leaf_type = RatNormal
-        leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 50.0}
+        if len(self.explaining_vars) > 0:
+            leaf_type = MultiDistributionLayer
+            scopes_a = torch.arange(0, len(self.explaining_vars))
+            scopes_b = torch.arange(len(self.explaining_vars), in_features)
+            leaf_kwargs = {
+                "scopes_to_dist": [
+                    (
+                        scopes_a,
+                        Categorical,
+                        {"num_bins": 4},
+                        # {
+                        #     "min_sigma": 0.00001,
+                        #     "max_sigma": 10.0,
+                        # },
+                    ),
+                    # (scopes_a, Categorical, {"num_bins": 6}),
+                    (
+                        scopes_b,
+                        RatNormal,
+                        {"min_sigma": 0.00001, "max_sigma": 10.0},
+                    ),  # Tuple of (scopes, class, kwargs)
+                ]
+            }
+        else:
+            leaf_type = RatNormal
+            leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 10.0}
+        # leaf_type = RatNormal
+        # leaf_kwargs = {"min_sigma": 0.00001, "max_sigma": 50.0}
 
         mlflow.log_param("leaf_type", leaf_type)
         mlflow.log_param("leaf_kwargs", leaf_kwargs)
@@ -1751,7 +1774,8 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             num_sums=self.einet_num_sums,
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
-            num_classes=out_features,
+            # num_classes=out_features,
+            num_classes=1,  # TODO: remove
             # leaf_type=self.einet_leaf_type,
             leaf_type=leaf_type,
             leaf_kwargs=leaf_kwargs,
