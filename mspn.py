@@ -43,7 +43,7 @@ class MSPN_utils:
         Returns MPE(x) for each data point x
         """
         mpe_data = data.copy()
-        mpe_data[:, 0] = np.nan  # class
+        # mpe_data[:, 0] = np.nan  # class
         mpe_data[:, self.explaining_vars] = np.nan
 
         mpe_expl = mpe(self.spn, mpe_data)
@@ -56,7 +56,7 @@ class MSPN_utils:
     def create_data(self, ds, dl, device):
         embeddings = self.backbone.get_embeddings(dl, device)
         data = embeddings.cpu().detach().numpy()
-        targets = np.array([t[1] for t in ds])
-        # Put targets in first column
-        data = np.concatenate([targets[:, None], data], axis=1)
+        # targets = np.array([t[1] for t in ds])
+        # # Put targets in first column
+        # data = np.concatenate([targets[:, None], data], axis=1)
         return data

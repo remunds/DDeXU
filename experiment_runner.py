@@ -18,7 +18,10 @@ from svhn_calib_experiment import start_svhn_calib_run
 
 # from svhn_expl_experiment import start_svhn_expl_run
 
-from svhn_expl_experiment2 import start_svhn_expl_run
+# from svhn_expl_experiment2 import start_svhn_expl_run
+# from svhn_expl_experiment_einsum import start_svhn_expl_run
+# from svhn_expl_experiment_custom import start_svhn_expl_run
+from svhn_expl_experiment_pres import start_svhn_expl_run
 
 torch.manual_seed(0)
 # Set our tracking server uri for logging
@@ -216,9 +219,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         )
     train_params = dict(
         pretrained_path=pretrained_path,
-        learning_rate_warmup=0.05,
+        learning_rate_warmup=0.04,
         num_epochs=100,
-        early_stop=5,
+        early_stop=20,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -231,7 +234,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif loss == "hybrid_mid_low":
         train_params["lambda_v"] = 0.3
     elif loss == "hybrid_very_low":
-        train_params["lambda_v"] = 0.01
+        train_params["lambda_v"]
     elif loss == "hybrid_high":
         train_params["lambda_v"] = 0.9
     elif loss == "hybrid_mid_high":
@@ -248,9 +251,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 10
     elif training == "seperate":
-        train_params["warmup_epochs"] = 100
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 100
+        train_params["num_epochs"] = 400
     elif training == "warmup":
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
@@ -261,7 +264,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 20
+        train_params["num_epochs"] = 100
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -363,6 +366,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.end_run()
     elif "svhn-c-expl" in dataset:
         # model_params["explaining_vars"] = list(range(15))
+        # model_params["explaining_vars"] = list(range(3))
         model_params["explaining_vars"] = list(range(3))
         # train_params["corruption_levels_train"] = [0, 1]
         train_params["corruption_levels_train"] = [0, 1, 2]
@@ -975,9 +979,9 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "generative",
+    # "generative",
     # "hybrid_low",
-    # "hybrid_mid_low",
+    "hybrid_mid_low",
     # "hybrid",
     # "hybrid_mid_high",
     # "hybrid_high",
@@ -1059,7 +1063,7 @@ pretrained_backbones = {
     },
     "svhn-c-expl": {
         # "EfficientNetSPN": "771929259740930885/e2f1864ae2eb40368ccd421ff71b2a48/artifacts/model",
-        "EfficientNetSPN": "771929259740930885/1ba1455653c24ce8bde7ee2b51873a5b/artifacts/model"
+        "EfficientNetSPN": "771929259740930885/140b0407b9d8420d88d196f0425e8361/artifacts/model"
     },
 }
 
@@ -1096,7 +1100,7 @@ trained_models = {
     },
     "svhn-c-expl": {
         # "EfficientNetSPN": "771929259740930885/3e527aa47f82443f9a076425e0c5569c/artifacts/model"
-        "EfficientNetSPN": "771929259740930885/0f6f37dec26441988df9a51563de5f28/artifacts/model"
+        "EfficientNetSPN": "771929259740930885/77863a62033042b999743a3434edc708/artifacts/model"
     },
 }
 
@@ -1147,7 +1151,7 @@ for d in dataset:
                 )
                 # pretrained_path = None
                 run_conv(d, l, "seperate", m, pretrained_path=None)
-                # run_conv(d, l, "eval_only", m, pretrained_path)
+                # run_conv(d, l, "einet_only", m, pretrained_path)
             continue
         # pretrained_path = pretrained_backbones[d][m]
         # pretrained_path = trained_models[d][m]

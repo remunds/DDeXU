@@ -730,12 +730,12 @@ class EinetUtils:
             hidden = self.forward_hidden(data)
             # Normalize hidden
             hidden = torch.cat([exp_vars, hidden], dim=1)
-            # hidden = self.quantify(hidden)
+            hidden = self.quantify(hidden)
             hidden[:, self.explaining_vars] = 0.0
             mpe: torch.Tensor = self.einet.mpe(
                 evidence=hidden, marginalized_scopes=self.explaining_vars
             )
-            # mpe = self.dequantify(mpe)
+            mpe = self.dequantify(mpe)
             expl_var_mpes.append(mpe[:, self.explaining_vars])
         if return_all:
             return expl_var_mpes
@@ -1737,14 +1737,19 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         """Uses einet as the output layer."""
         if len(self.explaining_vars) > 0:
             leaf_type = MultiDistributionLayer
+            print("expl vars: ", self.explaining_vars)
+            print("in_features: ", in_features)
+            print("out_features: ", out_features)
             scopes_a = torch.arange(0, len(self.explaining_vars))
             scopes_b = torch.arange(len(self.explaining_vars), in_features)
             leaf_kwargs = {
                 "scopes_to_dist": [
                     (
                         scopes_a,
-                        Categorical,
-                        {"num_bins": 4},
+                        # Categorical,
+                        # {"num_bins": 4},
+                        Normal,
+                        {},
                         # {
                         #     "min_sigma": 0.00001,
                         #     "max_sigma": 10.0,
@@ -1774,8 +1779,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
             num_sums=self.einet_num_sums,
             num_leaves=self.einet_num_leaves,
             num_repetitions=self.einet_num_repetitions,
-            # num_classes=out_features,
-            num_classes=1,  # TODO: remove
+            num_classes=out_features,
             # leaf_type=self.einet_leaf_type,
             leaf_type=leaf_type,
             leaf_kwargs=leaf_kwargs,

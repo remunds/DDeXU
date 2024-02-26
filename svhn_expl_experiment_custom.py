@@ -96,7 +96,7 @@ def load_datasets():
     train_data = [train_transformer(img).flatten() for img, _ in train_ds]
     train_data = torch.concat(
         [
-            torch.zeros((train_ds.data.shape[0], expl_len)),
+            torch.ones((train_ds.data.shape[0], expl_len)),
             torch.stack(train_data, dim=0),
         ],
         dim=1,
@@ -118,7 +118,7 @@ def load_datasets():
 def get_gaussian_noise_svhn_train(level: int, train_labels: np.ndarray, transformer):
     data = np.load(f"{svhn_c_path_complete}/svhn_train_gaussian_noise_l{level}.npy")
     data = [transformer(img).flatten() for img in data]
-    expl_vars = torch.zeros((len(data), expl_len))
+    expl_vars = torch.ones((len(data), expl_len))
     expl_vars[:, 0] = level
     # expl vars shape = N, 3
     # data shape = N, 32*32*3
@@ -163,7 +163,9 @@ def get_corrupted_svhn_test(all_corruptions: list, corruptions: list, levels: li
     # available corrupted dataset: 26032*len(corruptions), 32, 32, 3
     datasets_length = num_samples * len(levels) * len(corruptions)
     test_corrupt_data = np.zeros((datasets_length, 32, 32, 3), dtype=np.uint8)
-    test_corrupt_levels = np.zeros((datasets_length, expl_len), dtype=np.uint8)
+    test_corrupt_levels = np.ones(
+        (datasets_length, len(all_corruptions)), dtype=np.uint8
+    )
     test_idx = 0
     for corr_idx, c in enumerate(all_corruptions):
         if c not in corruptions:
@@ -189,7 +191,7 @@ def get_corrupted_svhn_test(all_corruptions: list, corruptions: list, levels: li
 
 def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial):
     # run_name = run_name + f"_categorical_no_quant"
-    run_name = run_name + f"_normal_quant"
+    run_name = run_name + f"_custom"
     with mlflow.start_run(run_name=run_name) as run:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mlflow.log_param("device", device)
@@ -272,8 +274,8 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         model = model.to(device)
 
         gaussian_noise_train = get_gaussian_noise_svhn_train(
-            1, train_ds_orig.labels, test_transformer
-        )  # train on level 1
+            3, train_ds_orig.labels, test_transformer
+        )  # train on level 3
         print(
             "gaussian_noise_train.shape: ",
             len(gaussian_noise_train),
@@ -281,12 +283,12 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         )
         print("train_data.shape: ", len(train_data), train_data[0][0].shape)
 
-        # # take only half to reduce training time
-        # train_data = (
-        #     train_data[: len(train_data) // 2]
-        #     + gaussian_noise_train[len(train_data) // 2 :]
-        # )
-        # print("combined train_data.shape: ", len(train_data), train_data[0][0].shape)
+        # take only half to reduce training time
+        train_data = (
+            train_data[: len(train_data) // 2]
+            + gaussian_noise_train[len(train_data) // 2 :]
+        )
+        print("combined train_data.shape: ", len(train_data), train_data[0][0].shape)
 
         train_ds, valid_ds = torch.utils.data.random_split(
             train_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
@@ -312,7 +314,7 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         backup_epochs = train_params["num_epochs"]
         train_params["num_epochs"] = 0
 
-        # train model on uncorrupted data
+        # train model
         lowest_val_loss = model.start_train(
             train_dl,
             valid_dl,
@@ -327,7 +329,6 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         model.deactivate_uncert_head()
         valid_acc_backbone = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc_backbone", valid_acc_backbone)
-        print("backbone valid acc on uncorrupted: ", valid_acc_backbone)
 
         model.activate_uncert_head()
 
@@ -338,97 +339,140 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         # compute mean and std of corrupted data, s.t. we can use it to normalize it for SPN training
         model.compute_normalization_values(train_dl, device)
 
-        # take only half to reduce training time
-        train_data = (
-            train_data[: len(train_data) // 2]
-            + gaussian_noise_train[len(train_data) // 2 :]
-        )
-        print("combined train_data.shape: ", len(train_data), train_data[0][0].shape)
-        print("train_data[0, :5]: ", train_data[0][0][:5])
-        print("train_data[-1, :5]: ", train_data[-1][0][:5])
+        # print("training SPN")
+        # # train model
+        # lowest_val_loss = model.start_train(
+        #     train_dl,
+        #     valid_dl,
+        #     device,
+        #     checkpoint_dir=ckpt_dir,
+        #     trial=trial,
+        #     **train_params,
+        # )
 
-        train_ds, valid_ds = torch.utils.data.random_split(
-            train_data, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
-        )
-        train_dl = DataLoader(
-            train_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=True,
-            pin_memory=True,
-            num_workers=4,
-        )
-
-        valid_dl = DataLoader(
-            valid_ds,
-            batch_size=batch_sizes["resnet"],
-            shuffle=True,
-            pin_memory=True,
-            num_workers=1,
-        )
-
-        print("training SPN")
-        # train model
-        lowest_val_loss = model.start_train(
-            train_dl,
-            valid_dl,
-            device,
-            checkpoint_dir=ckpt_dir,
-            trial=trial,
-            **train_params,
-        )
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
-        # print("getting embeddings")
-        # embeddings = model.get_embeddings(train_dl, device)
-        # from spn.structure.Base import Context
-        # from spn.structure.StatisticalTypes import MetaType
 
-        # print("embeddings shape: ", embeddings.shape)
-        # meta_types = [MetaType.REAL for _ in range(embeddings.shape[1])]
-        # meta_types[0] = MetaType.DISCRETE  # expl. var gaussian noise
-        # meta_types[1] = MetaType.DISCRETE  # expl. var defocus blur
-        # meta_types[2] = MetaType.DISCRETE  # expl. var contrast
+        print("getting embeddings")
+        embeddings = model.get_embeddings(train_dl, device)
+        from spn.structure.Base import Context
+        from spn.structure.StatisticalTypes import MetaType
+        from spn.structure.leaves.parametric.Parametric import Categorical, Gaussian
 
-        # ds_context = Context(meta_types=meta_types)
-        # train_data = embeddings.cpu().detach().numpy()
-        # # add target on pos1
-        # ds_context.add_domains(train_data)
+        from spn.structure.Base import Sum, Product
 
-        # from spn.algorithms.LearningWrappers import learn_mspn
+        from spn.structure.Base import assign_ids, rebuild_scopes_bottom_up
 
-        # print("learning mspn")
-        # # spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
-        # spn = learn_mspn(train_data, ds_context, min_instances_slice=1000)
-        # # Note: changed stuff in LearningWrapper (assert for min/max domain)
-        # print("done learning mspn")
+        # I want to create a SPN with the following structure:
+        # 32 children (Normal) for the embeddings
+        # 3 children (Categorical) for the corruption levels
+        # somehow combine them
+        # TODO: make sure its valid (i.e. decomposable and smooth)
+        # Decomposable: product node is decomposable, if scopes of children do not share any variables
+        # Smooth: all children of a sum node have the same scope
+        # TODO: might also just use learn_spn for the embeddings and
+        # add the categorical nodes manually
+        spn_embedding = embeddings.cpu().numpy()
+
+        # scopes: 0:32 embeddings (without corruptions), 32:35 corruptions
+        # each embedding-input is a Normal, each corruption-input is a Categorical
+        embedding_dists = []
+        for i in range(model.num_hidden):
+            embedding_dists.append(Gaussian(mean=0, stdev=1, scope=i))
+
+        corruption_dists = []
+        for i in range(expl_len):
+            corruption_dists.append(
+                Categorical(p=[1 / 5 for _ in range(5)], scope=model.num_hidden + i)
+            )
+
+        # now build spn from the input distributions
+        products = []
+        products2 = []
+        for i in range(0, len(embedding_dists), 8):
+            products.append(Product(children=embedding_dists[i : i + 8]))
+            products2.append(Product(children=embedding_dists[i : i + 8]))
+
+        sums = []
+        for p1, p2 in zip(products, products2):
+            sums.append(Sum(weights=[0.5, 0.5], children=[p1, p2]))
+
+        large_prod1 = Product(children=sums + corruption_dists)
+        large_prod2 = Product(children=sums + corruption_dists)
+
+        spn = Sum(weights=[0.5, 0.5], children=[large_prod1, large_prod2])
+
+        # para_types = [Gaussian for _ in range(spn_embedding.shape[1])]
+        # para_types[:3] = [Categorical for _ in range(3)]
+        # ds_context = Context(parametric_types=para_types).add_domains(spn_embedding)
+
+        # from spn.algorithms.LearningWrappers import learn_parametric
+        # spn = learn_parametric(spn_embedding, ds_context, min_instances_slice=1000)
+        # prod1 = Product(
+        #     children=[
+        #         Categorical(p=[1 / 5 for _ in range(5)], scope=i)
+        #         for i in range(expl_len)
+        #     ]
+        # )
+        # spn = Product(children=[spn, prod1])
+
+        assign_ids(spn)
+        rebuild_scopes_bottom_up(spn)
+        print(spn)
+        from spn.algorithms.Validity import is_valid
+
+        print(is_valid(spn))
+        exit(0)
+
+        print("embeddings shape: ", embeddings.shape)
+        meta_types = [MetaType.REAL for _ in range(embeddings.shape[1])]
+        meta_types.append(MetaType.REAL)
+        meta_types[0] = MetaType.DISCRETE  # class
+        meta_types[1] = MetaType.DISCRETE  # expl. var gaussian noise
+        meta_types[2] = MetaType.DISCRETE  # expl. var defocus blur
+        meta_types[3] = MetaType.DISCRETE  # expl. var contrast
+
+        ds_context = Context(meta_types=meta_types)
+        targets = np.array([t[1] for t in train_ds])
+        train_data = embeddings.cpu().detach().numpy()
+        # add target on pos1
+        train_data = np.concatenate([targets[:, None], train_data], axis=1)
+        ds_context.add_domains(train_data)
+
+        from spn.algorithms.LearningWrappers import learn_mspn
+
+        print("learning mspn")
+        # spn = learn_mspn(train_data, ds_context, min_instances_slice=20)
+        spn = learn_mspn(train_data, ds_context, min_instances_slice=200)
+        # Note: changed stuff in LearningWrapper (assert for min/max domain)
+        print("done learning mspn")
 
         print("start evaluation")
         model.activate_uncert_head()
-        # from mspn import MSPN_utils
+        from mspn import MSPN_utils
 
-        # mspn_util = MSPN_utils(model, spn, [0, 1, 2])
+        mspn_util = MSPN_utils(model, spn, [1, 2, 3])
 
-        # valid_data = mspn_util.create_data(valid_ds, valid_dl, device)
-        # valid_corrupt_acc = mspn_util.eval_acc(valid_data)
-        valid_corrupt_acc = model.eval_acc(valid_dl, device)
+        valid_data = mspn_util.create_data(valid_ds, valid_dl, device)
+        valid_corrupt_acc = mspn_util.eval_acc(valid_data)
         mlflow.log_metric("valid_acc", valid_corrupt_acc)
 
         # Evaluate
         model.eval()
-        train_ll_marg = model.eval_ll_marg(
-            None,
-            device,
-            train_dl,
-        )
-        # train_data = mspn_util.create_data(train_ds, train_dl, device)
-        # train_ll_marg = mspn_util.eval_ll_marg(train_data)
+        # train_ll_marg = model.eval_ll_marg(
+        #     None,
+        #     device,
+        #     train_dl,
+        # )
+        train_data = mspn_util.create_data(train_ds, train_dl, device)
+        train_ll_marg = mspn_util.eval_ll_marg(train_data)
         mlflow.log_metric("train_ll_marg", train_ll_marg)
 
-        valid_ll_marg = model.eval_ll_marg(
-            None,
-            device,
-            valid_dl,
-        )
-        # valid_ll_marg = mspn_util.eval_ll_marg(valid_data)
+        # valid_ll_marg = model.eval_ll_marg(
+        #     None,
+        #     device,
+        #     valid_dl,
+        # )
+        valid_ll_marg = mspn_util.eval_ll_marg(valid_data)
         mlflow.log_metric("valid_ll_marg", valid_ll_marg)
 
         # eval uncorrupted
@@ -439,7 +483,7 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         test_data = [test_transformer(img).flatten() for img, _ in test_ds]
         test_data = torch.concat(
             [
-                torch.zeros((test_ds.data.shape[0], expl_len)),
+                torch.ones((test_ds.data.shape[0], expl_len)),
                 torch.stack(test_data, dim=0),
             ],
             dim=1,
@@ -452,18 +496,18 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             pin_memory=True,
             num_workers=2,
         )
-        test_ll_marg = model.eval_ll_marg(None, device, test_dl)
-        # test_data = mspn_util.create_data(test_ds, test_dl, device)
-        # test_ll_marg = mspn_util.eval_ll_marg(test_data)
+        # test_ll_marg = model.eval_ll_marg(None, device, test_dl)
+        test_data = mspn_util.create_data(test_ds, test_dl, device)
+        test_ll_marg = mspn_util.eval_ll_marg(test_data)
         mlflow.log_metric("test_ll_marg", test_ll_marg)
-        test_mpe = model.explain_mpe(test_dl, device, return_all=False)
-        # test_mpe = mspn_util.explain_mpe(test_data, return_all=False)
+        # test_mpe = model.explain_mpe(test_dl, device, return_all=False)
+        test_mpe = mspn_util.explain_mpe(test_data, return_all=False)
         test_mpe = dict(
             zip(["test_mpe_" + c for c in corruptions_eval], test_mpe.tolist())
         )
         mlflow.log_metrics(test_mpe)
-        test_expl_ll = model.explain_ll(test_dl, device, return_all=False)
-        # test_expl_ll = mspn_util.explain_ll(test_data)
+        # test_expl_ll = model.explain_ll(test_dl, device, return_all=False)
+        test_expl_ll = mspn_util.explain_ll(test_data)
         test_expl_ll = dict(
             zip(["test_expl_ll_" + c for c in corruptions_eval], test_expl_ll)
         )
@@ -474,7 +518,7 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         # expect MPE explanations all to be 1 except for the gaussian variable, which should be 3
         # expect LL explanations to be low
         gauss_corruption = ["gaussian_noise"]
-        level = [1]
+        level = [3]
         print("eval gaussian corrupted")
         (
             test_corrupt_data_gaussian,
@@ -498,18 +542,18 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             pin_memory=True,
             num_workers=2,
         )
-        # gauss_data = mspn_util.create_data(test_ds, gauss_dl, device)
-        gauss_ll_marg = model.eval_ll_marg(None, device, gauss_dl)
-        # gauss_ll_marg = mspn_util.eval_ll_marg(gauss_data)
+        gauss_data = mspn_util.create_data(test_ds, gauss_dl, device)
+        # gauss_ll_marg = model.eval_ll_marg(None, device, gauss_dl)
+        gauss_ll_marg = mspn_util.eval_ll_marg(gauss_data)
         mlflow.log_metric("gauss_ll_marg", gauss_ll_marg)
-        gauss_mpe = model.explain_mpe(gauss_dl, device, return_all=False)
-        # gauss_mpe = mspn_util.explain_mpe(gauss_data, return_all=False)
+        # gauss_mpe = model.explain_mpe(gauss_dl, device, return_all=False)
+        gauss_mpe = mspn_util.explain_mpe(gauss_data, return_all=False)
         gauss_mpe = dict(
             zip(["gauss_mpe_" + c for c in corruptions_eval], gauss_mpe.tolist())
         )
         mlflow.log_metrics(gauss_mpe)
-        gauss_expl_ll = model.explain_ll(gauss_dl, device, return_all=False)
-        # gauss_expl_ll = mspn_util.explain_ll(gauss_data)
+        # gauss_expl_ll = model.explain_ll(gauss_dl, device, return_all=False)
+        gauss_expl_ll = mspn_util.explain_ll(gauss_data)
         gauss_expl_ll = dict(
             zip(["gauss_expl_ll_" + c for c in corruptions_eval], gauss_expl_ll)
         )
@@ -520,7 +564,7 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         # expect MPE explanations all to be close to 1 (not meaningful)
         # expect LL explanation to be high for the defocus blur variable, low for the others
         defocus_corruption = ["defocus_blur"]
-        level = [1]
+        level = [3]
         print("eval defocus corrupted")
         (
             test_corrupt_data_defocus,
@@ -544,19 +588,18 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             pin_memory=True,
             num_workers=2,
         )
-        # defocus_data = mspn_util.create_data(test_ds, defocus_dl, device)
-        defocus_ll_marg = model.eval_ll_marg(None, device, defocus_dl)
-        # defocus_ll_marg = mspn_util.eval_ll_marg(defocus_data)
+        defocus_data = mspn_util.create_data(test_ds, defocus_dl, device)
+        # defocus_ll_marg = model.eval_ll_marg(None, device, defocus_dl)
+        defocus_ll_marg = mspn_util.eval_ll_marg(defocus_data)
         mlflow.log_metric("defocus_ll_marg", defocus_ll_marg)
-        defocus_mpe = model.explain_mpe(defocus_dl, device, return_all=False)
-        # defocus_mpe = mspn_util.explain_mpe(defocus_data, return_all=False)
-        mpes = [0, 0, 0]
+        # defocus_mpe = model.explain_mpe(defocus_dl, device, return_all=False)
+        defocus_mpe = mspn_util.explain_mpe(defocus_data, return_all=False)
         defocus_mpe = dict(
             zip(["defocus_mpe_" + c for c in corruptions_eval], defocus_mpe.tolist())
         )
         mlflow.log_metrics(defocus_mpe)
-        defocus_expl_ll = model.explain_ll(defocus_dl, device, return_all=False)
-        # defocus_expl_ll = mspn_util.explain_ll(defocus_data)
+        # defocus_expl_ll = model.explain_ll(defocus_dl, device, return_all=False)
+        defocus_expl_ll = mspn_util.explain_ll(defocus_data)
         defocus_expl_ll = dict(
             zip(["defocus_expl_ll_" + c for c in corruptions_eval], defocus_expl_ll)
         )
@@ -567,7 +610,7 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         # expect MPE explanations all to be close to 1 (not meaningful)
         # expect LL explanation to be high for the contrast variable, low for the others
         contrast_corruption = ["contrast"]
-        level = [1]
+        level = [3]
         print("eval contrast corrupted")
         (
             test_corrupt_data_contrast,
@@ -591,18 +634,18 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             pin_memory=True,
             num_workers=2,
         )
-        # contrast_data = mspn_util.create_data(test_ds, contrast_dl, device)
-        contrast_ll_marg = model.eval_ll_marg(None, device, contrast_dl)
-        # contrast_ll_marg = mspn_util.eval_ll_marg(contrast_data)
+        contrast_data = mspn_util.create_data(test_ds, contrast_dl, device)
+        # contrast_ll_marg = model.eval_ll_marg(None, device, contrast_dl)
+        contrast_ll_marg = mspn_util.eval_ll_marg(contrast_data)
         mlflow.log_metric("contrast_ll_marg", contrast_ll_marg)
-        contrast_mpe = model.explain_mpe(contrast_dl, device, return_all=False)
-        # contrast_mpe = mspn_util.explain_mpe(contrast_data, return_all=False)
+        # contrast_mpe = model.explain_mpe(contrast_dl, device, return_all=False)
+        contrast_mpe = mspn_util.explain_mpe(contrast_data, return_all=False)
         contrast_mpe = dict(
             zip(["contrast_mpe_" + c for c in corruptions_eval], contrast_mpe.tolist())
         )
         mlflow.log_metrics(contrast_mpe)
-        contrast_expl_ll = model.explain_ll(contrast_dl, device, return_all=False)
-        # contrast_expl_ll = mspn_util.explain_ll(contrast_data)
+        # contrast_expl_ll = model.explain_ll(contrast_dl, device, return_all=False)
+        contrast_expl_ll = mspn_util.explain_ll(contrast_data)
         contrast_expl_ll = dict(
             zip(["contrast_expl_ll_" + c for c in corruptions_eval], contrast_expl_ll)
         )
