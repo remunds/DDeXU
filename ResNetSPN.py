@@ -173,6 +173,11 @@ class EinetUtils:
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
+                # check if nan in data
+                if torch.isnan(data).any():
+                    print(data)
+                    print("nan in data")
+                    exit()
                 output = self(data)
                 # output: logS(x|y_i) Shape: (N, C)
 
@@ -531,15 +536,12 @@ class EinetUtils:
         probs = torch.softmax(posteriors_log, dim=1)
         confidences, predictions = torch.max(probs, dim=1)
         print(confidences[:5])
+        from plotting_utils import histogram_plot, calibration_plot
 
         # make a histogram of the confidences
-        plt.hist(confidences.cpu().numpy(), bins=n_bins)
-        mlflow.log_figure(plt.gcf(), f"hist_{name}.png")
-        plt.clf()
+        histogram_plot(confidences.cpu().numpy(), n_bins, name)
 
-        # predictions = torch.argmax(posteriors, dim=1)
-
-        # this assumes that the dl does not shuffle the data
+        # Note: this assumes that the dl does not shuffle the data
         labels = torch.cat([labels for _, labels in dl], dim=0).to(device)
 
         def equal_frequency_binning(confidences, predictions, labels, num_bins):
@@ -595,22 +597,6 @@ class EinetUtils:
 
             return bin_confidences, bin_accuracies
 
-        def plot_calibration_curve(conf, acc, ece, nll, title):
-            # Plot the calibration curve
-            plt.plot(conf, acc, marker="o")
-            plt.plot(
-                [0, 1], [0, 1], linestyle="--", color="gray"
-            )  # Diagonal line for reference
-            plt.xlabel("Mean Confidence")
-            plt.ylabel("Observed Accuracy")
-            plt.title(
-                "Calibration Plot, ECE: {ece:.3f}, NLL: {nll:.3f}".format(
-                    ece=ece, nll=nll
-                )
-            )
-            mlflow.log_figure(plt.gcf(), f"calibration_curve_{title}.png")
-            plt.clf()
-
         def compute_ece(conf, acc):
             eces = []
             for i in range(len(conf)):
@@ -641,13 +627,13 @@ class EinetUtils:
         )
         ece = compute_ece(conf, acc)
         mlflow.log_metric(key=f"ece_eq_freq_{name}", value=ece)
-        plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_frequency_{name}")
+        calibration_plot(conf, acc, ece, mean_nll, f"eq_freq_{name}")
         conf, acc = equal_width_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
         ece = compute_ece(conf, acc)
         mlflow.log_metric(key=f"ece_eq_width_{name}", value=ece)
-        plot_calibration_curve(conf, acc, ece, mean_nll, f"equal_width_{name}")
+        calibration_plot(conf, acc, ece, mean_nll, f"eq_width_{name}")
 
     # taken from https://github.com/omegafragger/DDU/blob/main/metrics/ood_metrics.py
     def eval_ood(self, uncert_id, uncert_ood, device, confidence=False):
@@ -1748,12 +1734,11 @@ class EfficientNetSPN(nn.Module, EinetUtils):
                         scopes_a,
                         # Categorical,
                         # {"num_bins": 4},
-                        Normal,
-                        {},
-                        # {
-                        #     "min_sigma": 0.00001,
-                        #     "max_sigma": 10.0,
-                        # },
+                        RatNormal,
+                        {
+                            "min_sigma": 0.00001,
+                            "max_sigma": 10.0,
+                        },
                     ),
                     # (scopes_a, Categorical, {"num_bins": 6}),
                     (

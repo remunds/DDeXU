@@ -4,7 +4,6 @@ from torch.utils.data import DataLoader
 import torch
 import mlflow
 from torchvision.datasets import SVHN
-from PIL import Image
 
 
 dataset_dir = "/data_docker/datasets/"
@@ -39,8 +38,8 @@ def load_datasets():
 
     train_transformer = transforms.Compose(
         [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
+            # transforms.RandomCrop(32, padding=4),
+            # transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
             # transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
@@ -179,12 +178,12 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             ],
             dim=1,
         )
+
         train_corrupt_data = list(zip(train_corrupt_data, train_corrupt_labels))
-        # We want to train on some of the corrupted data, s.t. explanations are possible
-        train_data_combined = train_data + train_corrupt_data
+        # We want to train on the corrupted data, s.t. explanations are possible
 
         train_ds, valid_ds = torch.utils.data.random_split(
-            train_data_combined, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
+            train_corrupt_data, [0.9, 0.1], generator=torch.Generator().manual_seed(0)
         )
         train_dl = DataLoader(
             train_ds,
@@ -279,9 +278,10 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
+        # if valid_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
+        # mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
         model.eval()
@@ -320,14 +320,6 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         )
         print("test_corrupt_data.shape: ", test_corrupt_data.shape)
         print("test_corrupt_labels.shape: ", test_corrupt_labels.shape)
-        # calibration evaluation
-        dl = DataLoader(
-            list(zip(test_corrupt_data, test_corrupt_labels)),
-            batch_size=batch_sizes["resnet"],
-            shuffle=False,
-            pin_memory=True,
-        )
-        model.eval_calibration(None, device, "corrupt_test", dl)
 
         # test_corrupt_levels.shape = [num_data_points, num_corruptions]
         from tqdm import tqdm
@@ -353,7 +345,10 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
                 )
                 acc = model.eval_acc(dl, device)
                 eval_dict[corruption][corr_level]["acc"] = acc
-                ll_marg = model.eval_ll_marg(None, device, dl)
+                log_p_x_g_y = model.eval_ll(dl, device, return_all=True)
+                entropy = model.eval_entropy(log_p_x_g_y, device)
+                eval_dict[corruption][corr_level]["entropy"] = entropy
+                ll_marg = model.eval_ll_marg(log_p_x_g_y, device)
                 eval_dict[corruption][corr_level]["ll_marg"] = ll_marg
                 expl_ll = model.explain_ll(dl, device)
                 # eval_dict[corruption][corr_level]["expl_ll"] = expl_ll[corr_idx]
@@ -372,44 +367,22 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             [eval_dict[c][l]["ll_marg"] for c in eval_dict for l in eval_dict[c]]
         )
         mlflow.log_metric("manip_ll_marg", overall_ll_marg)
+        overall_entropy = np.mean(
+            [eval_dict[c][l]["entropy"] for c in eval_dict for l in eval_dict[c]]
+        )
+        mlflow.log_metric("manip_entropy", overall_entropy)
 
-        import matplotlib.pyplot as plt
+        from plotting_utils import explain_plot
 
-        plt.set_cmap("tab20")
-        cmap = plt.get_cmap("tab20")
-        colors = cmap(np.linspace(0, 1, len(corruptions)))
-
-        def create_plot(accs, expls, corruption, mode):
-            fig, ax = plt.subplots()
-            ax.set_xlabel("severity")
-            ax.set_xticks(np.array(list(range(5))) + 1)
-
-            ax.plot(accs, label="accuracy", color="red")
-            ax.set_ylabel("accuracy", color="red")
-            ax.tick_params(axis="y", labelcolor="red")
-            ax.set_ylim([0, 1])
-
-            ax2 = ax.twinx()
-            for i in range(expls.shape[1]):
-                ax2.plot(expls[:, i], label=corruptions[i], color=colors[i])
-            ax2.tick_params(axis="y")
-            ax2.set_ylabel(f"{mode} explanations")
-            if mode == "ll":
-                ax2.set_ylim([0, 100])
-            else:
-                ax2.set_ylim([0, 4])
-
-            fig.legend()
-            fig.tight_layout()
-            mlflow.log_figure(fig, f"{corruption}_expl_{mode}.png")
-            plt.close()
-
-        # plot showing that with each corruption increase, acc and ll decrease
-        # x-axis: corruption level, y-axis: acc/ll
         # as in calib_experiment
         for corruption in eval_dict:
-            accs = [eval_dict[corruption][l]["acc"] for l in eval_dict[corruption]]
-            # lls = [eval_dict[corruption][l]["ll"] for l in eval_dict[corruption]]
+            # accs = [eval_dict[corruption][l]["acc"] for l in eval_dict[corruption]]
+            lls_marg = [
+                eval_dict[corruption][l]["ll_marg"] for l in eval_dict[corruption]
+            ]
+            entropy = [
+                eval_dict[corruption][l]["entropy"] for l in eval_dict[corruption]
+            ]
             # get corruption index
             corr_idx = corruptions.index(corruption)
             expl_ll = [
@@ -421,11 +394,8 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             ]
             expl_mpe = torch.tensor(expl_mpe)
 
-            create_plot(accs, expl_ll, corruption, "ll")
-            create_plot(accs, expl_mpe, corruption, "mpe")
+            explain_plot(corruptions, lls_marg, expl_ll, corruption, "ll")
+            explain_plot(corruptions, entropy, expl_mpe, corruption, "mpe")
             # expl_ll.shape = [num_levels, num_expl_vars]
-
-        # plot showing corruption levels on x-axis and expl-ll/mpe of
-        # current corruption on y-axis
 
         return lowest_val_loss

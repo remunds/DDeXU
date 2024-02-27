@@ -224,14 +224,14 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
+        # if valid_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
 
-        if "GMM" in model_name:
-            model.fit_gmm(train_dl, device)
-        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
-            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        # if "GMM" in model_name:
+        #     model.fit_gmm(train_dl, device)
+        # elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
+        #     mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
         eval_dict = {}
@@ -249,8 +249,8 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         test_acc = model.eval_acc(test_dl, device)
         mlflow.log_metric("test_acc", test_acc)
         orig_test_ll = model.eval_ll(test_dl, device, return_all=True)
-        orig_test_ll_marg = model.eval_ll_marg(orig_test_ll, device)
-        mlflow.log_metric("test_ll_marg", orig_test_ll_marg)
+        orig_test_ll_marg = model.eval_ll_marg(orig_test_ll, device, return_all=True)
+        mlflow.log_metric("test_ll_marg", orig_test_ll_marg.mean().item())
         orig_test_pred_entropy = model.eval_entropy(
             orig_test_ll, device, return_all=True
         )
@@ -272,16 +272,21 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         )
         print("evaluating OOD")
         cifar_ll = model.eval_ll(cifar10_test_dl, device, return_all=True)
-        cifar_ll_marg = model.eval_ll_marg(cifar_ll, device)
-        mlflow.log_metric("cifar_ll_marg", cifar_ll_marg)
+        cifar_ll_marg = model.eval_ll_marg(cifar_ll, device, return_all=True)
+        mlflow.log_metric("cifar_ll_marg", cifar_ll_marg.mean().item())
         cifar_entropy = model.eval_entropy(cifar_ll, device, return_all=True)
         mlflow.log_metric("cifar_entropy", torch.mean(cifar_entropy).item())
 
         (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
             orig_test_pred_entropy, cifar_entropy, device
         )
-        mlflow.log_metric("auroc_cifar", auroc)
-        mlflow.log_metric("auprc_cifar", auprc)
+        mlflow.log_metric("auroc_cifar_entropy", auroc)
+        mlflow.log_metric("auprc_cifar_entropy", auprc)
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_ll_marg, cifar_ll_marg, device, confidence=True
+        )
+        mlflow.log_metric("auroc_cifar_ll_marg", auroc)
+        mlflow.log_metric("auprc_cifar_ll_marg", auprc)
 
         # test: 26032, 32, 32, 3
         # test-corrupted: 26032, 32, 32, 3 per corruption level (5)
@@ -447,14 +452,19 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         # create plot for each corruption
         # x axis: severity
         # y axis: acc, ll
+        from plotting_utils import uncert_corrupt_plot
 
         import matplotlib.pyplot as plt
 
+        all_corruption_accs = []
+        all_corruption_lls = []
+        all_corruption_entropies = []
         for corruption in eval_dict:
             backbone_accs = [
                 eval_dict[corruption][severity]["backbone_acc"]
                 for severity in eval_dict[corruption]
             ]
+            all_corruption_accs.append(backbone_accs)
             einet_accs = [
                 eval_dict[corruption][severity]["einet_acc"]
                 for severity in eval_dict[corruption]
@@ -463,36 +473,41 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 eval_dict[corruption][severity]["ll_marg"]
                 for severity in eval_dict[corruption]
             ]
+            all_corruption_lls.append(lls_marg)
             entropy = [
                 eval_dict[corruption][severity]["entropy"]
                 for severity in eval_dict[corruption]
             ]
+            all_corruption_entropies.append(entropy)
+            uncert_corrupt_plot(
+                backbone_accs,
+                lls_marg,
+                f"{corruption}",
+                mode="ll",
+            )
+            uncert_corrupt_plot(
+                backbone_accs,
+                entropy,
+                f"{corruption}",
+                mode="entropy",
+            )
 
-            fig, ax = plt.subplots()
-            ax.set_xlabel("severity")
-            ax.set_xticks(np.array(list(range(5))) + 1)
+        all_accs = np.array(all_corruption_accs)
+        all_lls = np.array(all_corruption_lls)
+        all_entropies = np.array(all_corruption_entropies)
 
-            ax.plot(backbone_accs, label="backbone acc", color="red")
-            ax.plot(einet_accs, label="einet acc", color="orange")
-            ax.set_ylabel("accuracy", color="red")
-            ax.tick_params(axis="y", labelcolor="red")
-            ax.set_ylim([0, 1])
+        uncert_corrupt_plot(
+            np.mean(all_accs, axis=0),
+            np.mean(all_lls, axis=0),
+            "All corruptions",
+            mode="ll",
+        )
 
-            ax2 = ax.twinx()
-            ax2.plot(lls_marg, label="ll", color="blue")
-            ax2.tick_params(axis="y", labelcolor="blue")
-
-            ax3 = ax.twinx()
-            ax3.plot(entropy, label="entropy", color="green")
-            ax3.tick_params(axis="y", labelcolor="green")
-
-            ax4 = ax.twinx()
-            ax4.plot(highest_class_prob, label="highest class prob", color="purple")
-            ax4.tick_params(axis="y", labelcolor="purple")
-
-            fig.legend(loc="upper left")
-            fig.tight_layout()
-            mlflow.log_figure(fig, f"{corruption}.png")
-            plt.close()
+        uncert_corrupt_plot(
+            np.mean(all_accs, axis=0),
+            np.mean(all_entropies, axis=0),
+            "All corruptions",
+            mode="entropy",
+        )
 
         return lowest_val_loss

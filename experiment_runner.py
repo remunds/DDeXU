@@ -15,13 +15,12 @@ from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_calib_experiment import start_cifar10_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
-
-# from svhn_expl_experiment import start_svhn_expl_run
+from svhn_expl_experiment import start_svhn_expl_run
 
 # from svhn_expl_experiment2 import start_svhn_expl_run
 # from svhn_expl_experiment_einsum import start_svhn_expl_run
 # from svhn_expl_experiment_custom import start_svhn_expl_run
-from svhn_expl_experiment_pres import start_svhn_expl_run
+# from svhn_expl_experiment_pres import start_svhn_expl_run
 
 torch.manual_seed(0)
 # Set our tracking server uri for logging
@@ -219,9 +218,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         )
     train_params = dict(
         pretrained_path=pretrained_path,
-        learning_rate_warmup=0.04,
-        num_epochs=100,
-        early_stop=20,
+        learning_rate_warmup=0.03,
+        early_stop=50,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -233,14 +231,10 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["lambda_v"] = 0.1
     elif loss == "hybrid_mid_low":
         train_params["lambda_v"] = 0.3
-    elif loss == "hybrid_very_low":
-        train_params["lambda_v"]
     elif loss == "hybrid_high":
         train_params["lambda_v"] = 0.9
     elif loss == "hybrid_mid_high":
         train_params["lambda_v"] = 0.7
-    elif loss == "hybrid_very_high":
-        train_params["lambda_v"] = 0.99
     else:
         raise ValueError(
             "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
@@ -281,6 +275,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         lr = 0.02
     elif "EfficientNet" in model:
         lr = 0.015
+        # lr = 0.02
         # lr = 0.05
     else:
         raise ValueError(
@@ -337,10 +332,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
     elif "cifar10-c-expl" in dataset:
-        # model_params["explaining_vars"] = list(range(19))
-        # train_params["corruption_levels_train"] = [0, 1]
-        model_params["explaining_vars"] = list(range(4))
-        train_params["corruption_levels_train"] = [0, 1, 2, 3]
+        model_params["explaining_vars"] = list(range(19))
+        train_params["corruption_levels_train"] = [0, 1]
+        # train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_cifar10_expl_run(
                 run_name,
@@ -365,11 +359,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
     elif "svhn-c-expl" in dataset:
-        # model_params["explaining_vars"] = list(range(15))
-        # model_params["explaining_vars"] = list(range(3))
-        model_params["explaining_vars"] = list(range(3))
-        # train_params["corruption_levels_train"] = [0, 1]
-        train_params["corruption_levels_train"] = [0, 1, 2]
+        model_params["explaining_vars"] = list(range(15))
+        train_params["corruption_levels_train"] = [0, 1]
         # train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_svhn_expl_run(
@@ -900,7 +891,7 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
         # learning_rate=0.025,
         # learning_rate=0.03,  # good for sngp
         # learning_rate=0.09,  # good for spn
-        learning_rate=0.03,
+        learning_rate=0.03,  # good for both
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -979,13 +970,13 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "generative",
-    # "hybrid_low",
+    "generative",
+    "hybrid_low",
     "hybrid_mid_low",
-    # "hybrid",
-    # "hybrid_mid_high",
-    # "hybrid_high",
-    # "discriminative",
+    "hybrid",
+    "hybrid_mid_high",
+    "hybrid_high",
+    "discriminative",
 ]
 dataset = [
     # "figure6",
@@ -993,9 +984,9 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    # "cifar10-c-calib",
-    # "cifar10-c-expl",
-    # "svhn-c-calib",
+    "cifar10-c-calib",
+    "cifar10-c-expl",
+    "svhn-c-calib",
     "svhn-c-expl",
 ]
 dense_models = [
@@ -1145,10 +1136,10 @@ for d in dataset:
         elif "SPN" in m:
             for l in loss:
                 # pretrained_path = pretrained_backbones[d][m]
-                pretrained_path = trained_models[d][m]
-                pretrained_path = (
-                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-                )
+                # pretrained_path = trained_models[d][m]
+                # pretrained_path = (
+                #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+                # )
                 # pretrained_path = None
                 run_conv(d, l, "seperate", m, pretrained_path=None)
                 # run_conv(d, l, "einet_only", m, pretrained_path)
