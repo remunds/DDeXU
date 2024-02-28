@@ -84,6 +84,42 @@ def load_datasets():
     return train_ds, valid_ds, test_ds, test_transformer
 
 
+def load_cifar10_c_test(test_ds):
+    corruptions = [
+        "brightness",
+        "contrast",
+        "defocus_blur",
+        "elastic_transform",
+        "fog",
+        "frost",
+        "gaussian_blur",
+        "gaussian_noise",
+        "glass_blur",
+        "impulse_noise",
+        "jpeg_compression",
+        "motion_blur",
+        "pixelate",
+        "saturate",
+        "shot_noise",
+        "snow",
+        "spatter",
+        "speckle_noise",
+        "zoom_blur",
+    ]
+    # available corrupted dataset: 50k*len(corruptions), 32, 32, 3
+    levels = [1, 2, 3, 4, 5]
+    datasets_length = 10000 * len(levels) * len(corruptions)
+    all_data = np.zeros((datasets_length, 32, 32, 3), dtype=np.uint8)
+    labels = np.zeros((datasets_length), dtype=np.uint8)
+    for corr_idx, c in enumerate(corruptions):
+        # each corrupted dataset has shape of test: 50k, 32, 32, 3
+        data = np.load(f"{cifar10_c_path_complete}/{c}.npy")
+        all_data[corr_idx * 10000 * 5 : (corr_idx + 1) * 10000 * 5] = data
+        labels[corr_idx * 10000 * 5 : (corr_idx + 1) * 10000 * 5] = test_ds.labels
+    print("done loading corruptions")
+    return all_data, labels
+
+
 def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, trial):
     with mlflow.start_run(run_name=run_name):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -287,7 +323,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             pin_memory=True,
             num_workers=2,
         )
-        print("evaluating OOD detection")
+        print("Eval OOD SVHN")
         svhn_ll = model.eval_ll(svhn_test_dl, device, return_all=True)
         svhn_ll_marg = model.eval_ll_marg(svhn_ll, device, return_all=True)
         mlflow.log_metric("svhn_ll_marg", svhn_ll_marg.mean().item())
@@ -305,8 +341,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         )
         mlflow.log_metric("auroc_svhn_ll_marg", auroc)
         mlflow.log_metric("auprc_svhn_ll_marg", auprc)
-
-        print("done evaluating OOD detection")
+        print("Done OOD SVHN")
 
         # train: 50k, 32, 32, 3
         # test: 10k, 32, 32, 3
@@ -362,8 +397,31 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             batch_size=batch_sizes["resnet"],
             shuffle=False,
             pin_memory=True,
-            num_workers=2,
+            num_workers=4,
         )
+
+        # OOD vs CIFAR-10-C
+
+        print("Eval OOD cifar10-c")
+        cifar10_c_ll = model.eval_ll(cifar10_c_dl, device, return_all=True)
+        cifar10_c_ll_marg = model.eval_ll_marg(cifar10_c_ll, device, return_all=True)
+        mlflow.log_metric("cifar10_c_ll_marg", cifar10_c_ll_marg.mean().item())
+        cifar10_c_entropy = model.eval_entropy(cifar10_c_ll, device, return_all=True)
+        mlflow.log_metric("cifar10_c_entropy", torch.mean(cifar10_c_entropy).item())
+
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_pred_entropy, cifar10_c_entropy, device
+        )
+        mlflow.log_metric("auroc_cifar10_c_entropy", auroc)
+        mlflow.log_metric("auprc_cifar10_c_entropy", auprc)
+
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_ll_marg, cifar10_c_ll_marg, device, confidence=True
+        )
+        mlflow.log_metric("auroc_cifar10_c_ll_marg", auroc)
+        mlflow.log_metric("auprc_cifar10_c_ll_marg", auprc)
+
+        print("Done OOD cifar10-c")
 
         # evaluate calibration
         print("evaluating calibration")

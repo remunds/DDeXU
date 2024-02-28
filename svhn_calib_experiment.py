@@ -270,7 +270,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             pin_memory=True,
             num_workers=2,
         )
-        print("evaluating OOD")
+        print("Eval OOD cifar")
         cifar_ll = model.eval_ll(cifar10_test_dl, device, return_all=True)
         cifar_ll_marg = model.eval_ll_marg(cifar_ll, device, return_all=True)
         mlflow.log_metric("cifar_ll_marg", cifar_ll_marg.mean().item())
@@ -287,6 +287,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         )
         mlflow.log_metric("auroc_cifar_ll_marg", auroc)
         mlflow.log_metric("auprc_cifar_ll_marg", auprc)
+        print("Done OOD cifar")
 
         # test: 26032, 32, 32, 3
         # test-corrupted: 26032, 32, 32, 3 per corruption level (5)
@@ -349,6 +350,25 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             pin_memory=True,
             num_workers=2,
         )
+
+        print("Eval OOD svhn_c")
+        svhn_c_ll = model.eval_ll(svhn_c_dl, device, return_all=True)
+        svhn_c_ll_marg = model.eval_ll_marg(svhn_c_ll, device, return_all=True)
+        mlflow.log_metric("svhn_c_ll_marg", svhn_c_ll_marg.mean().item())
+        svhn_c_entropy = model.eval_entropy(svhn_c_ll, device, return_all=True)
+        mlflow.log_metric("svhn_c_entropy", torch.mean(svhn_c_entropy).item())
+
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_pred_entropy, svhn_c_entropy, device
+        )
+        mlflow.log_metric("auroc_svhn_c_entropy", auroc)
+        mlflow.log_metric("auprc_svhn_c_entropy", auprc)
+        (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
+            orig_test_ll_marg, svhn_c_ll_marg, device, confidence=True
+        )
+        mlflow.log_metric("auroc_svhn_c_ll_marg", auroc)
+        mlflow.log_metric("auprc_svhn_c_ll_marg", auprc)
+        print("Done OOD svhn_c")
 
         # evaluate calibration
         print("evaluating calibration on corrupted data")

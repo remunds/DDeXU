@@ -218,8 +218,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         )
     train_params = dict(
         pretrained_path=pretrained_path,
-        learning_rate_warmup=0.03,
-        early_stop=50,
+        learning_rate_warmup=0.035,
+        early_stop=20,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -970,13 +970,13 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "generative",
-    "hybrid_low",
-    "hybrid_mid_low",
     "hybrid",
+    "hybrid_mid_low",
     "hybrid_mid_high",
-    "hybrid_high",
-    "discriminative",
+    # "hybrid_low",
+    # "hybrid_high",
+    # "generative",
+    # "discriminative",
 ]
 dataset = [
     # "figure6",

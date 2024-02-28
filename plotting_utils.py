@@ -39,8 +39,8 @@ def histogram_plot(confidences, n_bins, title):
     # show histogram of confidences
     fig, ax = plt.subplots()
     ax.set_xlabel("confidence")
-    ax.set_ylabel("frequency")
-    ax.hist(confidences, bins=n_bins)
+    ax.set_ylabel("fraction of data")
+    ax.hist(confidences, bins=n_bins, density=True)
     mlflow.log_figure(fig, f"hist_{title}.png")
     plt.clf()
 
@@ -73,7 +73,7 @@ def explain_plot(
     cmap = plt.get_cmap("tab20")
     colors = cmap(np.linspace(0, 1, len(corruptions)))
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(10, 6))
     ax.set_xlabel("severity")
     ax.set_xticks(np.array(list(range(1, 6))))
 
@@ -87,22 +87,17 @@ def explain_plot(
         ax2.plot(explanations[:, i], label=corruptions[i], color=colors[i])
     ax2.tick_params(axis="y")
     ax2.set_ylabel(f"{mode} explanations")
-    if mode == "ll":
-        # ll-expl
-        ax2.set_ylim([0, 100])
     if mode == "mpe":
         # mpe-expl
         ax2.set_ylim([0, 5])
 
     handles, labels = ax.get_legend_handles_labels()
     handles2, labels2 = ax2.get_legend_handles_labels()
-    # location = "upper right" if mode == "ll" else "upper left"
     ax.legend(
         handles + handles2,
         labels + labels2,
-        # loc=location,
         loc="upper left",
-        # bbox_to_anchor=(1, 1),
+        bbox_to_anchor=(1.1, 1),
     ).set_zorder(10)
     plt.tight_layout()
     mlflow.log_figure(fig, f"{name}_expl_{mode}.png")

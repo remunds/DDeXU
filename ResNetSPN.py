@@ -162,6 +162,7 @@ class EinetUtils:
             )
         lowest_val_loss = torch.inf if num_epochs > 0 else lowest_val_loss
         val_increase = 0
+        divisor = self.num_hidden + len(self.explaining_vars)
         t = tqdm(range(num_epochs))
         for epoch in t:
             t.set_description(f"Epoch {warmup_epochs_performed + epoch}")
@@ -193,14 +194,8 @@ class EinetUtils:
 
                 # The division factor |X| is equation 5 of RAT.
                 # This is the dimension of input to SPN, so hidden + explaining vars
-                # TODO: outside of loop
-                divisor = self.hidden.shape[1] + len(self.explaining_vars)
-                if lambda_v == 0:
-                    ce_loss_v = 0
-                else:
-                    ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                    ce_loss_v = ce_loss_v.item()
-                ce_loss += ce_loss_v
+                ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                ce_loss += ce_loss_v.item()
                 nll_loss_v = (1 - lambda_v) * -(output.mean() / divisor)
                 nll_loss += nll_loss_v.item()
 
@@ -238,16 +233,8 @@ class EinetUtils:
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
-                    divisor = self.hidden.shape[1] + len(self.explaining_vars)
-                    if lambda_v == 0:
-                        ce_loss_v = 0
-                    else:
-                        ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(
-                            output, target
-                        )
-                        ce_loss_v = ce_loss_v.item()
-                    # ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
-                    val_ce_loss += ce_loss_v
+                    ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                    val_ce_loss += ce_loss_v.item()
                     nll_loss_v = (1 - lambda_v) * -(output.mean() / divisor)
                     val_nll_loss += nll_loss_v.item()
                     loss_v = ce_loss_v + nll_loss_v
