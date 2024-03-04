@@ -12,7 +12,9 @@ from mnist_calib_experiment import start_mnist_calib_run
 
 from mnist_expl_experiment2 import start_mnist_expl_run, mnist_expl_manual_evaluation
 from dirty_mnist_experiment import start_dirty_mnist_run
+
 from cifar10_expl_experiment import start_cifar10_expl_run
+from cifar10_expl_brightness import start_cifar10_brightness_run
 from cifar10_calib_experiment import start_cifar10_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
 from svhn_expl_experiment import start_svhn_expl_run
@@ -219,7 +221,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     train_params = dict(
         pretrained_path=pretrained_path,
         learning_rate_warmup=0.035,
-        early_stop=20,
+        early_stop=30,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -258,7 +260,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 100
+        train_params["num_epochs"] = 200
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -333,6 +335,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.end_run()
     elif "cifar10-c-expl" in dataset:
         model_params["explaining_vars"] = list(range(19))
+        model_params["explaining_vars"] = list(range(1))
         train_params["corruption_levels_train"] = [0, 1]
         # train_params["use_mpe_reconstruction_loss"] = True
         try:
@@ -348,6 +351,32 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
+    elif "cifar10-expl-bright" in dataset:
+
+        def start_bright_run():
+            try:
+                start_cifar10_brightness_run(
+                    run_name,
+                    batch_sizes.copy(),
+                    model_params.copy(),
+                    train_params.copy(),
+                    None,
+                )
+            except Exception as e:
+                print(e)
+                traceback.print_exc()
+                mlflow.set_tag("pruned", e)
+                mlflow.end_run()
+
+        model_params["explaining_vars"] = list(range(1))
+        train_params["corruption_levels_train"] = [0, 1]
+        for a in [True, False]:
+            for b in [128, 256]:
+                train_params["train_backbone_default"] = True
+                train_params["use_mpe_reconstruction_loss"] = a
+                model_params["num_hidden"] = b
+                start_bright_run()
+
     elif "svhn-c-calib" in dataset:
         try:
             start_svhn_calib_run(
@@ -970,24 +999,25 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "hybrid",
+    # "hybrid",
     "hybrid_mid_low",
-    "hybrid_mid_high",
+    # "hybrid_mid_high",
     # "hybrid_low",
     # "hybrid_high",
     # "generative",
     # "discriminative",
 ]
 dataset = [
-    # "figure6",
     # "two-moons",
+    # "figure6",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    "cifar10-c-calib",
-    "cifar10-c-expl",
-    "svhn-c-calib",
-    "svhn-c-expl",
+    # "cifar10-c-calib",
+    # "cifar10-c-expl",
+    "cifar10-expl-bright",
+    # "svhn-c-calib",
+    # "svhn-c-expl",
 ]
 dense_models = [
     "DenseResNetSPN",
@@ -1050,7 +1080,7 @@ pretrained_backbones = {
         "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         # "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
-        "EfficientNetSPN": "620594555249592855/c992900064d04caeb5e71ae2f17df5f3/artifacts/model",
+        "EfficientNetSPN": "298139550611321154/1032be5fb5304f58ab1564ffd819ff3c/artifacts/model",
     },
     "svhn-c-expl": {
         # "EfficientNetSPN": "771929259740930885/e2f1864ae2eb40368ccd421ff71b2a48/artifacts/model",

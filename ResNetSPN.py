@@ -50,14 +50,14 @@ class EinetUtils:
                 self.load(pretrained_path)
             else:
                 self.load(pretrained_path, backbone_only=True)
-            self.deactivate_uncert_head()
-            val_acc = self.eval_acc(dl_valid, device)
-            print(f"pretrained backbone validation accuracy: {val_acc}")
-            mlflow.log_metric(key="pretrained_backbone_val_acc", value=val_acc)
-            self.activate_uncert_head(deactivate_backbone)
-            val_acc = self.eval_acc(dl_valid, device)
-            print(f"pretrained model validation accuracy: {val_acc}")
-            mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
+            # self.deactivate_uncert_head()
+            # val_acc = self.eval_acc(dl_valid, device)
+            # print(f"pretrained backbone validation accuracy: {val_acc}")
+            # mlflow.log_metric(key="pretrained_backbone_val_acc", value=val_acc)
+            # self.activate_uncert_head(deactivate_backbone)
+            # val_acc = self.eval_acc(dl_valid, device)
+            # print(f"pretrained model validation accuracy: {val_acc}")
+            # mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
             if num_epochs == 0 and warmup_epochs == 0:
                 return 0.0
 
@@ -111,10 +111,12 @@ class EinetUtils:
                 )
             )
             mlflow.log_metric(
-                key="train_loss", value=loss / len(dl_train.dataset), step=epoch
+                key="warmup_train_loss", value=loss / len(dl_train.dataset), step=epoch
             )
             mlflow.log_metric(
-                key="val_loss", value=val_loss / len(dl_valid.dataset), step=epoch
+                key="warmup_val_loss",
+                value=val_loss / len(dl_valid.dataset),
+                step=epoch,
             )
             # early stopping via optuna
             if trial is not None:
@@ -143,8 +145,7 @@ class EinetUtils:
             self.load(checkpoint_dir + "checkpoint.pt")
 
         # compute norm and std
-        if self.mean is None or self.std is None:
-            self.compute_normalization_values(dl_train, device)
+        self.compute_normalization_values(dl_train, device)
 
         # train einet (and optionally resnet jointly)
         self.activate_uncert_head(deactivate_backbone)
@@ -174,11 +175,6 @@ class EinetUtils:
                 optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
-                # check if nan in data
-                if torch.isnan(data).any():
-                    print(data)
-                    print("nan in data")
-                    exit()
                 output = self(data)
                 # output: logS(x|y_i) Shape: (N, C)
 
@@ -202,14 +198,14 @@ class EinetUtils:
                 loss_v = ce_loss_v + nll_loss_v
 
                 if use_mpe_reconstruction_loss:
-                    evidence = self.quantify(self.einet_input)
+                    evidence = self.normalize(self.einet_input)
                     mpe_expl_vars = self.einet.sample(
                         evidence=evidence,
                         marginalized_scopes=self.explaining_vars,
                         is_differentiable=True,
                         is_mpe=True,
                     )
-                    mpe_expl_vars = self.dequantify(mpe_expl_vars)
+                    mpe_expl_vars = self.denormalize(mpe_expl_vars)
                     mpe_expl_vars = mpe_expl_vars[:, self.explaining_vars]
                     # reconstruction loss
                     expl_vars_vals = data[:, self.explaining_vars]
@@ -239,14 +235,14 @@ class EinetUtils:
                     val_nll_loss += nll_loss_v.item()
                     loss_v = ce_loss_v + nll_loss_v
                     if use_mpe_reconstruction_loss:
-                        evidence = self.quantify(self.einet_input)
+                        evidence = self.normalize(self.einet_input)
                         mpe_expl_vars = self.einet.sample(
                             evidence=evidence,
                             marginalized_scopes=self.explaining_vars,
                             is_differentiable=True,
                             is_mpe=True,
                         )
-                        mpe_expl_vars = self.dequantify(mpe_expl_vars)
+                        mpe_expl_vars = self.denormalize(mpe_expl_vars)
                         mpe_expl_vars = mpe_expl_vars[:, self.explaining_vars]
                         # reconstruction loss
                         expl_vars_vals = data[:, self.explaining_vars]
@@ -256,6 +252,7 @@ class EinetUtils:
                         val_mpe_loss += mpe_reconstruction_loss.item()
                         # they equally contribute if loss_v is divided by number of features and mpe_recon by expl_vars
                         # since loss_v is for number of feautres, mpe_recon_loss only for expl_vars
+                        # loss_v = loss_v + mpe_reconstruction_loss
                         loss_v = loss_v + mpe_reconstruction_loss
                     val_loss += loss_v.item()
                 t.set_postfix(
@@ -341,7 +338,6 @@ class EinetUtils:
 
     def get_embeddings(self, dl, device):
         self.eval()
-        self.activate_uncert_head()  # needs to be active for self.einet_input
         embedding_size = self.num_hidden + len(self.explaining_vars)
         index = 0
         embeddings = torch.zeros(len(dl.dataset), embedding_size).to(device)
@@ -350,8 +346,10 @@ class EinetUtils:
                 if type(data) is tuple or type(data) is list:
                     data = data[0]
                 data = data.to(device)
-                output = self(data)  # required for einet_input
-                embeddings[index : index + len(output)] = self.einet_input
+                output = self(data)  # required for hidden
+                expl_vars = data[:, self.explaining_vars]
+                curr_embeddings = torch.concat([expl_vars, self.hidden], dim=1)
+                embeddings[index : index + len(output)] = curr_embeddings
                 index += len(output)
         return embeddings
 
@@ -703,12 +701,12 @@ class EinetUtils:
             hidden = self.forward_hidden(data)
             # Normalize hidden
             hidden = torch.cat([exp_vars, hidden], dim=1)
-            hidden = self.quantify(hidden)
+            hidden = self.normalize(hidden)
             hidden[:, self.explaining_vars] = 0.0
             mpe: torch.Tensor = self.einet.mpe(
                 evidence=hidden, marginalized_scopes=self.explaining_vars
             )
-            mpe = self.dequantify(mpe)
+            mpe = self.denormalize(mpe)
             expl_var_mpes.append(mpe[:, self.explaining_vars])
         if return_all:
             return expl_var_mpes
@@ -721,6 +719,7 @@ class EinetUtils:
         """
         print("computing normalization values")
         self.eval()
+        self.deactivate_uncert_head()
         embeddings = self.get_embeddings(dl, device)
         self.mean = embeddings.mean(axis=0)
         self.std = embeddings.std(axis=0)
@@ -728,40 +727,62 @@ class EinetUtils:
         std_expl = self.std[self.explaining_vars]
         print(f"mean: {mean_expl}, std: {std_expl}")
 
-    def quantify(self, x: torch.Tensor) -> torch.Tensor:
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """
         Input x is raw form of explaining-vars + embedding
-        Returns quantified form of these to be normalized in [0,1].
-        This hopefully stabilizes SPN training
+        Returns them normalized in [0,1].
         """
         assert (
             self.mean is not None and self.std is not None
         ), "call compute_normalization_values first"
         self.std[self.std == 0] = 0.000001
-        explanations = x[:, self.explaining_vars]
         x_norm = (x - self.mean) / self.std
-        x_norm[:, self.explaining_vars] = (
-            explanations  # Do not apply normalization to explaining vars
-        )
         return x_norm
 
-    def dequantify(self, x: torch.Tensor) -> torch.Tensor:
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Input x is quantified form of explaining-vars + embedding
-        Returns dequantified form of these.
+        Input x is normalized form of explaining-vars + embedding
+        Returns denormalized form of these.
         """
         assert (
             self.mean is not None and self.std is not None
         ), "call compute_normalization_values first"
-        explanations = x[:, self.explaining_vars]
         if type(x) is np.ndarray:
-            x_dequant = x * self.std.cpu().numpy() + self.mean.cpu().numpy()
+            x_denorm = x * self.std.cpu().numpy() + self.mean.cpu().numpy()
         else:
-            x_dequant = x * self.std + self.mean
-        x_dequant[:, self.explaining_vars] = (
-            explanations  # Do not apply dequantization to explaining vars
+            x_denorm = x * self.std + self.mean
+        return x_denorm
+
+    def dequantize(self, explanations: torch.Tensor) -> torch.Tensor:
+        """
+        Dequantizes the explaining variables from discrete space to continuous space.
+        This is common in normalizing flows and aids the training.
+
+        Flow++ paper: Adding uniform noise to the discrete data over the width of each
+        discrete bin: if each of the D components of the discrete data
+        x takes on values in {0, 1, 2, . . . , 255}, then the dequantized
+        data is given by y = x+u, where u is drawn uniformly from [0, 1)^D
+
+        Theis et. al 2015: maximizing dequantized log-likelihood is lower bound to max. log-likelihood of data
+        """
+        # add uniform noise [0, 1)
+        expl_dequant = explanations + torch.rand(explanations.shape).to(
+            explanations.device
         )
-        return x_dequant
+        return expl_dequant
+
+    def embedding_histogram(self, dl, device):
+        self.eval()
+        embeddings = self.get_embeddings(dl, device)
+        exp_vars = embeddings[:, : len(self.explaining_vars)]
+        exp_vars = self.dequantize(exp_vars)
+        embeddings[:, : len(self.explaining_vars)] = exp_vars
+        # shape: (Dataset-size, num_hidden + len(explaining_vars))
+        for i in range(embeddings.shape[1]):
+            plt.hist(embeddings[:, i].cpu().numpy(), bins=50)
+            plt.title(f"Embedding {i}")
+            mlflow.log_figure(plt.gcf(), f"embedding_{i}.png")
+            plt.clf()
 
 
 class DenseResnet(nn.Module):
@@ -1626,6 +1647,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         einet_num_repetitions=1,
         einet_leaf_type="Normal",
         einet_dropout=0.0,
+        num_hidden=32,
         **kwargs,
     ):
         super(EfficientNetSPN, self).__init__()
@@ -1645,7 +1667,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         self.image_shape = image_shape
         self.marginalized_scopes = None
         # self.num_hidden = 1280  # from efficientnet_s
-        self.num_hidden = 32  # from efficientnet_s
+        self.num_hidden = num_hidden
         self.backbone = self.make_efficientnet()
         self.einet = self.make_einet_output_layer(
             self.num_hidden + len(explaining_vars), num_classes
@@ -1784,11 +1806,14 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         self.hidden = x
 
         if self.einet_active:
+            # discrete -> continuous
+            # exp_vars = self.dequantize(exp_vars)
             # classifier is einet, so we need to concatenate the explaining vars
             x = torch.cat([exp_vars, x], dim=1)
+            # normalize the input to the einet
+            # this requires self.mean and self.std to be set
+            x = self.normalize(x)
             self.einet_input = x
-            if (self.mean is not None) and (self.std is not None):
-                x = self.quantify(x)
             return self.einet(x, marginalized_scopes=self.marginalized_scopes)
 
         return self.backbone.classifier(x)  # default classifier

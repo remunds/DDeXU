@@ -237,9 +237,9 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
-        if valid_acc < 0.5:
-            # let optuna know that this is a bad trial
-            return lowest_val_loss
+        # if valid_acc < 0.5:
+        #     # let optuna know that this is a bad trial
+        #     return lowest_val_loss
         if "GMM" in model_name:
             print("fitting gmm")
             model.fit_gmm(train_dl, device)

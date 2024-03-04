@@ -294,6 +294,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
             trial=trial,
             **train_params,
         )
+        model.compute_normalization_values(train_dl, device)
 
         model.activate_uncert_head()
         # before costly evaluation, make sure that the model is not completely off
@@ -302,10 +303,12 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         # if valid_acc < 0.5:
         #     # let optuna know that this is a bad trial
         #     return lowest_val_loss
-        # mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         # Evaluate
         model.eval()
+
+        # model.embedding_histogram(valid_dl, device)
 
         # eval accuracy
         model.deactivate_uncert_head()
@@ -320,7 +323,7 @@ def start_cifar10_expl_run(run_name, batch_sizes, model_params, train_params, tr
         )
         mlflow.log_metric("valid_ll_marg", valid_ll_marg)
 
-        model.compute_normalization_values(train_dl, device)
+        # model.compute_normalization_values(train_dl, device)
 
         # test with all corruption-levels
         test_levels = [0, 1, 2, 3, 4]
