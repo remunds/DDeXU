@@ -8,23 +8,62 @@ import os
 
 
 def generate_data(samples=1000):
-    # 2d gaussian with torch
-    mean = torch.tensor([-1.8, -1.8])
-    cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
-    x = torch.distributions.MultivariateNormal(mean, cov).sample((samples,))
+    # # 2d gaussian with torch
+    # mean = torch.tensor([-1.8, -1.8])
+    # cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
 
-    mean = torch.tensor([1.8, -1.8])
-    cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
-    y = torch.distributions.MultivariateNormal(mean, cov).sample((samples,))
+    # mean = torch.tensor([1.8, -1.8])
+    # cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
+    # y = torch.distributions.MultivariateNormal(mean, cov).sample((samples,))
 
-    mean = torch.tensor([0.0, 1.8])
-    cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
-    z = torch.distributions.MultivariateNormal(mean, cov).sample((samples,))
+    # mean = torch.tensor([0.0, 1.8])
+    # cov = torch.tensor([[1.5, 0.0], [0.0, 1.5]])
+    # z = torch.distributions.MultivariateNormal(mean, cov).sample((samples,))
+
+    # Define means for the Gaussians
+    # mean1 = torch.tensor([-5.0, 5.0])
+    # mean2 = torch.tensor([5.0, 5.0])
+    # mean3 = torch.tensor([0.0, -5.0])
+    mean1 = torch.tensor([-2.0, 2.0])
+    mean2 = torch.tensor([2.0, 2.0])
+    mean3 = torch.tensor([0.0, -2.0])
+
+    # Define covariance matrices to stretch the Gaussians towards the middle
+    covariance1 = torch.tensor([[2.0, -1.0], [-1.0, 2.0]])
+
+    covariance2 = torch.tensor([[2.0, 1.0], [1.0, 2.0]])
+
+    covariance3 = torch.tensor([[1.0, 0.0], [0.0, 3.0]])
+    x = torch.distributions.MultivariateNormal(mean1, covariance1).sample((samples,))
+    y = torch.distributions.MultivariateNormal(mean2, covariance2).sample((samples,))
+    z = torch.distributions.MultivariateNormal(mean3, covariance3).sample((samples,))
 
     combined = torch.cat([x, y, z], dim=0)
-    target = torch.cat(
-        [torch.zeros(samples), torch.ones(samples), 2 * torch.ones(samples)]
-    )
+
+    x_target = torch.zeros(samples)
+    y_target = torch.ones(samples)
+    z_target = 2 * torch.ones(samples)
+
+    # add 4% label noise
+    x_noise = torch.rand(samples) < 0.04
+    y_noise = torch.rand(samples) < 0.04
+    z_noise = torch.rand(samples) < 0.04
+
+    x_target[x_noise] = torch.tensor(
+        [np.random.choice([1, 2]) for _ in range(x_noise.sum())]
+    ).float()
+    y_target[y_noise] = torch.tensor(
+        [np.random.choice([0, 2]) for _ in range(y_noise.sum())]
+    ).float()
+    z_target[z_noise] = torch.tensor(
+        [np.random.choice([0, 1]) for _ in range(z_noise.sum())]
+    ).float()
+
+    # target = torch.cat(
+    #     [torch.zeros(samples), torch.ones(samples), 2 * torch.ones(samples)]
+    # )
+    target = torch.cat([x_target, y_target, z_target])
+
     return list(zip(combined, target))
 
 
@@ -126,6 +165,9 @@ def plot_uncertainty_surface(
 
 
 def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
+    # set seeds
+    torch.manual_seed(0)
+    np.random.seed(0)
     print("starting new figure6 run: ", run_name)
     with mlflow.start_run(run_name=run_name):
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -140,7 +182,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         mlflow.log_params(model_params)
         mlflow.log_params(train_params)
 
-        train = generate_data(1000)
+        train = generate_data(500)
         valid = generate_data(100)
 
         train_dl = torch.utils.data.DataLoader(
@@ -174,6 +216,10 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("valid_acc", valid_acc)
+        model.deactivate_uncert_head()
+        valid_acc = model.eval_acc(valid_dl, device)
+        mlflow.log_metric("valid_acc_backbone", valid_acc)
+        model.activate_uncert_head()
         # if valid_acc < 0.5:
         #     # let optuna know that this is a bad trial
         #     return lowest_val_loss
@@ -191,17 +237,17 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
 
         ll_marg = model.eval_ll_marg(None, device, test_dl, return_all=True)
         print(ll_marg.shape)
-        ll_marg = ll_marg.cpu().detach().numpy()
+        ll_marg_cpu = ll_marg.cpu().detach().numpy()
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, ll_marg, ax=ax)
+        pcm = plot_uncertainty_surface(train_data, train_labels, -ll_marg_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
         plt.title("NLL, SPN model")
         mlflow.log_figure(fig, "nll.png")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, ll_marg, ax=ax, plot_train=False
+            train_data, train_labels, -ll_marg_cpu, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("NLL, SPN model")
@@ -245,3 +291,38 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         plt.colorbar(pcm, ax=ax)
         plt.title("Aleatoric, SPN model")
         mlflow.log_figure(fig, "aleatoric.png")
+
+        # combined p(x,y) = p(y|x) * p(x) where p(y|x) is discriminative for aleatoric and p(x) is marginal from PC
+        # print(probs.cpu().detach().numpy().shape)
+        # print(np.exp(ll_marg).reshape(-1, 1).shape)
+        # joint_prob = probs.cpu().detach().numpy() * np.exp(ll_marg).reshape(-1, 1)
+        print(logits.shape, ll_marg.shape)
+        log_joint = logits + ll_marg.reshape(-1, 1)
+        # joint_prob = torch.exp(log_joint)  # p(x,y) in log
+        joint_prob = torch.exp(
+            log_joint - torch.logsumexp(log_joint, dim=1).reshape(-1, 1)
+        )
+        print(joint_prob.shape)
+        print("log: ", log_joint[:5])
+        print("joint: ", joint_prob[:5])
+        # entropy = -torch.sum(torch.exp(log_joint_prob) * log_joint_prob)
+        entropy = -np.sum(
+            joint_prob.cpu().detach().numpy() * log_joint.cpu().detach().numpy(), axis=1
+        )
+        # entropy = log_joint_prob.cpu().detach().numpy()
+        print(entropy.shape)
+        print("entropy: ", entropy[:5])
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(train_data, train_labels, entropy, ax=ax)
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Joint Prob, SPN model")
+        mlflow.log_figure(fig, "joint.png")
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, entropy, ax=ax, plot_train=False
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Joint Prob, SPN model")
+        mlflow.log_figure(fig, "joint_notrain.png")

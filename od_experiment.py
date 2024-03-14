@@ -50,7 +50,7 @@ def collate(batch):
     return images, targets
 
 
-def get_shift_loaders():
+def get_shift_loaders(batch_size=5):
     ds_train = SHIFTDataset(
         data_root="/data_docker/datasets/shift/",
         split="train",
@@ -89,7 +89,7 @@ def get_shift_loaders():
 
     dl_train = DataLoader(
         ds_train,
-        batch_size=5,  # 6 for resnet50,
+        batch_size=batch_size,  # 6 for resnet50,
         shuffle=False,
         num_workers=4,
         pin_memory=True,
@@ -97,7 +97,7 @@ def get_shift_loaders():
     )
     dl_valid = DataLoader(
         ds_valid,
-        batch_size=5,  # 6 for resnet50,
+        batch_size=batch_size,  # 6 for resnet50,
         shuffle=False,
         num_workers=4,
         pin_memory=True,
@@ -209,6 +209,7 @@ def od_run(device, version):
         else:
             epochs = 10
         dl_train, dl_valid = get_shift_loaders()
+        del dl_train  # for now
         for epoch in range(epochs):
             losses = []
             if version == "einet" and epoch == 10:
@@ -252,6 +253,25 @@ def od_run(device, version):
             loss = sum(loss for loss in output.values())
             final_losses.append(loss.item())
         mlflow.log_metric("final_loss", sum(final_losses) / len(final_losses))
+
+        # eval accuracy
+        from torchmetrics.detection import MeanAveragePrecision
+
+        del dl_valid
+        _, dl_valid = get_shift_loaders(batch_size=4)
+
+        metric = MeanAveragePrecision()
+        model.eval()
+
+        for data, target in tqdm(dl_valid):
+            data = data.to(device)
+            target = [{k: v.to(device) for k, v in t.items()} for t in target]
+            # remove useless first dimension
+            data = data.squeeze(1)
+            output = model(data)
+            metric.update(output, target)
+
+        mlflow.log_metric("map_valid", metric.compute()["map"].item())
 
 
 version = ["default", "spectral_norm", "einet"]
