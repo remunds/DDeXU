@@ -23,7 +23,8 @@ def load_datasets():
             values = torch.normal(0, 100, size=(imgs.shape[0],))
             values = values.reshape(-1, 1, 1, 1)
         else:
-            values = torch.normal(value, 20, size=(imgs.shape[0],))
+            # values = torch.normal(value, 20, size=(imgs.shape[0],))
+            values = torch.ones((imgs.shape[0],)) * value
             values = values.reshape(-1, 1, 1, 1)
         imgs = torch.clamp(imgs_torch + values, 0, 255)
         imgs = imgs.to(dtype=torch.uint8).numpy()
@@ -127,7 +128,34 @@ def load_datasets():
     )
     train_orig_ds = list(zip(train_orig_ds, train_ds.targets))
 
-    return train_orig_ds, train_data, test_normal_ds, test_bright_ds, test_dark_ds
+    # qualitative
+    test_q_data = test_ds.data[:10]
+    levels = [-200, -150, -100, -50, 0, 50, 100, 150, 200]
+    test_q_ds = []
+    test_q_images = []
+    for l in levels:
+        adjusted, _ = add_brightness(test_q_data.copy(), l)
+        test_q_images.append(adjusted)
+        test_q = [test_transformer(img).flatten() for img in adjusted]
+        test_q = torch.concat(
+            [
+                torch.ones((len(test_q), 1)) * l,
+                torch.stack(test_q, dim=0),
+            ],
+            dim=1,
+        )
+        test_q = list(zip(test_q, test_ds.targets[:10]))
+        test_q_ds.extend(test_q)
+
+    return (
+        train_orig_ds,
+        train_data,
+        test_normal_ds,
+        test_bright_ds,
+        test_dark_ds,
+        test_q_ds,
+        test_q_images,
+    )
 
 
 def start_cifar10_brightness_run(
@@ -150,9 +178,15 @@ def start_cifar10_brightness_run(
         del train_params["corruption_levels_train"]
 
         # load data
-        train_orig_ds, train_ds_b, test_normal_ds, test_bright_ds, test_dark_ds = (
-            load_datasets()
-        )
+        (
+            train_orig_ds,
+            train_ds_b,
+            test_normal_ds,
+            test_bright_ds,
+            test_dark_ds,
+            test_q_ds,
+            test_q_bright,
+        ) = load_datasets()
 
         train_ds, valid_ds = torch.utils.data.random_split(
             train_orig_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
@@ -290,12 +324,18 @@ def start_cifar10_brightness_run(
         mlflow.log_metric("valid_b_acc", valid_acc)
         model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl_b, device)
-        mlflow.log_metric("valid_b_acc_resnet", valid_acc)
+        mlflow.log_metric("backbone_valid_acc", valid_acc)
         model.activate_uncert_head()
         # if valid_acc < 0.5:
         #     # let optuna know that this is a bad trial
         #     return lowest_val_loss
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        if "GMM" in model_name:
+            model.fit_gmm(train_dl, device)
+        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+
+        if train_params["num_epochs"] == 0:
+            return lowest_val_loss
 
         # Evaluate
         model.eval()
@@ -350,3 +390,24 @@ def start_cifar10_brightness_run(
         plt.hist(mpe_dark.cpu().numpy(), bins=50)
         mlflow.log_figure(plt.gcf(), "dark_mpe_hist.png")
         plt.clf()
+
+        # Idea: Use 10 test images, create 10 brightness levels of each, explain_mpe, show images and MPE
+        test_q_dl = DataLoader(
+            test_q_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+        )
+        mpe_q = model.explain_mpe(test_q_dl, device, return_all=True)
+        mpe_q = torch.cat(mpe_q, dim=0)
+        for i in range(0, len(test_q_ds), 9):
+            imgs = [test_q_bright[j][i // 9] for j in range(len(test_q_bright))]
+            mpes = mpe_q[i : i + 9]
+            fig, axes = plt.subplots(3, 3)
+            axes_flat = axes.flatten()
+            for ax, img, mpe in zip(axes_flat, imgs, mpes):
+                ax.imshow(img)
+                ax.axis("off")  # Turn off axis
+                ax.set_title(mpe.item(), fontsize=10, pad=2)
+            plt.tight_layout()
+            mlflow.log_figure(fig, f"qualitative_{i}.png")
+            plt.clf()

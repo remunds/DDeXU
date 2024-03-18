@@ -275,13 +275,18 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             **train_params,
         )
 
-        # before costly evaluation, make sure that the model is not completely off
+        model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc", valid_acc)
-        # if valid_acc < 0.5:
-        #     # let optuna know that this is a bad trial
-        #     return lowest_val_loss
-        # mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+        mlflow.log_metric("backbone_valid_acc", valid_acc)
+        model.activate_uncert_head()
+
+        if "GMM" in model_name:
+            model.fit_gmm(train_dl, device)
+        elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
+            mlflow.pytorch.log_state_dict(model.state_dict(), "model")
+
+        if train_params["num_epochs"] == 0:
+            return lowest_val_loss
 
         # Evaluate
         model.eval()

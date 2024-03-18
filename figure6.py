@@ -83,14 +83,21 @@ def make_testing_data():
     return np.stack([xv.flatten(), yv.flatten()], axis=-1)
 
 
-def plot_data(x, y, z):
-    import matplotlib.pyplot as plt
+def plot_data(data, labels):
+    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00", "#4daf4a"])
 
-    plt.scatter(x[:, 0], x[:, 1], label="x")
-    plt.scatter(y[:, 0], y[:, 1], label="y")
-    plt.scatter(z[:, 0], z[:, 1], label="z")
-    plt.legend()
-    plt.savefig("figure6.png")
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    ax.scatter(
+        data[:, 0],
+        data[:, 1],
+        c=labels,
+        cmap=DEFAULT_CMAP,
+        alpha=0.5,
+    )
+    ax.set_xlim(-10, 10)
+    ax.set_ylim(-10, 10)
+    mlflow.log_figure(fig, "figure6.png")
+    plt.clf()
 
 
 def plot_uncertainty_surface(
@@ -234,6 +241,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         )
         train_data = torch.stack([x[0] for x in train])
         train_labels = torch.stack([x[1] for x in train])
+        plot_data(train_data, train_labels)
 
         ll_marg = model.eval_ll_marg(None, device, test_dl, return_all=True)
         print(ll_marg.shape)
@@ -242,7 +250,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(train_data, train_labels, -ll_marg_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL, SPN model")
+        plt.title("NLL")
         mlflow.log_figure(fig, "nll.png")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
@@ -250,7 +258,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
             train_data, train_labels, -ll_marg_cpu, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL, SPN model")
+        plt.title("NLL")
         mlflow.log_figure(fig, "nll_notrain.png")
 
         entropy = model.eval_entropy(None, device, test_dl, return_all=True)
@@ -259,7 +267,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(train_data, train_labels, entropy, ax=ax)
         plt.colorbar(pcm, ax=ax)
-        plt.title("Entropy, SPN model")
+        plt.title("Entropy")
         mlflow.log_figure(fig, "entr.png")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
@@ -267,7 +275,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
             train_data, train_labels, entropy, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Entropy, SPN model")
+        plt.title("Entropy")
         mlflow.log_figure(fig, "entr_notrain.png")
 
         class_probability = model.eval_highest_class_prob(
@@ -289,8 +297,16 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(train_data, train_labels, aleatoric, ax=ax)
         plt.colorbar(pcm, ax=ax)
-        plt.title("Aleatoric, SPN model")
+        plt.title("Softmax Entropy")
         mlflow.log_figure(fig, "aleatoric.png")
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, aleatoric, ax=ax, plot_train=False
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Softmax Entropy")
+        mlflow.log_figure(fig, "aleatoric_notrain.png")
 
         # combined p(x,y) = p(y|x) * p(x) where p(y|x) is discriminative for aleatoric and p(x) is marginal from PC
         # print(probs.cpu().detach().numpy().shape)
@@ -316,7 +332,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(train_data, train_labels, entropy, ax=ax)
         plt.colorbar(pcm, ax=ax)
-        plt.title("Joint Prob, SPN model")
+        plt.title("Joint Prob")
         mlflow.log_figure(fig, "joint.png")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
@@ -324,5 +340,5 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
             train_data, train_labels, entropy, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Joint Prob, SPN model")
+        plt.title("Joint Prob")
         mlflow.log_figure(fig, "joint_notrain.png")

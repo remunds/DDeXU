@@ -216,7 +216,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         )
     train_params = dict(
         pretrained_path=pretrained_path,
-        learning_rate_warmup=0.035,
+        # learning_rate_warmup=0.035,
+        learning_rate_warmup=0.03,
         early_stop=30,
     )
     if loss == "discriminative" or loss == "noloss":
@@ -250,7 +251,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["warmup_epochs"] = 50
         train_params["deactivate_backbone"] = False
     elif training == "backbone_only":
-        train_params["warmup_epochs"] = 10
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 0
     elif training == "einet_only":
@@ -366,12 +367,16 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
 
         model_params["explaining_vars"] = list(range(1))
         train_params["corruption_levels_train"] = [0, 1]
-        for a in [True, False]:
-            for b in [128, 256]:
-                train_params["train_backbone_default"] = True
-                train_params["use_mpe_reconstruction_loss"] = a
-                model_params["num_hidden"] = b
-                start_bright_run()
+        # for a in [True, False]:
+        #     for b in [128, 256]:
+        # train_params["train_backbone_default"] = True
+        # train_params["use_mpe_reconstruction_loss"] = a
+        # model_params["num_hidden"] = b
+        # start_bright_run()
+        train_params["train_backbone_default"] = True
+        train_params["use_mpe_reconstruction_loss"] = True
+        model_params["num_hidden"] = 128
+        start_bright_run()
 
     elif "svhn-c-calib" in dataset:
         try:
@@ -874,7 +879,7 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
             einet_num_leaves = 15
             einet_num_repetitions = 11
         elif "two-moons" in dataset:
-            # (also works for figure6 with dropout=0.01, but occams razor: worse model is better)
+            # (also works for figure6 with dropout=0.01, but occams razor: smaller model is better)
             # lambda should be 0.5 or 0.7
             einet_depth = 5
             einet_num_sums = 10
@@ -996,24 +1001,24 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 # Zweites Tuning
 loss = [
     # "hybrid",
-    "hybrid_mid_low",
+    # "hybrid_mid_low",
     # "hybrid_mid_high",
     # "hybrid_high",
     # "hybrid_low",
     # "generative",
-    # "discriminative",
+    "discriminative",
 ]
 dataset = [
     # "two-moons",
-    "figure6",
+    # "figure6",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    # "cifar10-c-calib",
-    # "cifar10-c-expl",
-    # "cifar10-expl-bright",
-    # "svhn-c-calib",
-    # "svhn-c-expl",
+    "cifar10-c-calib",
+    "svhn-c-calib",
+    "cifar10-expl-bright",
+    "cifar10-c-expl",
+    "svhn-c-expl",
 ]
 dense_models = [
     "DenseResNetSPN",
@@ -1167,7 +1172,8 @@ for d in dataset:
                 #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
                 # )
                 # pretrained_path = None
-                run_conv(d, l, "seperate", m, pretrained_path=None)
+                # run_conv(d, l, "seperate", m, pretrained_path=None)
+                run_conv(d, l, "backbone_only", m, pretrained_path=None)
                 # run_conv(d, l, "einet_only", m, pretrained_path)
             continue
         # pretrained_path = pretrained_backbones[d][m]
