@@ -171,6 +171,10 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             from ResNetSPN import DenseResNetSPN
 
             model = DenseResNetSPN(**model_params)
+        elif model_name == "DenseResNetGMM":
+            from ResNetSPN import DenseResNetGMM
+
+            model = DenseResNetGMM(**model_params)
         mlflow.set_tag("model", model.__class__.__name__)
         print(model)
         model.to(device)
@@ -183,6 +187,10 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
             trial=trial,
             **train_params,
         )
+
+        if "GMM" in model_name:
+            model.fit_gmm(train_dl, device)
+
         # before costly evaluation, make sure that the model is not completely off
         # valid_acc = model.eval_acc(valid_dl, device)
         # mlflow.log_metric("valid_acc", valid_acc)
@@ -192,9 +200,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
 
         model.activate_uncert_head()
         mlflow.pytorch.log_state_dict(model.state_dict(), "model")
-
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
 
         # evaluate
         model.eval()

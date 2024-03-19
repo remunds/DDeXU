@@ -2,7 +2,9 @@ import traceback
 import torch
 import mlflow
 import optuna
-from figure6 import start_figure6_run
+
+# from figure6 import start_figure6_run
+from figure6_latent import start_figure6_run
 from simple_einet.layers.distributions.multidistribution import MultiDistributionLayer
 from simple_einet.layers.distributions.normal import RatNormal
 from two_moons_experiment import start_two_moons_run
@@ -257,7 +259,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif training == "einet_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 200
+        train_params["num_epochs"] = 400
     elif training == "eval_only":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = True
@@ -332,7 +334,6 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             mlflow.end_run()
     elif "cifar10-c-expl" in dataset:
         model_params["explaining_vars"] = list(range(19))
-        model_params["explaining_vars"] = list(range(1))
         train_params["corruption_levels_train"] = [0, 1]
         # train_params["use_mpe_reconstruction_loss"] = True
         try:
@@ -915,6 +916,17 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
             # num_hidden=640,
             spec_norm_bound=0.95,
         )
+    elif "GMM" in model:
+        model_params = dict(
+            model=model,
+            num_classes=num_classes,
+            input_dim=2,
+            num_layers=4,
+            # num_hidden=32,
+            num_hidden=128,
+            # spec_norm_bound=0.95,
+            spec_norm_bound=0.65,
+        )
     train_params = dict(
         early_stop=100,
         learning_rate_warmup=0.03,
@@ -1000,35 +1012,36 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "hybrid",
+    "hybrid",
     # "hybrid_mid_low",
     # "hybrid_mid_high",
     # "hybrid_high",
     # "hybrid_low",
     # "generative",
-    "discriminative",
+    # "discriminative",
 ]
 dataset = [
     # "two-moons",
-    # "figure6",
+    "figure6",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    "cifar10-c-calib",
-    "svhn-c-calib",
-    "cifar10-expl-bright",
-    "cifar10-c-expl",
-    "svhn-c-expl",
+    # "cifar10-c-calib",
+    # "svhn-c-calib",
+    # "cifar10-expl-bright",
+    # "cifar10-c-expl",
+    # "svhn-c-expl",
 ]
 dense_models = [
-    "DenseResNetSPN",
+    # "DenseResNetSPN",
+    "DenseResNetGMM",
     # "DenseResNetSNGP",
 ]
 models = [
-    "EfficientNetSPN",
+    # "EfficientNetSPN",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
-    # "EfficientNetGMM",
+    "EfficientNetGMM",
     # "ConvResNetDDUGMM",
     # "EfficientNetSNGP",
 ]
@@ -1073,19 +1086,20 @@ pretrained_backbones = {
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         "ConvResNetDDUGMM": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
         # val-acc: 0.8496
-        "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
+        "EfficientNetSPN": "279248034225110540/f3752cea01f7472aade2e60dbf8fedcb/artifacts/model",
         "EfficientNetGMM": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
     },
     # same as calib
     "cifar10-c-expl": {
         "ConvResNetSPN": "344247532890804598/17bdc2e7a26c4f529ce41483842362e0/artifacts/model",
         "ConvResNetDDU": "344247532890804598/725e12384abc4a05848e88bff062c5ef/artifacts/model",
-        # "EfficientNetSPN": "344247532890804598/c0ebabeb76914132a1d162bb068389db/artifacts/model",
         "EfficientNetSPN": "298139550611321154/1032be5fb5304f58ab1564ffd819ff3c/artifacts/model",
     },
     "svhn-c-expl": {
-        # "EfficientNetSPN": "771929259740930885/e2f1864ae2eb40368ccd421ff71b2a48/artifacts/model",
-        "EfficientNetSPN": "771929259740930885/140b0407b9d8420d88d196f0425e8361/artifacts/model"
+        "EfficientNetSPN": "354955436886369284/d0b7ff2869cf47cabee81603af9c273a/artifacts/model"
+    },
+    "svhn-c-calib": {
+        "EfficientNetSPN": "382722780317026903/e906f4cb0e3640fb87fb37dfc907944f/artifacts/model"
     },
 }
 
@@ -1101,11 +1115,10 @@ trained_models = {
         "EfficientNetSPN": "987712940205555914/1e17e9a931aa4217bf844d83e5f81c0f/artifacts/model"
     },
     "cifar10-c-expl": {
-        # "EfficientNetSPN": "718553087440563724/d7f46d12439e4ac48a4284303ee92d40/artifacts/model",
-        "EfficientNetSPN": "620594555249592855/a300dfddeb3a4c53a6e55a27f1157656/artifacts/model"
+        "EfficientNetSPN": "298139550611321154/240cf2315d2945bdad7658ae4a65cb83/artifacts/model"
     },
     "cifar10-c-calib": {
-        "EfficientNetSPN": "232957915879295399/2a8506542b784512bc5ce588011ed044/artifacts/model"
+        "EfficientNetSPN": "279248034225110540/f3752cea01f7472aade2e60dbf8fedcb/artifacts/model",
     },
     "dirty-mnist": {
         "hybrid": {
@@ -1118,10 +1131,9 @@ trained_models = {
         },
     },
     "svhn-c-calib": {
-        "EfficientNetSPN": "553153056869580546/4ce6a9e8ce354487992891072555ba94/artifacts/model"
+        "EfficientNetSPN": "382722780317026903/e906f4cb0e3640fb87fb37dfc907944f/artifacts/model"
     },
     "svhn-c-expl": {
-        # "EfficientNetSPN": "771929259740930885/3e527aa47f82443f9a076425e0c5569c/artifacts/model"
         "EfficientNetSPN": "771929259740930885/77863a62033042b999743a3434edc708/artifacts/model"
     },
 }
@@ -1148,7 +1160,7 @@ for d in dataset:
             pretrained_path = None
             if "GMM" in m:
                 l = "discriminative"
-                run_dense_resnet(d, l, "eval_only", m, pretrained_path)
+                run_dense_resnet(d, l, "backbone_only", m, pretrained_path)
             elif "SPN" in m:
                 for l in loss:
                     # run_dense_resnet(d, l, "einet_only", m, pretrained_path)
@@ -1166,15 +1178,15 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
-                # pretrained_path = pretrained_backbones[d][m]
+                pretrained_path = pretrained_backbones[d][m]
                 # pretrained_path = trained_models[d][m]
-                # pretrained_path = (
-                #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-                # )
+                pretrained_path = (
+                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+                )
                 # pretrained_path = None
                 # run_conv(d, l, "seperate", m, pretrained_path=None)
-                run_conv(d, l, "backbone_only", m, pretrained_path=None)
-                # run_conv(d, l, "einet_only", m, pretrained_path)
+                # run_conv(d, l, "backbone_only", m, pretrained_path=None)
+                run_conv(d, l, "einet_only", m, pretrained_path)
             continue
         # pretrained_path = pretrained_backbones[d][m]
         # pretrained_path = trained_models[d][m]

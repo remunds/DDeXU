@@ -147,6 +147,9 @@ class EinetUtils:
         # compute norm and std
         self.compute_normalization_values(dl_train, device)
 
+        if num_epochs == 0:
+            return lowest_val_loss
+
         # train einet (and optionally resnet jointly)
         self.activate_uncert_head(deactivate_backbone)
         if deactivate_backbone:
@@ -785,6 +788,42 @@ class EinetUtils:
             plt.clf()
 
 
+from gmm_utils import gmm_fit, gmm_get_logits
+
+
+class GMMUtils:
+    def activate_uncert_head(self, deactivate_backbone=True):
+        self.gmm_active = True
+
+    def deactivate_uncert_head(self):
+        self.gmm_active = False
+
+    def fit_gmm(self, dl, device):
+        """Fit gmm after EfficientNet has been trained."""
+        embeddings = []
+        targets = []
+        with torch.no_grad():
+            for data, target in dl:
+                target = target.type(torch.LongTensor)
+                data, target = data.to(device), target.to(device)
+                out = self(data)
+                embeddings.append(self.hidden)
+                targets.append(target)
+
+        embeddings = torch.cat(embeddings, dim=0).to(device)
+        targets = torch.cat(targets, dim=0).to(device)
+        print("embeddigns shape: ", embeddings.shape)
+        print("targets shape: ", targets.shape)
+        self.gmm, jitter = gmm_fit(embeddings, targets, num_classes=self.num_classes)
+        print("jitter: ", jitter)
+        self.gmm_active = True
+
+    def gmm_logits(self, embeddings):
+        if self.gmm is None:
+            return None
+        return gmm_get_logits(self.gmm, embeddings)
+
+
 class DenseResnet(nn.Module):
     """
     A simple fully connected ResNet.
@@ -953,6 +992,68 @@ class DenseResNetSPN(DenseResnet, EinetUtils):
             hidden = torch.cat([exp_vars, hidden], dim=1)
             self.einet_input = hidden
             return self.einet(hidden)
+
+        return self.classifier(hidden)
+
+
+class DenseResNetGMM(DenseResnet, GMMUtils, EinetUtils):
+    """
+    Spectral normalized ResNet with GMM as the output layer.
+    """
+
+    def __init__(
+        self,
+        spec_norm_bound=0.9,
+        explaining_vars=[],
+        **kwargs,
+    ):
+        self.spec_norm_bound = spec_norm_bound
+        self.explaining_vars = explaining_vars
+        super().__init__(**kwargs)
+        self.mean = None
+        self.std = None
+        self.gmm = None
+        self.gmm_active = False
+
+    def make_dense_layer(self):
+        """applies spectral normalization to the hidden layer."""
+        dense = nn.Linear(self.num_hidden, self.num_hidden)
+        # todo: this is different to tf, since it does not use the spec_norm_bound...
+        # note: both versions seem to work fine!
+        # return nn.Sequential(
+        #     nn.utils.parametrizations.spectral_norm(dense), self.activation
+        # )
+        return nn.Sequential(
+            spectral_norm(dense, norm_bound=self.spec_norm_bound, n_power_iterations=5), self.activation
+        )
+
+    def forward_hidden(self, inputs):
+        hidden = self.input_layer(inputs)
+
+        # Computes the ResNet hidden representations.
+        for i in range(self.num_layers):
+            resid = self.dense_layers[i](hidden)
+            resid = self.dropout(resid)
+            hidden = hidden + resid
+        # hidden = self.norm(hidden)
+        return hidden
+
+    def forward(self, inputs):
+        # extract explaining vars
+        exp_vars = inputs[:, self.explaining_vars]
+        # mask out explaining vars for bakcbone
+        mask = torch.ones_like(inputs, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        inputs = inputs[mask]
+        inputs = inputs.reshape(-1, self.input_dim)
+        # feed through resnet
+        hidden = self.forward_hidden(inputs)
+        self.hidden = hidden
+
+        if self.gmm_active and self.gmm is not None:
+            # notebook: logsumexp(logits, dim=1)
+            # logits = gmm_evaluate = log_prob of all datapoints of the embedding
+            return self.gmm_logits(hidden)
 
         return self.classifier(hidden)
 
@@ -1819,40 +1920,6 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         return self.backbone.classifier(x)  # default classifier
 
 
-from gmm_utils import gmm_fit, gmm_get_logits
-
-
-class GMMUtils:
-    def activate_uncert_head(self, deactivate_backbone=True):
-        self.gmm_active = True
-
-    def deactivate_uncert_head(self):
-        self.gmm_active = False
-
-    def fit_gmm(self, dl, device):
-        """Fit gmm after EfficientNet has been trained."""
-        embeddings = []
-        targets = []
-        with torch.no_grad():
-            for data, target in dl:
-                target = target.type(torch.LongTensor)
-                data, target = data.to(device), target.to(device)
-                out = self(data)
-                embeddings.append(self.hidden)
-                targets.append(target)
-
-        embeddings = torch.cat(embeddings, dim=0).to(device)
-        targets = torch.cat(targets, dim=0).to(device)
-        self.gmm, jitter = gmm_fit(embeddings, targets, num_classes=self.num_classes)
-        print("jitter: ", jitter)
-        self.gmm_active = True
-
-    def gmm_logits(self, embeddings):
-        if self.gmm is None:
-            return None
-        return gmm_get_logits(self.gmm, embeddings)
-
-
 class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
     """
     Spectral normalized EfficientNetV2-S with gmm as the output layer.
@@ -1865,6 +1932,7 @@ class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
         image_shape,  # (C, H, W)
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
+        num_hidden=32,
         **kwargs,
     ):
         super(EfficientNetGMM, self).__init__()
@@ -1873,6 +1941,7 @@ class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
         self.spec_norm_bound = spec_norm_bound
         self.image_shape = image_shape
         self.marginalized_scopes = None
+        self.num_hidden = num_hidden
         self.backbone = self.make_efficientnet()
         self.gmm = None
         self.gmm_active = False
@@ -1900,7 +1969,8 @@ class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
             padding=(1, 1),
             bias=False,
         )
-        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
+        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
         # apply spectral normalization
         replace_layers_rec(model)
         return model
@@ -1909,6 +1979,7 @@ class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
         x = self.backbone.features(x)
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
+        x = self.backbone.pre_classifier(x)
         return x
 
     def forward(self, x):
@@ -1929,7 +2000,6 @@ class EfficientNetGMM(nn.Module, GMMUtils, EinetUtils):
         if self.gmm_active and self.gmm is not None:
             # notebook: logsumexp(logits, dim=1)
             # logits = gmm_evaluate = log_prob of all datapoints of the embedding
-            # return self.gmm_logits(x)
             return self.gmm_logits(x)
 
         return self.backbone.classifier(x)  # default classifier

@@ -6,6 +6,9 @@ import mlflow
 
 import os
 
+from simple_einet.einet import Einet, EinetConfig
+from simple_einet.layers.distributions.normal import Normal, RatNormal
+
 
 def generate_data(samples=1000):
     # # 2d gaussian with torch
@@ -189,77 +192,97 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         mlflow.log_params(model_params)
         mlflow.log_params(train_params)
 
-        train = generate_data(500)
+        train = generate_data(1500)
         valid = generate_data(100)
 
         train_dl = torch.utils.data.DataLoader(
-            train, batch_size=batch_sizes["resnet"], shuffle=True
+            train, batch_size=512, shuffle=True, num_workers=4, pin_memory=True
         )
-        valid_dl = torch.utils.data.DataLoader(
-            valid, batch_size=batch_sizes["resnet"], shuffle=True
-        )
-
-        model_name = model_params["model"]
-        del model_params["model"]
-        if model_name == "DenseResNetSNGP":
-            from ResNetSPN import DenseResNetSNGP
-
-            model = DenseResNetSNGP(**model_params)
-        elif model_name == "DenseResNetSPN":
-            from ResNetSPN import DenseResNetSPN
-
-            model = DenseResNetSPN(**model_params)
-        elif model_name == "DenseResNetGMM":
-            from ResNetSPN import DenseResNetGMM
-
-            model = DenseResNetGMM(**model_params)
-        mlflow.set_tag("model", model.__class__.__name__)
-        model.to(device)
-
-        lowest_val_loss = model.start_train(
-            train_dl,
-            valid_dl,
-            device,
-            checkpoint_dir=ckpt_dir,
-            trial=trial,
-            **train_params,
-        )
-
-        if "GMM" in model_name:
-            model.fit_gmm(train_dl, device)
-
-        # before costly evaluation, make sure that the model is not completely off
-        valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc", valid_acc)
-        model.deactivate_uncert_head()
-        valid_acc = model.eval_acc(valid_dl, device)
-        mlflow.log_metric("valid_acc_backbone", valid_acc)
-        model.activate_uncert_head()
-
-        # if valid_acc < 0.5:
-        #     # let optuna know that this is a bad trial
-        #     return lowest_val_loss
-
-        mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
         test = make_testing_data()
-        test_dl = torch.utils.data.DataLoader(
-            test,
-            batch_size=batch_sizes["resnet"],
-            shuffle=False,
-        )
         train_data = torch.stack([x[0] for x in train])
         train_labels = torch.stack([x[1] for x in train])
         plot_data(train_data, train_labels)
+        cfg = EinetConfig(
+            num_features=2,
+            num_channels=1,
+            depth=1,
+            num_sums=15,
+            num_leaves=3,
+            num_repetitions=15,
+            num_classes=3,
+            leaf_type=RatNormal,
+            leaf_kwargs={
+                "min_sigma": 0.000001,
+                "max_sigma": 150.0,
+            },
+            layer_type="einsum",
+            dropout=0.0,
+        )
+        model = Einet(cfg)
 
-        ll_marg = model.eval_ll_marg(None, device, test_dl, return_all=True)
-        print(ll_marg.shape)
+        model.to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.03)
+        lambda_v = 0.5
+        divisor = 2
+        from tqdm import tqdm
+
+        t = tqdm(range(200))
+        for epoch in t:
+            t.set_description(f"Epoch  {epoch}")
+            model.train()
+            ce_loss = 0.0
+            nll_loss = 0.0
+            loss = 0.0
+            for data, target in train_dl:
+                optimizer.zero_grad()
+                data = data.to(device)
+                target = target.type(torch.LongTensor)
+                target = target.to(device)
+                output = model(data)
+                ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
+                ce_loss += ce_loss_v.item()
+                nll_loss_v = (1 - lambda_v) * -(output.mean() / divisor)
+                nll_loss += nll_loss_v.item()
+
+                loss_v = ce_loss_v + nll_loss_v
+                loss_v.backward()
+                optimizer.step()
+                loss += loss_v.item()
+
+            t.set_postfix(
+                dict(
+                    train_loss=loss / len(train_dl.dataset),
+                )
+            )
+            mlflow.log_metric(
+                key="ce_loss_train",
+                value=ce_loss / len(train_dl.dataset),
+                step=epoch,
+            )
+            mlflow.log_metric(
+                key="nll_loss_train",
+                value=nll_loss / len(train_dl.dataset),
+                step=epoch,
+            )
+        model.eval()
+
+        from gmm_utils import gmm_fit, gmm_get_logits
+
+        # use gaussians as embeddings
+        # embeddings have shape (num_samples, num_gaussians)
+        gmm, jitter = gmm_fit(train_data, train_labels, num_classes=3)
+        print("jitter: ", jitter)
+        test_tensor = torch.tensor(test)
+        logits = gmm_get_logits(gmm, test_tensor)
+        print(logits.shape)
+        ll_marg = torch.logsumexp(logits, dim=1)
         ll_marg_cpu = ll_marg.cpu().detach().numpy()
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(train_data, train_labels, -ll_marg_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL")
+        plt.title("Marginal NLL")
         mlflow.log_figure(fig, "nll.svg")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
@@ -267,87 +290,66 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
             train_data, train_labels, -ll_marg_cpu, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL")
+        plt.title("Marginal NLL")
         mlflow.log_figure(fig, "nll_notrain.svg")
 
-        entropy = model.eval_entropy(None, device, test_dl, return_all=True)
-        entropy = entropy.cpu().detach().numpy()
+        # logits represent P(x|y), so p(y|x) = p(x|y) * p(y) / p(x)
+        posterior = logits - torch.logsumexp(logits, dim=1)[:, None]
+        entropy = -torch.sum(torch.exp(posterior) * posterior, dim=1)
+        # entropy = -torch.sum(torch.exp(logits) * logits, dim=1)
+        entropy_cpu = entropy.cpu().detach().numpy()
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, entropy, ax=ax)
+        pcm = plot_uncertainty_surface(train_data, train_labels, entropy_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
         plt.title("Entropy")
-        mlflow.log_figure(fig, "entr.svg")
+        mlflow.log_figure(fig, "entropy.svg")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, entropy, ax=ax, plot_train=False
+            train_data, train_labels, entropy_cpu, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Entropy")
-        mlflow.log_figure(fig, "entr_notrain.svg")
+        mlflow.log_figure(fig, "entropy_notrain.svg")
 
-        class_probability = model.eval_highest_class_prob(
-            None, device, test_dl, return_all=True
-        )
-        class_probability = class_probability.cpu().detach().numpy()
-
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(
-            train_data, train_labels, class_probability, ax=ax
-        )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Highest class prob, SPN model")
-        mlflow.log_figure(fig, "class_prob.svg")
-
-        logits = model.backbone_logits(test_dl, device, return_all=True)
-        probs = torch.softmax(logits, dim=1)
-        aleatoric = -torch.sum(probs * torch.log(probs), axis=1).cpu().detach().numpy()
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, aleatoric, ax=ax)
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Softmax Entropy")
-        mlflow.log_figure(fig, "aleatoric.svg")
+        # Einet
+        test_tensor = test_tensor.to(device)
+        log_posterior = model.posterior(test_tensor)
+        entropy_einet = -torch.sum(torch.exp(log_posterior) * log_posterior, dim=1)
+        entropy_einet_cpu = entropy_einet.cpu().detach().numpy()
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, aleatoric, ax=ax, plot_train=False
+            train_data, train_labels, entropy_einet_cpu, ax=ax
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Softmax Entropy")
-        mlflow.log_figure(fig, "aleatoric_notrain.svg")
-
-        # combined p(x,y) = p(y|x) * p(x) where p(y|x) is discriminative for aleatoric and p(x) is marginal from PC
-        # print(probs.cpu().detach().numpy().shape)
-        # print(np.exp(ll_marg).reshape(-1, 1).shape)
-        # joint_prob = probs.cpu().detach().numpy() * np.exp(ll_marg).reshape(-1, 1)
-        print(logits.shape, ll_marg.shape)
-        log_joint = logits + ll_marg.reshape(-1, 1)
-        # joint_prob = torch.exp(log_joint)  # p(x,y) in log
-        joint_prob = torch.exp(
-            log_joint - torch.logsumexp(log_joint, dim=1).reshape(-1, 1)
-        )
-        print(joint_prob.shape)
-        print("log: ", log_joint[:5])
-        print("joint: ", joint_prob[:5])
-        # entropy = -torch.sum(torch.exp(log_joint_prob) * log_joint_prob)
-        entropy = -np.sum(
-            joint_prob.cpu().detach().numpy() * log_joint.cpu().detach().numpy(), axis=1
-        )
-        # entropy = log_joint_prob.cpu().detach().numpy()
-        print(entropy.shape)
-        print("entropy: ", entropy[:5])
-
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, entropy, ax=ax)
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Joint Prob")
-        mlflow.log_figure(fig, "joint.svg")
+        plt.title("Entropy")
+        mlflow.log_figure(fig, "entropy_einet.svg")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, entropy, ax=ax, plot_train=False
+            train_data, train_labels, entropy_einet_cpu, ax=ax, plot_train=False
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Joint Prob")
-        mlflow.log_figure(fig, "joint_notrain.svg")
+        plt.title("Entropy")
+        mlflow.log_figure(fig, "entropy_einet_notrain.svg")
+
+        nll_einet = -model(test_tensor).mean(dim=1)
+        nll_einet_cpu = nll_einet.cpu().detach().numpy()
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(train_data, train_labels, nll_einet_cpu, ax=ax)
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Marginal NLL")
+        mlflow.log_figure(fig, "nll_einet.svg")
+
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, nll_einet_cpu, ax=ax, plot_train=False
+        )
+        plt.colorbar(pcm, ax=ax)
+        plt.title("Marginal NLL")
+        mlflow.log_figure(fig, "nll_einet_notrain.svg")
+
+        return 0
