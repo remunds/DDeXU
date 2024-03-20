@@ -244,7 +244,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     if training == "end-to-end":
         train_params["warmup_epochs"] = 0
         train_params["deactivate_backbone"] = False
-        train_params["num_epochs"] = 10
+        train_params["num_epochs"] = 800
     elif training == "seperate":
         train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = True
@@ -1026,39 +1026,39 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "hybrid",
-    "hybrid_mid_low",
-    "hybrid_mid_high",
-    "hybrid_high",
-    "hybrid_low",
-    "generative",
+    # "hybrid",
+    # "hybrid_mid_low",
+    # "hybrid_mid_high",
+    # "hybrid_high",
+    # "hybrid_low",
+    # "generative",
     "discriminative",
 ]
 dataset = [
     # "two-moons",
     # "figure6",
-    "latent_figure6",
+    # "latent_figure6",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    # "cifar10-c-calib",
-    # "svhn-c-calib",
+    "cifar10-c-calib",
+    "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
 ]
 dense_models = [
-    "DenseResNetSPN",
+    # "DenseResNetSPN",
     # "DenseResNetGMM",
-    # "DenseResNetSNGP",
+    "DenseResNetSNGP",
 ]
 models = [
     # "EfficientNetSPN",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
-    "EfficientNetGMM",
+    # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    # "EfficientNetSNGP",
+    "EfficientNetSNGP",
 ]
 pretrained_backbones = {
     # acc: 1

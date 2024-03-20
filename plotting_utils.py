@@ -33,7 +33,11 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
     ax2 = ax.twinx()
     label = "Marginal LL" if mode == "ll" else "Entropy"
     ax2.set_ylabel(label, fontsize=12)
-    ax2.set_ylim([-12, -4])
+    if mode == "ll":
+        # ax2.set_ylim([-12, -4]) # cifar10
+        ax2.set_ylim([-20, 10])  # svhn
+    else:
+        ax2.set_ylim([0, 1.25])  # svhn
 
     # Plot uncertainties with dotted lines and markers
     ax2.plot(
