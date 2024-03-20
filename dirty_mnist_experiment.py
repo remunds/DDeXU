@@ -428,7 +428,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             lls_ood_marg,
             "Marginal Log-likelihood",
             "Fraction of data",
-            "mnist_amb_ood_ll.png",
+            "mnist_amb_ood_ll.pdf",
         )
 
         # Predictive entropy plot
@@ -438,7 +438,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             pred_entropy_ood,
             "Entropy",
             "Fraction of data",
-            "mnist_amb_ood_entropy.png",
+            "mnist_amb_ood_entropy.pdf",
         )
 
         # Highest class probability plot
@@ -448,7 +448,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             highest_class_prob_ood,
             "Highest class probability",
             "Fraction of data",
-            "mnist_amb_ood_highest_class_prob.png",
+            "mnist_amb_ood_highest_class_prob.pdf",
         )
 
         # Correct class probability plot
@@ -458,7 +458,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             correct_class_prob_ood,
             "Correct class probability",
             "Fraction of data",
-            "mnist_amb_ood_correct_class_prob.png",
+            "mnist_amb_ood_correct_class_prob.pdf",
         )
 
         # Epistemic plot
@@ -468,7 +468,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             epistemic_ood,
             "Epistemic uncertainty",
             "Fraction of data",
-            "mnist_amb_ood_epistemic.png",
+            "mnist_amb_ood_epistemic.pdf",
         )
 
         # Aleatoric plot
@@ -478,7 +478,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             aleatoric_ood,
             "Aleatoric uncertainty",
             "Fraction of data",
-            "mnist_amb_ood_aleatoric.png",
+            "mnist_amb_ood_aleatoric.pdf",
         )
 
         # backbone probs plot
@@ -488,7 +488,7 @@ def start_dirty_mnist_run(run_name, batch_sizes, model_params, train_params, tri
             ood_probs.max(axis=1)[0],
             "Backbone Probs",
             "Fraction of data",
-            "mnist_amb_ood_backbone.png",
+            "mnist_amb_ood_backbone.pdf",
         )
 
         return lowest_val_loss

@@ -99,7 +99,7 @@ def plot_data(data, labels):
     )
     ax.set_xlim(-10, 10)
     ax.set_ylim(-10, 10)
-    mlflow.log_figure(fig, "figure6.png")
+    mlflow.log_figure(fig, "figure6.pdf")
     plt.clf()
 
 
@@ -174,7 +174,7 @@ def plot_uncertainty_surface(
     return pcm
 
 
-def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
+def start_latent_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
     # set seeds
     torch.manual_seed(1)
     np.random.seed(1)
@@ -223,7 +223,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
 
         model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.03)
-        lambda_v = 0.5
+        lambda_v = train_params["lambda_v"]
         divisor = 2
         from tqdm import tqdm
 
@@ -283,7 +283,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         pcm = plot_uncertainty_surface(train_data, train_labels, -ll_marg_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
         plt.title("Marginal NLL")
-        mlflow.log_figure(fig, "nll.svg")
+        mlflow.log_figure(fig, "nll.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -291,7 +291,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Marginal NLL")
-        mlflow.log_figure(fig, "nll_notrain.svg")
+        mlflow.log_figure(fig, "nll_notrain.pdf")
 
         # logits represent P(x|y), so p(y|x) = p(x|y) * p(y) / p(x)
         posterior = logits - torch.logsumexp(logits, dim=1)[:, None]
@@ -303,7 +303,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         pcm = plot_uncertainty_surface(train_data, train_labels, entropy_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
         plt.title("Entropy")
-        mlflow.log_figure(fig, "entropy.svg")
+        mlflow.log_figure(fig, "entropy.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -311,7 +311,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Entropy")
-        mlflow.log_figure(fig, "entropy_notrain.svg")
+        mlflow.log_figure(fig, "entropy_notrain.pdf")
 
         # Einet
         test_tensor = test_tensor.to(device)
@@ -325,7 +325,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Entropy")
-        mlflow.log_figure(fig, "entropy_einet.svg")
+        mlflow.log_figure(fig, "entropy_einet.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -333,7 +333,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Entropy")
-        mlflow.log_figure(fig, "entropy_einet_notrain.svg")
+        mlflow.log_figure(fig, "entropy_einet_notrain.pdf")
 
         nll_einet = -model(test_tensor).mean(dim=1)
         nll_einet_cpu = nll_einet.cpu().detach().numpy()
@@ -342,7 +342,7 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         pcm = plot_uncertainty_surface(train_data, train_labels, nll_einet_cpu, ax=ax)
         plt.colorbar(pcm, ax=ax)
         plt.title("Marginal NLL")
-        mlflow.log_figure(fig, "nll_einet.svg")
+        mlflow.log_figure(fig, "nll_einet.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -350,6 +350,6 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Marginal NLL")
-        mlflow.log_figure(fig, "nll_einet_notrain.svg")
+        mlflow.log_figure(fig, "nll_einet_notrain.pdf")
 
         return 0

@@ -225,7 +225,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Class Probability")
-        mlflow.log_figure(fig, "posterior_class_probability.png")
+        mlflow.log_figure(fig, "posterior_class_probability.pdf")
 
         # Visualize SPN predictive entropy
         entropy = -torch.sum(posteriors * torch.log(posteriors), axis=1)
@@ -237,7 +237,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Predictive Entropy")
-        mlflow.log_figure(fig, "posterior_predictive_entropy.png")
+        mlflow.log_figure(fig, "posterior_predictive_entropy.pdf")
 
         # Visualize SPN predictive variance/uncertainty
         # unnecessary according to fabrizio, because we have the entropy
@@ -249,7 +249,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Predictive Variance")
-        mlflow.log_figure(fig, "posterior_predictive_variance.png")
+        mlflow.log_figure(fig, "posterior_predictive_variance.pdf")
 
         lls = model.eval_ll_marg(None, device, test_dl, return_all=True)
         nll = -(lls.cpu().detach().numpy())  # negative log likelihood
@@ -259,7 +259,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("NLL")
-        mlflow.log_figure(fig, "nll.png")
+        mlflow.log_figure(fig, "nll.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -272,7 +272,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("NLL")
-        mlflow.log_figure(fig, "nll_no_train.png")
+        mlflow.log_figure(fig, "nll_no_train.pdf")
 
         dempster_shafer = (
             model.eval_dempster_shafer(None, device, test_dl, return_all=True)
@@ -286,7 +286,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Dempster Shafer")
-        mlflow.log_figure(fig, "dempster_shafer.png")
+        mlflow.log_figure(fig, "dempster_shafer.pdf")
 
         # maximum predictive probability as in Figure 3, appendix C in https://arxiv.org/pdf/2006.10108.pdf
         max_pred_prob = np.max(posteriors.cpu().detach().numpy(), axis=1)
@@ -299,7 +299,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Maximum Predictive Probability")
-        mlflow.log_figure(fig, "max_pred_prob.png")
+        mlflow.log_figure(fig, "max_pred_prob.pdf")
 
         # Test epistemic as in DDU p(z)
         # p_z = torch.exp(lls)
@@ -324,7 +324,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Epistemic Uncertainty")
-        mlflow.log_figure(fig, "epistemic.png")
+        mlflow.log_figure(fig, "epistemic.pdf")
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples,
@@ -337,7 +337,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Epistemic Uncertainty")
-        mlflow.log_figure(fig, "epistemic_notrain.png")
+        mlflow.log_figure(fig, "epistemic_notrain.pdf")
 
         # Test aleatoric as in DDU entropy of softmax
         logits = model.backbone_logits(test_dl, device, return_all=True)
@@ -350,7 +350,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("Aleatoric Uncertainty")
-        mlflow.log_figure(fig, "aleatoric.png")
+        mlflow.log_figure(fig, "aleatoric.pdf")
 
         plt.close()
         return lowest_val_loss

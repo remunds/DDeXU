@@ -3,12 +3,12 @@ import torch
 import mlflow
 import optuna
 
-# from figure6 import start_figure6_run
-from figure6_latent import start_figure6_run
 from simple_einet.layers.distributions.multidistribution import MultiDistributionLayer
 from simple_einet.layers.distributions.normal import RatNormal
 from two_moons_experiment import start_two_moons_run
 from mnist_calib_experiment import start_mnist_calib_run
+from figure6 import start_figure6_run
+from figure6_latent import start_latent_figure6_run
 
 # from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
 
@@ -994,6 +994,20 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
+    elif "latent_figure6" in dataset:
+        try:
+            start_latent_figure6_run(
+                run_name,
+                batch_sizes,
+                model_params,
+                train_params,
+                None,
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
     elif "figure6" in dataset:
         try:
             start_figure6_run(
@@ -1013,16 +1027,17 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 # Zweites Tuning
 loss = [
     "hybrid",
-    # "hybrid_mid_low",
-    # "hybrid_mid_high",
-    # "hybrid_high",
-    # "hybrid_low",
-    # "generative",
-    # "discriminative",
+    "hybrid_mid_low",
+    "hybrid_mid_high",
+    "hybrid_high",
+    "hybrid_low",
+    "generative",
+    "discriminative",
 ]
 dataset = [
     # "two-moons",
-    "figure6",
+    # "figure6",
+    "latent_figure6",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
@@ -1033,8 +1048,8 @@ dataset = [
     # "svhn-c-expl",
 ]
 dense_models = [
-    # "DenseResNetSPN",
-    "DenseResNetGMM",
+    "DenseResNetSPN",
+    # "DenseResNetGMM",
     # "DenseResNetSNGP",
 ]
 models = [
@@ -1143,7 +1158,7 @@ trained_models = {
 # run_two_moons("hybrid_high", "einet_only", pretrained_path)
 
 for d in dataset:
-    if d == "two-moons" or d == "figure6":
+    if d == "two-moons" or "figure6" in d:
         for m in dense_models:
             # pretrained_path = None
             # run_dense_resnet(d, l, "seperate", m, pretrained_path)

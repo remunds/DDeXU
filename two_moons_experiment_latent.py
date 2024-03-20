@@ -186,7 +186,7 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("NLL")
-        mlflow.log_figure(fig, "nll.svg")
+        mlflow.log_figure(fig, "nll.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
@@ -199,6 +199,6 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         plt.colorbar(pcm, ax=ax)
         plt.title("NLL")
-        mlflow.log_figure(fig, "nll_no_train.svg")
+        mlflow.log_figure(fig, "nll_no_train.pdf")
 
         return 0

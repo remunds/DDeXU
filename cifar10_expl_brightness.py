@@ -56,23 +56,23 @@ def load_datasets():
     plt.imshow(train_ds_bright[first_large])
     # add value as title
     plt.title(f"brightness: {values[first_large]}")
-    plt.savefig(f"bright_{first_large}.png")
+    plt.savefig(f"bright_{first_large}.pdf")
     plt.clf()
 
     plt.imshow(train_ds.data[first_large])
     # add value as title
-    plt.savefig(f"default_{first_large}.png")
+    plt.savefig(f"default_{first_large}.pdf")
     plt.clf()
 
     plt.imshow(train_ds_bright[first_small])
     # add value as title
     plt.title(f"brightness: {values[first_small]}")
-    plt.savefig(f"dark_{first_small}.png")
+    plt.savefig(f"dark_{first_small}.pdf")
     plt.clf()
 
     plt.imshow(train_ds.data[first_small])
     # add value as title
-    plt.savefig(f"default_{first_small}.png")
+    plt.savefig(f"default_{first_small}.pdf")
     plt.clf()
 
     train_data = [test_transformer(img).flatten() for img in train_ds_bright]
@@ -348,7 +348,7 @@ def start_cifar10_brightness_run(
         import matplotlib.pyplot as plt
 
         plt.hist(mpe_b.cpu().numpy(), bins=50)
-        mlflow.log_figure(plt.gcf(), "train_mpe_hist.png")
+        mlflow.log_figure(plt.gcf(), "train_mpe_hist.pdf")
         plt.clf()
 
         # plot mpe histogram tests
@@ -362,7 +362,7 @@ def start_cifar10_brightness_run(
         mpe_normal = model.explain_mpe(normal_dl, device, return_all=True)
         mpe_normal = torch.cat(mpe_normal, dim=0)
         plt.hist(mpe_normal.cpu().numpy(), bins=50)
-        mlflow.log_figure(plt.gcf(), "normal_mpe_hist.png")
+        mlflow.log_figure(plt.gcf(), "normal_mpe_hist.pdf")
         plt.clf()
 
         bright_dl = DataLoader(
@@ -375,7 +375,7 @@ def start_cifar10_brightness_run(
         mpe_bright = model.explain_mpe(bright_dl, device, return_all=True)
         mpe_bright = torch.cat(mpe_bright, dim=0)
         plt.hist(mpe_bright.cpu().numpy(), bins=50)
-        mlflow.log_figure(plt.gcf(), "bright_mpe_hist.png")
+        mlflow.log_figure(plt.gcf(), "bright_mpe_hist.pdf")
         plt.clf()
 
         dark_dl = DataLoader(
@@ -388,7 +388,7 @@ def start_cifar10_brightness_run(
         mpe_dark = model.explain_mpe(dark_dl, device, return_all=True)
         mpe_dark = torch.cat(mpe_dark, dim=0)
         plt.hist(mpe_dark.cpu().numpy(), bins=50)
-        mlflow.log_figure(plt.gcf(), "dark_mpe_hist.png")
+        mlflow.log_figure(plt.gcf(), "dark_mpe_hist.pdf")
         plt.clf()
 
         # Idea: Use 10 test images, create 10 brightness levels of each, explain_mpe, show images and MPE
@@ -409,5 +409,5 @@ def start_cifar10_brightness_run(
                 ax.axis("off")  # Turn off axis
                 ax.set_title(mpe.item(), fontsize=10, pad=2)
             plt.tight_layout()
-            mlflow.log_figure(fig, f"qualitative_{i}.png")
+            mlflow.log_figure(fig, f"qualitative_{i}.pdf")
             plt.clf()
