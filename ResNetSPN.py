@@ -42,6 +42,7 @@ class EinetUtils:
         trial=None,
         pretrained_path=None,
         use_mpe_reconstruction_loss=False,
+        ensemble_num=1,
     ):
         if pretrained_path is not None:
             print(f"loading pretrained model from {pretrained_path}")
@@ -63,17 +64,25 @@ class EinetUtils:
 
         self.train()
         self.deactivate_uncert_head()
-        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
+        if ensemble_num == 1:
+            optimizer = [torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)]
+        else:
+            optimizer = [
+                torch.optim.Adam(
+                    self.backbones[i].parameters(), lr=learning_rate_warmup
+                )
+                for i in range(ensemble_num)
+            ]
         lr_schedule_backbone = None
-        if (
-            lr_schedule_warmup_step_size is not None
-            and lr_schedule_warmup_gamma is not None
-        ):
-            lr_schedule_backbone = torch.optim.lr_scheduler.StepLR(
-                optimizer,
-                step_size=lr_schedule_warmup_step_size,
-                gamma=lr_schedule_warmup_gamma,
-            )
+        # if (
+        #     lr_schedule_warmup_step_size is not None
+        #     and lr_schedule_warmup_gamma is not None
+        # ):
+        #     lr_schedule_backbone = torch.optim.lr_scheduler.StepLR(
+        #         optimizer,
+        #         step_size=lr_schedule_warmup_step_size,
+        #         gamma=lr_schedule_warmup_gamma,
+        #     )
 
         val_increase = 0
         lowest_val_loss = torch.inf
@@ -84,30 +93,45 @@ class EinetUtils:
             t.set_description(f"Epoch {epoch}")
             loss = 0.0
             for data, target in dl_train:
-                optimizer.zero_grad()
+                for o in optimizer:
+                    o.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
-                loss_v = torch.nn.CrossEntropyLoss()(output, target)
-                loss += loss_v.item()
-                loss_v.backward()
-                optimizer.step()
+                for i in range(ensemble_num):
+                    if ensemble_num == 1:
+                        pred = output
+                        retain = False
+                    else:
+                        pred = output[i]
+                        retain = True
+                    loss_v = torch.nn.CrossEntropyLoss()(pred, target)
+                    print(loss_v.item())
+                    loss += loss_v.item()
+                    loss_v.backward(retain_graph=retain)
+                    optimizer[i].step()
             if lr_schedule_backbone is not None:
                 lr_schedule_backbone.step()
 
             val_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
-                    optimizer.zero_grad()
+                    for o in optimizer:
+                        o.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
-                    loss_v = torch.nn.CrossEntropyLoss()(output, target)
-                    val_loss += loss_v.item()
+                    for i in range(ensemble_num):
+                        if ensemble_num == 1:
+                            pred = output
+                        else:
+                            pred = output[i]
+                        loss_v = torch.nn.CrossEntropyLoss()(output[i], target)
+                        val_loss += loss_v.item()
             t.set_postfix(
                 dict(
-                    train_loss=loss / len(dl_train.dataset),
-                    val_loss=val_loss / len(dl_valid.dataset),
+                    train_loss=loss / (len(dl_train.dataset) * ensemble_num),
+                    val_loss=val_loss / (len(dl_valid.dataset) * ensemble_num),
                 )
             )
             mlflow.log_metric(
@@ -153,17 +177,22 @@ class EinetUtils:
         # train einet (and optionally resnet jointly)
         self.activate_uncert_head(deactivate_backbone)
         if deactivate_backbone:
-            optimizer = torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
+            optimizer = [
+                torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
+                for _ in optimizer
+            ]
         else:
-            optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+            optimizer = [
+                torch.optim.Adam(self.parameters(), lr=learning_rate) for _ in optimizer
+            ]
 
         lr_schedule_einet = None
-        if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
-            lr_schedule_einet = torch.optim.lr_scheduler.StepLR(
-                optimizer,
-                step_size=lr_schedule_step_size,
-                gamma=lr_schedule_gamma,
-            )
+        # if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
+        #     lr_schedule_einet = torch.optim.lr_scheduler.StepLR(
+        #         optimizer,
+        #         step_size=lr_schedule_step_size,
+        #         gamma=lr_schedule_gamma,
+        #     )
         lowest_val_loss = torch.inf if num_epochs > 0 else lowest_val_loss
         val_increase = 0
         divisor = self.num_hidden + len(self.explaining_vars)
@@ -175,7 +204,8 @@ class EinetUtils:
             nll_loss = 0.0
             mpe_loss = 0.0
             for data, target in dl_train:
-                optimizer.zero_grad()
+                for o in optimizer:
+                    o.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
@@ -193,6 +223,7 @@ class EinetUtils:
 
                 # The division factor |X| is equation 5 of RAT.
                 # This is the dimension of input to SPN, so hidden + explaining vars
+
                 ce_loss_v = lambda_v * torch.nn.CrossEntropyLoss()(output, target)
                 ce_loss += ce_loss_v.item()
                 nll_loss_v = (1 - lambda_v) * -(output.mean() / divisor)
@@ -217,7 +248,8 @@ class EinetUtils:
                     loss_v = loss_v + mpe_reconstruction_loss
                 loss += loss_v.item()
                 loss_v.backward()
-                optimizer.step()
+                for o in optimizer:
+                    o.step()
             if lr_schedule_einet is not None:
                 lr_schedule_einet.step()
             # print(5000 * mpe_loss)
@@ -228,7 +260,8 @@ class EinetUtils:
             val_mpe_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
-                    optimizer.zero_grad()
+                    for o in optimizer:
+                        o.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
@@ -1024,7 +1057,8 @@ class DenseResNetGMM(DenseResnet, GMMUtils, EinetUtils):
         #     nn.utils.parametrizations.spectral_norm(dense), self.activation
         # )
         return nn.Sequential(
-            spectral_norm(dense, norm_bound=self.spec_norm_bound, n_power_iterations=5), self.activation
+            spectral_norm(dense, norm_bound=self.spec_norm_bound, n_power_iterations=5),
+            self.activation,
         )
 
     def forward_hidden(self, inputs):
@@ -2300,11 +2334,11 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    # layer = spectral_norm_torch(layer)
+                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    # layer = spectral_norm_torch(layer)
+                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):
                     replace_layers_rec(child)
@@ -2387,3 +2421,241 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
         self.hidden = x
 
         return self.sngp(x)
+
+
+# class EfficientNetEnsemble(nn.Module, EinetUtils):
+from torchvision.ops.stochastic_depth import stochastic_depth
+
+
+class StochasticDepthActive(nn.Module):
+    def __init__(self, p: float, mode: str) -> None:
+        super().__init__()
+        self.p = p
+        self.mode = mode
+
+    def forward(self, input):
+        # force training to be True
+        return stochastic_depth(input, self.p, self.mode, training=True)
+
+    def __repr__(self) -> str:
+        s = f"{self.__class__.__name__}(p={self.p}, mode={self.mode})"
+        return s
+
+
+class EfficientNetDropout(nn.Module, EinetUtils):
+    """
+    Monte Carlo Droupoiut EfficientNet.
+    For training, keep uncert_head deactivated, activate for sampling-inference
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        image_shape,  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        num_hidden=1280,
+        **kwargs,
+    ):
+        super(EfficientNetDropout, self).__init__()
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.spec_norm_bound = spec_norm_bound
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.num_hidden = num_hidden
+        self.backbone = self.make_efficientnet()
+
+    def make_efficientnet(self):
+        def replace_layers_rec(layer):
+            import torchvision
+
+            """Recursively apply spectral normalization to Conv and Linear layers."""
+            if len(list(layer.children())) == 0:
+                if isinstance(layer, torch.nn.Conv2d):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torch.nn.Linear):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torchvision.ops.StochasticDepth):
+                    layer = StochasticDepthActive(layer.p, layer.mode)
+            else:
+                for child in list(layer.children()):
+                    replace_layers_rec(child)
+
+        model = efficientnet_v2_s()
+        model.features[0][0] = torch.nn.Conv2d(
+            self.image_shape[0],
+            24,
+            kernel_size=(3, 3),
+            stride=(2, 2),
+            padding=(1, 1),
+            bias=False,
+        )
+        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        # apply spectral normalization
+        replace_layers_rec(model)
+        return model
+
+    def activate_uncert_head(self, deactivate_backbone=True):
+        """ """
+        self.uncert_head = True
+        return
+
+    def deactivate_uncert_head(self):
+        """ """
+        self.uncert_head = False
+        return
+
+    def forward_hidden(self, x):
+        x = self.backbone.features(x)
+        x = self.backbone.avgpool(x)
+        x = torch.flatten(x, 1)
+        return x
+
+    def forward(self, x):
+        iterations = 1
+        if self.uncert_head:
+            iterations = 15
+
+        last_layer_results = []
+        for i in range(iterations):
+            # x is flattened
+            # extract explaining vars
+            exp_vars = x[:, self.explaining_vars]
+            # mask out explaining vars for resnet
+            mask = torch.ones_like(x, dtype=torch.bool)
+            mask[:, self.explaining_vars] = False
+            intermed = x[mask]
+            # reshape to image
+            intermed = intermed.reshape(
+                -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
+            )
+
+            # feed through resnet
+            intermed = self.forward_hidden(intermed)
+            self.hidden = intermed
+
+            # Dropout before classifier
+            intermed = F.dropout(intermed, p=0.2, training=True)
+            last_layer_results.append(intermed)
+        last_layer_results = torch.stack(last_layer_results)
+        x = last_layer_results.mean(axis=0)
+        self.uncertainty = last_layer_results.var(axis=0)
+        return self.backbone.classifier(x)
+
+
+class EfficientNetEnsemble(nn.Module, EinetUtils):
+    """
+    Ensemble of EfficientNets.
+    For training, keep uncert_head deactivated, activate for sampling-inference
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        image_shape,  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        num_hidden=1280,
+        **kwargs,
+    ):
+        super(EfficientNetEnsemble, self).__init__()
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.spec_norm_bound = spec_norm_bound
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        self.num_hidden = num_hidden
+        self.backbone1 = self.make_efficientnet()
+        self.backbone2 = self.make_efficientnet()
+        self.backbone3 = self.make_efficientnet()
+        self.backbone4 = self.make_efficientnet()
+        self.backbone5 = self.make_efficientnet()
+        self.backbones = [
+            self.backbone1,
+            self.backbone2,
+            self.backbone3,
+            self.backbone4,
+            self.backbone5,
+        ]
+
+    def make_efficientnet(self):
+        def replace_layers_rec(layer):
+            import torchvision
+
+            """Recursively apply spectral normalization to Conv and Linear layers."""
+            if len(list(layer.children())) == 0:
+                if isinstance(layer, torch.nn.Conv2d):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torch.nn.Linear):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torchvision.ops.StochasticDepth):
+                    layer = StochasticDepthActive(layer.p, layer.mode)
+            else:
+                for child in list(layer.children()):
+                    replace_layers_rec(child)
+
+        model = efficientnet_v2_s()
+        model.features[0][0] = torch.nn.Conv2d(
+            self.image_shape[0],
+            24,
+            kernel_size=(3, 3),
+            stride=(2, 2),
+            padding=(1, 1),
+            bias=False,
+        )
+        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        # apply spectral normalization
+        replace_layers_rec(model)
+        return model
+
+    def activate_uncert_head(self, deactivate_backbone=True):
+        """ """
+        self.uncert_head = True
+        return
+
+    def deactivate_uncert_head(self):
+        """ """
+        self.uncert_head = False
+        return
+
+    def forward_hidden(self, x):
+        xs = []
+        for b in self.backbones:
+            intermed = b.features(x)
+            intermed = b.avgpool(intermed)
+            intermed = torch.flatten(intermed, 1)
+            xs.append(intermed)
+        xs = torch.stack(xs)
+        return xs
+
+    def forward_ensemble_classifier(self, xs):
+        results = []
+        for i, b in enumerate(self.backbones):
+            results.append(b.classifier(xs[i]))
+        return results
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        intermed = x[mask]
+        # reshape to image
+        intermed = intermed.reshape(
+            -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
+        )
+
+        # feed through resnet
+        intermed = self.forward_hidden(intermed)
+        self.hidden = intermed
+        results = self.forward_ensemble_classifier(intermed)
+
+        results = torch.stack(results)
+        return results

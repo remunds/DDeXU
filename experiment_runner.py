@@ -214,7 +214,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             num_classes=10,
             image_shape=image_shape,
             train_batch_size=batch_sizes["resnet"],
-            spec_norm_bound=0.95,
+            # spec_norm_bound=0.95,
+            spec_norm_bound=3,
         )
     train_params = dict(
         pretrained_path=pretrained_path,
@@ -274,6 +275,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         lr = 0.002
     elif "ConvResNetDDU" in model:
         lr = 0.02
+    elif "EfficientNetSNGP" in model:
+        lr = 0.005
     elif "EfficientNet" in model:
         lr = 0.015
         # lr = 0.02

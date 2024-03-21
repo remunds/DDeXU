@@ -3,10 +3,11 @@ from torchvision.models import efficientnet_v2_s
 from torchvision import datasets, transforms
 from torch.nn.utils.parametrizations import spectral_norm
 
-batchsize = 512
+# batchsize = 100  # 512
+batchsize = 250  # 512
 data_dir = "/data_docker/datasets/"
-# device = "cuda" if torch.cuda.is_available() else "cpu"
-device = "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = "cpu"
 
 # load data
 mnist_transform = transforms.Compose(
@@ -30,11 +31,25 @@ train_ds, valid_ds = torch.utils.data.random_split(
 )
 
 train_dl = torch.utils.data.DataLoader(
-    train_ds, batch_size=batchsize, shuffle=True, pin_memory=True, num_workers=2
+    train_ds,
+    batch_size=batchsize,
+    shuffle=True,
+    pin_memory=True,
+    num_workers=4,
+    persistent_workers=True,
 )
 valid_dl = torch.utils.data.DataLoader(
-    valid_ds, batch_size=batchsize, shuffle=True, pin_memory=True, num_workers=1
+    valid_ds,
+    batch_size=batchsize,
+    shuffle=True,
+    pin_memory=True,
+    num_workers=4,
+    persistent_workers=True,
 )
+
+from ResNetSPN import EfficientNetEnsemble
+
+from ResNetSPN import EfficientNetDropout
 
 from ResNetSPN import EfficientNetSPN
 
@@ -45,8 +60,8 @@ import os
 os.makedirs(ckpt_dir, exist_ok=True)
 
 train_params = dict(
-    warmup_epochs=0,
-    num_epochs=10,
+    warmup_epochs=10,
+    num_epochs=0,
     early_stop=10,
     lambda_v=1.0,
     deactivate_backbone=True,
@@ -74,14 +89,19 @@ model_params = dict(
     mod=True,  # only for ConvResNetDDU
 )
 # load model
-model = EfficientNetSPN(**model_params)
+model = EfficientNetEnsemble(**model_params)
+# model = EfficientNetDropout(**model_params)
+# model = EfficientNetSPN(**model_params)
+# print(model)
 model.to(device)
 model.train()
 
+train_params["deactivate_backbone"] = False
 model.start_train(
     train_dl,
     valid_dl,
     device,
     checkpoint_dir=ckpt_dir,
+    ensemble_num=2,
     **train_params,
 )
