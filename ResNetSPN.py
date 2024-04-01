@@ -693,6 +693,7 @@ class EinetUtils:
         Check each explaining variable individually.
         Returns the difference in data log likelihood between the default model and the marginalized model.
         Use, when the explaining variables are given in the data.
+        Captures only aleatoric uncertainty.
         """
         ll_default = self.eval_ll_marg(None, device, dl, return_all)
         explanations = []
@@ -700,6 +701,28 @@ class EinetUtils:
             self.marginalized_scopes = [i]
             ll_marg = self.eval_ll_marg(None, device, dl, return_all)
             explanations.append((ll_marg - ll_default))
+        self.marginalized_scopes = None
+        if return_all:
+            return torch.stack(explanations, dim=1)
+        return explanations
+
+    def explain_posterior(self, dl, device, return_all=False):
+        """
+        Check each explaining variable individually.
+        Returns the difference in posterior entropy between the default model and the marginalized model.
+        Use, when the explaining variables are given in the data.
+        Captures both aleatoric and epistemic uncertainty.
+        """
+        posteriors = self.eval_posterior(None, device, dl, return_all=True)
+        entropy_default = -torch.sum(posteriors * torch.log(posteriors), dim=1)
+        explanations = []
+        for i in self.explaining_vars:
+            self.marginalized_scopes = [i]
+            posteriors_marg = self.eval_posterior(None, device, dl, return_all=True)
+            entropy_marg = -torch.sum(
+                posteriors_marg * torch.log(posteriors_marg), dim=1
+            )
+            explanations.append((entropy_marg - entropy_default))
         self.marginalized_scopes = None
         if return_all:
             return torch.stack(explanations, dim=1)
@@ -2334,11 +2357,11 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    # layer = spectral_norm_torch(layer)
-                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    # layer = spectral_norm_torch(layer)
-                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):
                     replace_layers_rec(child)
@@ -2372,30 +2395,23 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
         def dummy_feature_extractor(x):
             return x
 
-        # num_deep_features = 640
-        # num_gp_features = 128
-        num_deep_features = in_features
-        num_gp_features = 128
-        normalize_gp_features = True
-        # normalize_gp_features = False
-        # num_random_features = 1024
-        num_random_features = 2048
-        mean_field_factor = 25
-        ridge_penalty = 1
-        feature_scale = 2
+        sngp_hps = dict(
+            num_deep_features=in_features,
+            num_gp_features=128,
+            normalize_gp_features=False,
+            num_random_features=512,
+            num_outputs=self.num_classes,
+            num_data=self.train_num_data,
+            train_batch_size=self.train_batch_size,
+            ridge_penalty=1,
+            feature_scale=2,
+            mean_field_factor=25,
+        )
+        mlflow.log_params(sngp_hps)
 
         model = Laplace(
             dummy_feature_extractor,
-            num_deep_features,
-            num_gp_features,
-            normalize_gp_features,
-            num_random_features,
-            self.num_classes,
-            self.train_num_data,
-            self.train_batch_size,
-            ridge_penalty,
-            feature_scale,
-            mean_field_factor,
+            **sngp_hps,
         )
         return model
 
@@ -2559,6 +2575,7 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
         num_hidden=1280,
+        num_ensembles=5,
         **kwargs,
     ):
         super(EfficientNetEnsemble, self).__init__()
@@ -2568,18 +2585,7 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
         self.image_shape = image_shape
         self.marginalized_scopes = None
         self.num_hidden = num_hidden
-        self.backbone1 = self.make_efficientnet()
-        self.backbone2 = self.make_efficientnet()
-        self.backbone3 = self.make_efficientnet()
-        self.backbone4 = self.make_efficientnet()
-        self.backbone5 = self.make_efficientnet()
-        self.backbones = [
-            self.backbone1,
-            self.backbone2,
-            self.backbone3,
-            self.backbone4,
-            self.backbone5,
-        ]
+        self.backbones = [self.make_efficientnet() for _ in range(num_ensembles)]
 
     def make_efficientnet(self):
         def replace_layers_rec(layer):
