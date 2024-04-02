@@ -77,7 +77,6 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
     ).set_zorder(10)
 
     plt.tight_layout()
-    plt.show()
     # mlflow.log_figure(fig, f"{mode}_{title}.pdf")
     return fig
 
@@ -121,22 +120,52 @@ def explain_plot(
     colors = cmap(np.linspace(0, 1, len(corruptions)))
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.set_xlabel("severity")
+    ax.set_xlabel("severity", fontsize=12)
     ax.set_xticks(np.array(list(range(1, 6))))
 
     label = "marginal ll" if mode == "ll" else "entropy"
-    ax.plot(uncertainty, label=label, color="red")
-    ax.set_ylabel(label)
+    ax.plot(
+        uncertainty,
+        label=label,
+        color="red",
+        linestyle="solid",
+        marker="o",
+        linewidth=1.5,
+    )
+    ax.set_ylabel(label, fontsize=12)
     ax.tick_params(axis="y")
 
     ax2 = ax.twinx()
     for i in range(explanations.shape[1]):
-        ax2.plot(explanations[:, i], label=corruptions[i], color=colors[i])
+        ax2.plot(
+            explanations[:, i],
+            label=corruptions[i],
+            color=colors[i],
+            linestyle="dashed",
+            marker="o",
+            linewidth=1.5,
+        )
     ax2.tick_params(axis="y")
-    ax2.set_ylabel(f"{mode} explanations")
+    ax2.set_ylabel(f"{mode} explanations", fontsize=12)
     if mode == "mpe":
         # mpe-expl
         ax2.set_ylim([0, 5])
+
+    ax.grid(True)
+
+    # Increase thickness of lines slightly
+    ax.spines["bottom"].set_linewidth(1.5)
+    ax.spines["left"].set_linewidth(1.5)
+    ax.spines["top"].set_linewidth(1.5)
+    ax.spines["right"].set_linewidth(1.5)
+    ax2.spines["bottom"].set_linewidth(1.5)
+    ax2.spines["left"].set_linewidth(1.5)
+    ax2.spines["top"].set_linewidth(1.5)
+    ax2.spines["right"].set_linewidth(1.5)
+
+    # Make axis labels better readable
+    ax.tick_params(axis="both", which="major", labelsize=10)
+    ax2.tick_params(axis="both", which="major", labelsize=10)
 
     handles, labels = ax.get_legend_handles_labels()
     handles2, labels2 = ax2.get_legend_handles_labels()
@@ -145,7 +174,8 @@ def explain_plot(
         labels + labels2,
         loc="upper left",
         bbox_to_anchor=(1.1, 1),
+        fontsize=10,
     ).set_zorder(10)
+
     plt.tight_layout()
-    mlflow.log_figure(fig, f"{name}_expl_{mode}.pdf")
-    plt.close()
+    return fig

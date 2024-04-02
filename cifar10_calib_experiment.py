@@ -573,17 +573,19 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         all_lls = np.array(all_corruption_lls)
         all_entropies = np.array(all_corruption_entropies)
 
-        uncert_corrupt_plot(
+        fig = uncert_corrupt_plot(
             all_accs.mean(axis=0),
             all_lls.mean(axis=0),
             f"All corruptions",
             mode="ll",
         )
-        uncert_corrupt_plot(
+        mlflow.log_figure(fig, "all_corruptions_ll.pdf")
+        fig = uncert_corrupt_plot(
             all_accs.mean(axis=0),
             all_entropies.mean(axis=0),
             f"All corruptions",
             mode="entropy",
         )
+        mlflow.log_figure(fig, "all_corruptions_entropy.pdf")
 
         return lowest_val_loss

@@ -713,15 +713,14 @@ class EinetUtils:
         Use, when the explaining variables are given in the data.
         Captures both aleatoric and epistemic uncertainty.
         """
-        posteriors = self.eval_posterior(None, device, dl, return_all=True)
-        entropy_default = -torch.sum(posteriors * torch.log(posteriors), dim=1)
+        # Intuition: the entropy should be higher when the explaining variable is observed
+        # than in the counterfactual case, where it is marginalized.
+        # What if the variable wasn't there? -> lower entropy because more certain
+        entropy_default = self.eval_entropy(None, device, dl, return_all)
         explanations = []
         for i in self.explaining_vars:
             self.marginalized_scopes = [i]
-            posteriors_marg = self.eval_posterior(None, device, dl, return_all=True)
-            entropy_marg = -torch.sum(
-                posteriors_marg * torch.log(posteriors_marg), dim=1
-            )
+            entropy_marg = self.eval_entropy(None, device, dl, return_all)
             explanations.append((entropy_marg - entropy_default))
         self.marginalized_scopes = None
         if return_all:
@@ -2357,11 +2356,11 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    # layer = spectral_norm_torch(layer)
+                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    # layer = spectral_norm_torch(layer)
+                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):
                     replace_layers_rec(child)

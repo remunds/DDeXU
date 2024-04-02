@@ -215,7 +215,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             image_shape=image_shape,
             train_batch_size=batch_sizes["resnet"],
             # spec_norm_bound=0.95,
-            spec_norm_bound=3,  # i think 7 might be good for cifar etc.
+            spec_norm_bound=20,  # i think 7 might be good for cifar etc.
         )
     train_params = dict(
         pretrained_path=pretrained_path,
@@ -1029,13 +1029,13 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "hybrid",
+    "hybrid",
     # "hybrid_mid_low",
     # "hybrid_mid_high",
     # "hybrid_high",
     # "hybrid_low",
     # "generative",
-    "discriminative",
+    # "discriminative",
 ]
 dataset = [
     # "two-moons",
@@ -1045,7 +1045,7 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     "cifar10-c-calib",
-    "svhn-c-calib",
+    # "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
