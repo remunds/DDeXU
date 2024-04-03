@@ -214,8 +214,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             num_classes=10,
             image_shape=image_shape,
             train_batch_size=batch_sizes["resnet"],
-            # spec_norm_bound=0.95,
-            spec_norm_bound=20,  # i think 7 might be good for cifar etc.
+            spec_norm_bound=7,
+            num_hidden=64,  # 16 too low, 32 worked well, failed with 128 already
+            # spec_norm_bound=20,  # i think 7 might be good for cifar etc.
         )
     train_params = dict(
         pretrained_path=pretrained_path,
@@ -378,6 +379,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         # model_params["num_hidden"] = b
         # start_bright_run()
         train_params["train_backbone_default"] = True
+        # train_params["use_mpe_reconstruction_loss"] = True
         train_params["use_mpe_reconstruction_loss"] = True
         model_params["num_hidden"] = 128
         start_bright_run()
@@ -1044,8 +1046,8 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
+    "svhn-c-calib",
     "cifar10-c-calib",
-    # "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
@@ -1198,15 +1200,15 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
-                pretrained_path = pretrained_backbones[d][m]
-                # pretrained_path = trained_models[d][m]
-                pretrained_path = (
-                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-                )
+                # pretrained_path = pretrained_backbones[d][m]
+                # # pretrained_path = trained_models[d][m]
+                # pretrained_path = (
+                #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+                # )
                 # pretrained_path = None
-                # run_conv(d, l, "seperate", m, pretrained_path=None)
+                run_conv(d, l, "seperate", m, pretrained_path=None)
                 # run_conv(d, l, "backbone_only", m, pretrained_path=None)
-                run_conv(d, l, "einet_only", m, pretrained_path)
+                # run_conv(d, l, "einet_only", m, pretrained_path)
             continue
         # pretrained_path = pretrained_backbones[d][m]
         # pretrained_path = trained_models[d][m]

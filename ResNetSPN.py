@@ -106,7 +106,6 @@ class EinetUtils:
                         pred = output[i]
                         retain = True
                     loss_v = torch.nn.CrossEntropyLoss()(pred, target)
-                    print(loss_v.item())
                     loss += loss_v.item()
                     loss_v.backward(retain_graph=retain)
                     optimizer[i].step()
@@ -126,7 +125,7 @@ class EinetUtils:
                             pred = output
                         else:
                             pred = output[i]
-                        loss_v = torch.nn.CrossEntropyLoss()(output[i], target)
+                        loss_v = torch.nn.CrossEntropyLoss()(pred, target)
                         val_loss += loss_v.item()
             t.set_postfix(
                 dict(
@@ -721,7 +720,7 @@ class EinetUtils:
         for i in self.explaining_vars:
             self.marginalized_scopes = [i]
             entropy_marg = self.eval_entropy(None, device, dl, return_all)
-            explanations.append((entropy_marg - entropy_default))
+            explanations.append((entropy_default - entropy_marg))
         self.marginalized_scopes = None
         if return_all:
             return torch.stack(explanations, dim=1)
@@ -2338,6 +2337,7 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
         train_num_data,
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
+        num_hidden=32,  # 32 worked well, already fails with 128
         **kwargs,
     ):
         super(EfficientNetSNGP, self).__init__()
@@ -2346,21 +2346,22 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
         self.spec_norm_bound = spec_norm_bound
         self.image_shape = image_shape
         self.marginalized_scopes = None
+        self.num_hidden = num_hidden
         self.backbone = self.make_efficientnet()
         self.train_batch_size = train_batch_size
         self.train_num_data = train_num_data
-        self.sngp = self.make_sngp_output_layer(1280 + len(explaining_vars))
+        self.sngp = self.make_sngp_output_layer(self.num_hidden + len(explaining_vars))
 
     def make_efficientnet(self):
         def replace_layers_rec(layer):
             """Recursively apply spectral normalization to Conv and Linear layers."""
             if len(list(layer.children())) == 0:
                 if isinstance(layer, torch.nn.Conv2d):
-                    # layer = spectral_norm_torch(layer)
-                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
                 elif isinstance(layer, torch.nn.Linear):
-                    # layer = spectral_norm_torch(layer)
-                    layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
             else:
                 for child in list(layer.children()):
                     replace_layers_rec(child)
@@ -2374,7 +2375,8 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
             padding=(1, 1),
             bias=False,
         )
-        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
+        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
         # apply spectral normalization
         replace_layers_rec(model)
         return model
@@ -2418,6 +2420,7 @@ class EfficientNetSNGP(nn.Module, SNGPUtils, EinetUtils):
         x = self.backbone.features(x)
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
+        x = self.backbone.pre_classifier(x)
         return x
 
     def forward(self, x):

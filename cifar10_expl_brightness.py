@@ -13,15 +13,21 @@ def load_datasets():
     from torchvision.datasets import CIFAR10
     from torchvision import transforms
 
-    def add_brightness(imgs, value=None):
+    def add_brightness(imgs, distr="normal", value=None):
         # add or subtract brightness of all images
         # assumes imgs.shape = [batch_size, 32, 32, 3]
         # assumes imgs are in range [0, 255]
-        # values are drawn from a normal distribution (mean=0, std=5)
+        # values are drawn from a normal distribution
         imgs_torch = torch.tensor(imgs, dtype=torch.float32)
         if value is None:
-            values = torch.normal(0, 100, size=(imgs.shape[0],))
+            if distr == "normal":
+                values = torch.normal(0, 50, size=(imgs.shape[0],))
+            elif distr == "uniform":
+                values = torch.randint(-300, 300, size=(imgs.shape[0],))
+            else:
+                raise NotImplementedError
             values = values.reshape(-1, 1, 1, 1)
+
         else:
             # values = torch.normal(value, 20, size=(imgs.shape[0],))
             values = torch.ones((imgs.shape[0],)) * value
@@ -85,6 +91,10 @@ def load_datasets():
     )
     train_data = list(zip(train_data, train_ds.targets))
 
+    # TODO: test_set should contain uniformly distributed brightnesses between -200 and 200
+    # final plot should show how accuracy, Expl_l, Expl_p and MPE react differently
+    # to the brightness values
+
     # create three test-sets: normal, brightness +100, brightness -100
     test_normal = [test_transformer(img).flatten() for img in test_ds.data]
     test_normal_data = torch.concat(
@@ -96,7 +106,18 @@ def load_datasets():
     )
     test_normal_ds = list(zip(test_normal_data, test_ds.targets))
 
-    test_bright, values_b = add_brightness(test_ds.data.copy(), 100)
+    test_uniform, values_u = add_brightness(test_ds.data.copy(), distr="uniform")
+    test_uniform = [test_transformer(img).flatten() for img in test_uniform]
+    test_uniform_data = torch.concat(
+        [
+            values_u.reshape(-1, 1),
+            torch.stack(test_uniform, dim=0),
+        ],
+        dim=1,
+    )
+    test_uniform_ds = list(zip(test_uniform_data, test_ds.targets))
+
+    test_bright, values_b = add_brightness(test_ds.data.copy(), value=100)
     test_bright = [test_transformer(img).flatten() for img in test_bright]
     test_bright_data = torch.concat(
         [
@@ -107,7 +128,7 @@ def load_datasets():
     )
     test_bright_ds = list(zip(test_bright_data, test_ds.targets))
 
-    test_dark, values_d = add_brightness(test_ds.data.copy(), -100)
+    test_dark, values_d = add_brightness(test_ds.data.copy(), value=-100)
     test_dark = [test_transformer(img).flatten() for img in test_dark]
     test_dark_data = torch.concat(
         [
@@ -134,7 +155,7 @@ def load_datasets():
     test_q_ds = []
     test_q_images = []
     for l in levels:
-        adjusted, _ = add_brightness(test_q_data.copy(), l)
+        adjusted, _ = add_brightness(test_q_data.copy(), value=l)
         test_q_images.append(adjusted)
         test_q = [test_transformer(img).flatten() for img in adjusted]
         test_q = torch.concat(
@@ -151,6 +172,7 @@ def load_datasets():
         train_orig_ds,
         train_data,
         test_normal_ds,
+        test_uniform_ds,
         test_bright_ds,
         test_dark_ds,
         test_q_ds,
@@ -182,6 +204,7 @@ def start_cifar10_brightness_run(
             train_orig_ds,
             train_ds_b,
             test_normal_ds,
+            test_uniform_ds,
             test_bright_ds,
             test_dark_ds,
             test_q_ds,
@@ -350,6 +373,81 @@ def start_cifar10_brightness_run(
         plt.hist(mpe_b.cpu().numpy(), bins=50)
         mlflow.log_figure(plt.gcf(), "train_mpe_hist.pdf")
         plt.clf()
+
+        # all explanations on test_uniform_ds
+        test_uniform_dl = DataLoader(
+            test_uniform_ds,
+            batch_size=batch_sizes["resnet"],
+            shuffle=False,
+            pin_memory=True,
+            num_workers=2,
+        )
+        model.eval_acc(test_uniform_dl, device)
+        # this should have the same order as the actual data
+        # so i can use the first value of each data-point to get the actual brightness value (x-axis)
+        # and the explanation can be on the y axis
+        ll_expl = model.explain_ll(test_uniform_dl, device, True)
+        p_expl = model.explain_posterior(test_uniform_dl, device, True)
+        mpe_expl = model.explain_mpe(test_uniform_dl, device, True)
+
+        # bin the x-axis values. They go from -200 to 200, so with 20 bins, each bin is 20 wide
+        bins = np.linspace(-300, 300, 21)
+        print("bins:", bins)
+        mpe_expl = torch.cat(mpe_expl, dim=0)
+        print("ds: ", test_uniform_ds)
+        print("ds len: ", len(test_uniform_ds))
+        brightness_vals = [
+            test_uniform_ds[i][0][0].item() for i in range(len(test_uniform_ds))
+        ]
+        print("brightness_vals: ", brightness_vals)
+        bright_bins = np.digitize(brightness_vals, bins)
+        print("bright_bins: ", bright_bins)
+
+        # compute acc of each bin
+        accs = [
+            model.eval_acc(
+                DataLoader(
+                    [
+                        test_uniform_ds[i]
+                        for i in range(len(test_uniform_ds))
+                        if bright_bins[i] == j
+                    ],
+                    batch_size=batch_sizes["resnet"],
+                    shuffle=False,
+                    pin_memory=True,
+                    num_workers=2,
+                ),
+                device,
+            )
+            for j in range(1, 21)
+        ]
+
+        ll_expl_binned = [
+            ll_expl[bright_bins == i].mean().cpu().numpy() for i in range(1, 21)
+        ]
+        p_expl_binned = [
+            p_expl[bright_bins == i].mean().cpu().numpy() for i in range(1, 21)
+        ]
+        mpe_expl_binned = [
+            mpe_expl[bright_bins == i].mean().cpu().numpy() for i in range(1, 21)
+        ]
+        # normalize the explanations
+        ll_expl_binned = (ll_expl_binned - np.min(ll_expl_binned)) / (
+            np.max(ll_expl_binned) - np.min(ll_expl_binned)
+        )
+        p_expl_binned = (p_expl_binned - np.min(p_expl_binned)) / (
+            np.max(p_expl_binned) - np.min(p_expl_binned)
+        )
+        mpe_expl_binned = (mpe_expl_binned - np.min(mpe_expl_binned)) / (
+            np.max(mpe_expl_binned) - np.min(mpe_expl_binned)
+        )
+
+        from plotting_utils import plot_brightness_binned
+
+        fig = plot_brightness_binned(
+            bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_binned
+        )
+        mlflow.log_figure(fig, "brightness_expl.pdf")
 
         # plot mpe histogram tests
         normal_dl = DataLoader(

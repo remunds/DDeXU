@@ -179,3 +179,32 @@ def explain_plot(
 
     plt.tight_layout()
     return fig
+
+
+def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_binned):
+    # plot ll, p and mpe, in one plot where x-axis is the brightness value (bins) and y-axis is the explanation value
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(
+        bins[:-1], accs, label="accuracy", marker="o", linewidth=1.5, linestyle="--"
+    )
+    ax.plot(bins[:-1], ll_expl_binned, label="ll", marker="o", linewidth=1.5)
+    ax.plot(bins[:-1], p_expl_binned, label="p", marker="o", linewidth=1.5)
+    ax.plot(bins[:-1], mpe_expl_binned, label="mpe", marker="o", linewidth=1.5)
+    ax.set_xlabel("Brightness Corruption")
+    ax.set_ylabel("Explanations")
+    ax.grid(True)
+
+    # Increase thickness of lines slightly
+    ax.spines["bottom"].set_linewidth(1.5)
+    ax.spines["left"].set_linewidth(1.5)
+    ax.spines["top"].set_linewidth(1.5)
+    ax.spines["right"].set_linewidth(1.5)
+
+    # Make axis labels better readable
+
+    ax.tick_params(axis="both", which="major", labelsize=10)
+
+    ax.legend(loc="upper left", fontsize=10).set_zorder(10)
+
+    plt.tight_layout()
+    return fig
