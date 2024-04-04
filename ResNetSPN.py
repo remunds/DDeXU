@@ -483,9 +483,10 @@ class EinetUtils:
             # use dl to compute log_p_x_g_y
             log_p_x_g_y = self.eval_ll(dl, device, return_all=True)
         posteriors_log = self.eval_posterior(log_p_x_g_y, device, dl, return_all=True)
+        # check if contains nan
         # use softmax to convert logs to probs
         posteriors = torch.softmax(posteriors_log, dim=1)
-        entropy = -torch.sum(posteriors * torch.log(posteriors), dim=1)
+        entropy = -torch.sum(posteriors * posteriors_log, dim=1)
         if return_all:
             return entropy  # (N)
         return torch.mean(entropy).item()  # scalar
@@ -2564,6 +2565,17 @@ class EfficientNetDropout(nn.Module, EinetUtils):
         self.hidden = x
         self.uncertainty = last_layer_results.var(axis=0)
         return self.backbone.classifier(x)
+
+    def get_uncertainty(self, dl, device, return_all=False):
+        uncertainties = []
+        for data, target in dl:
+            data, target = data.to(device), target.to(device)
+            output = self(data)
+            uncertainties.append(self.uncertainty)
+        uncertainties = torch.stack(uncertainties)
+        if return_all:
+            return uncertainties
+        return uncertainties.mean()
 
 
 class EfficientNetEnsemble(nn.Module, EinetUtils):

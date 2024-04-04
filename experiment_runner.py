@@ -1141,6 +1141,7 @@ trained_models = {
     },
     "cifar10-c-calib": {
         "EfficientNetSPN": "279248034225110540/f3752cea01f7472aade2e60dbf8fedcb/artifacts/model",
+        "EfficientNetDropout": "279248034225110540/15be95b476074c8f81e9c9e9829e6288/artifacts/model",
     },
     "dirty-mnist": {
         "hybrid": {
@@ -1195,8 +1196,13 @@ for d in dataset:
             run_conv(d, l, "end-to-end", m, pretrained_path=None)
             continue
         elif "GMM" in m or "Dropout" in m or "Ensemble" in m:
+            # pretrained_path = trained_models[d][m]
+            # pretrained_path = (
+            #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
+            # )
             l = "discriminative"
             run_conv(d, l, "backbone_only", m, pretrained_path=None)
+            # run_conv(d, l, "eval_only", m, pretrained_path=pretrained_path)
             continue
         elif "SPN" in m:
             for l in loss:

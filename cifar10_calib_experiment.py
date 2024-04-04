@@ -338,8 +338,8 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         print("Eval OOD SVHN")
         svhn_ll = model.eval_ll(svhn_test_dl, device, return_all=True)
         svhn_ll_marg = model.eval_ll_marg(svhn_ll, device, return_all=True)
-        mlflow.log_metric("svhn_ll_marg", svhn_ll_marg.mean().item())
         svhn_entropy = model.eval_entropy(svhn_ll, device, return_all=True)
+        mlflow.log_metric("svhn_ll_marg", svhn_ll_marg.mean().item())
         mlflow.log_metric("svhn_entropy", torch.mean(svhn_entropy).item())
 
         (_, _, _), (_, _, _), auroc, auprc = model.eval_ood(
@@ -353,6 +353,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         )
         mlflow.log_metric("auroc_svhn_ll_marg", auroc)
         mlflow.log_metric("auprc_svhn_ll_marg", auprc)
+
         print("Done OOD SVHN")
 
         # train: 50k, 32, 32, 3
