@@ -208,7 +208,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
         )
-    elif "SNGP" in model:
+    elif "SNGP" in model or "Dropout" in model or "Ensemble" in model:
         model_params = dict(
             model=model,
             num_classes=10,
@@ -1046,8 +1046,8 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    "svhn-c-calib",
     "cifar10-c-calib",
+    "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
@@ -1063,9 +1063,9 @@ models = [
     # "ConvResNetDDU",
     # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    # "EfficientNetDropout",
+    "EfficientNetDropout",
     # "EfficientNetEnsemble",
-    "EfficientNetSNGP",
+    # "EfficientNetSNGP",
 ]
 pretrained_backbones = {
     # acc: 1
@@ -1194,7 +1194,7 @@ for d in dataset:
             l = "discriminative"
             run_conv(d, l, "end-to-end", m, pretrained_path=None)
             continue
-        elif "GMM" in m:
+        elif "GMM" in m or "Dropout" in m or "Ensemble" in m:
             l = "discriminative"
             run_conv(d, l, "backbone_only", m, pretrained_path=None)
             continue

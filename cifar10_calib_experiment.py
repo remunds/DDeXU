@@ -215,6 +215,13 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetDropout":
+            from ResNetSPN import EfficientNetDropout
+
+            model = EfficientNetDropout(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         elif model_name == "EfficientNetGMM":
             from ResNetSPN import EfficientNetGMM
 
@@ -282,8 +289,8 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
             mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
+        # if train_params["num_epochs"] == 0:
+        #     return lowest_val_loss
 
         # Evaluate
         eval_dict = {}

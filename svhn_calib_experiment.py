@@ -168,6 +168,20 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetDropout":
+            from ResNetSPN import EfficientNetDropout
+
+            model = EfficientNetDropout(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "EfficientNetEnsemble":
+            from ResNetSPN import EfficientNetEnsemble
+
+            model = EfficientNetEnsemble(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         elif model_name == "EfficientNetGMM":
             from ResNetSPN import EfficientNetGMM
 

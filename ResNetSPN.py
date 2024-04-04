@@ -2511,7 +2511,8 @@ class EfficientNetDropout(nn.Module, EinetUtils):
             padding=(1, 1),
             bias=False,
         )
-        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
+        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
         # apply spectral normalization
         replace_layers_rec(model)
         return model
@@ -2530,13 +2531,13 @@ class EfficientNetDropout(nn.Module, EinetUtils):
         x = self.backbone.features(x)
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
+        x = self.backbone.pre_classifier(x)
         return x
 
     def forward(self, x):
         iterations = 1
         if self.uncert_head:
-            iterations = 15
-
+            iterations = 10
         last_layer_results = []
         for i in range(iterations):
             # x is flattened
@@ -2553,13 +2554,14 @@ class EfficientNetDropout(nn.Module, EinetUtils):
 
             # feed through resnet
             intermed = self.forward_hidden(intermed)
-            self.hidden = intermed
+            # self.hidden = intermed
 
             # Dropout before classifier
             intermed = F.dropout(intermed, p=0.2, training=True)
             last_layer_results.append(intermed)
         last_layer_results = torch.stack(last_layer_results)
         x = last_layer_results.mean(axis=0)
+        self.hidden = x
         self.uncertainty = last_layer_results.var(axis=0)
         return self.backbone.classifier(x)
 
@@ -2616,7 +2618,8 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
             padding=(1, 1),
             bias=False,
         )
-        model.classifier = torch.nn.Linear(1280, self.num_classes)
+        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
+        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
         # apply spectral normalization
         replace_layers_rec(model)
         return model
@@ -2637,6 +2640,7 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
             intermed = b.features(x)
             intermed = b.avgpool(intermed)
             intermed = torch.flatten(intermed, 1)
+            intermed = b.pre_classifier(intermed)
             xs.append(intermed)
         xs = torch.stack(xs)
         return xs
