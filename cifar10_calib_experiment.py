@@ -135,10 +135,11 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # load datasets
         train_ds, valid_ds, test_ds, test_transformer = load_datasets()
+        batch_size = batch_sizes["resnet"]
 
         train_dl = DataLoader(
             train_ds,
-            batch_size=batch_sizes["resnet"],
+            batch_size=batch_size,
             shuffle=True,
             num_workers=4,
             pin_memory=True,
@@ -146,14 +147,14 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         )
         valid_dl = DataLoader(
             valid_ds,
-            batch_size=batch_sizes["resnet"],
+            batch_size=batch_size,
             shuffle=False,
             num_workers=2,
             pin_memory=True,
             persistent_workers=True,
         )
 
-        test_dl = DataLoader(test_ds, batch_size=batch_sizes["resnet"], shuffle=False)
+        test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
         # Create model
         model_name = model_params["model"]
@@ -222,6 +223,22 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetDet":
+            from ResNetSPN import EfficientNetDet
+
+            model = EfficientNetDet(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "EfficientNetEnsemble":
+            from ResNetSPN import EfficientNetEnsemble
+
+            model = EfficientNetEnsemble(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+            for m in model.members:
+                m.to(device)
         elif model_name == "EfficientNetGMM":
             from ResNetSPN import EfficientNetGMM
 
@@ -330,7 +347,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
         svhn_test_ds = load_svhn_test()
         svhn_test_dl = DataLoader(
             svhn_test_ds,
-            batch_size=batch_sizes["resnet"],
+            batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
             num_workers=2,
@@ -407,7 +424,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         cifar10_c_dl = DataLoader(
             cifar10_c_ds,
-            batch_size=batch_sizes["resnet"],
+            batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
             num_workers=4,
@@ -463,7 +480,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
                 )
                 test_dl = DataLoader(
                     corrupt_test_ds,
-                    batch_size=batch_sizes["resnet"],
+                    batch_size=batch_size,
                     shuffle=False,
                     pin_memory=True,
                     num_workers=1,

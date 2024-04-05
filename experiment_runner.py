@@ -208,7 +208,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
         )
-    elif "SNGP" in model or "Dropout" in model or "Ensemble" in model:
+    else:
         model_params = dict(
             model=model,
             num_classes=10,
@@ -218,6 +218,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             num_hidden=64,  # 16 too low, 32 worked well, failed with 128 already
             # spec_norm_bound=20,  # i think 7 might be good for cifar etc.
         )
+    if "Ensemble" in model:
+        model_params["ensemble_paths"] = ensemble_members
+
     train_params = dict(
         pretrained_path=pretrained_path,
         # learning_rate_warmup=0.035,
@@ -1047,7 +1050,7 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     "cifar10-c-calib",
-    "svhn-c-calib",
+    # "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
@@ -1058,15 +1061,28 @@ dense_models = [
     "DenseResNetSNGP",
 ]
 models = [
+    "EfficientNetDet",
     # "EfficientNetSPN",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
     # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    "EfficientNetDropout",
+    # "EfficientNetDropout",
     # "EfficientNetEnsemble",
     # "EfficientNetSNGP",
 ]
+
+ensemble_members = [
+    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
+    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
+    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
+    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
+    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
+]
+ensemble_members = [
+    f"/data_docker/mlartifacts/{m}/state_dict.pth" for m in ensemble_members
+]
+
 pretrained_backbones = {
     # acc: 1
     "two-moons": "814351535813234998/48fe608aa28642968dfcaad0201a47e0/artifacts/model",
@@ -1195,14 +1211,20 @@ for d in dataset:
             l = "discriminative"
             run_conv(d, l, "end-to-end", m, pretrained_path=None)
             continue
-        elif "GMM" in m or "Dropout" in m or "Ensemble" in m:
+        elif "Det" in m or "GMM" in m or "Dropout" in m or "Ensemble" in m:
             # pretrained_path = trained_models[d][m]
             # pretrained_path = (
             #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
             # )
             l = "discriminative"
             run_conv(d, l, "backbone_only", m, pretrained_path=None)
-            # run_conv(d, l, "eval_only", m, pretrained_path=pretrained_path)
+            # run_conv(d, l, "eval_only", m, pretrained_path=None)
+            continue
+        elif "Det" in m:
+            l = "discriminative"
+            for i in range(5):
+                torch.manual_seed(i)
+                run_conv(d, l, "backbone_only", m, pretrained_path=None)
             continue
         elif "SPN" in m:
             for l in loss:

@@ -175,6 +175,13 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+        elif model_name == "EfficientNetDet":
+            from ResNetSPN import EfficientNetDet
+
+            model = EfficientNetDet(
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
         elif model_name == "EfficientNetEnsemble":
             from ResNetSPN import EfficientNetEnsemble
 
@@ -182,6 +189,8 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
                 explaining_vars=[],  # for calibration test, we don't need explaining vars
                 **model_params,
             )
+            for m in model.members:
+                m.to(device)
         elif model_name == "EfficientNetGMM":
             from ResNetSPN import EfficientNetGMM
 

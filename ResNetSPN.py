@@ -59,8 +59,8 @@ class EinetUtils:
             # val_acc = self.eval_acc(dl_valid, device)
             # print(f"pretrained model validation accuracy: {val_acc}")
             # mlflow.log_metric(key="pretrained_val_acc", value=val_acc)
-            if num_epochs == 0 and warmup_epochs == 0:
-                return 0.0
+        if num_epochs == 0 and warmup_epochs == 0:
+            return 0.0
 
         self.train()
         self.deactivate_uncert_head()
@@ -1787,6 +1787,94 @@ from torchvision.models import efficientnet_v2_s
 from torch.nn.utils.parametrizations import spectral_norm as spectral_norm_torch
 
 
+class EfficientNetDet(nn.Module, EinetUtils):
+    """
+    EfficientNetV2-S. Optionally spectral normalized.
+    """
+
+    def __init__(
+        self,
+        num_classes,
+        image_shape,  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        num_hidden=32,
+        spectral_normalization=True,
+        **kwargs,
+    ):
+        super(EfficientNetDet, self).__init__()
+        self.num_classes = num_classes
+        self.explaining_vars = explaining_vars
+        self.spectral_normalization = spectral_normalization
+        self.spec_norm_bound = spec_norm_bound
+        self.image_shape = image_shape
+        self.marginalized_scopes = None
+        # self.num_hidden = 1280  # from efficientnet_s
+        self.num_hidden = num_hidden
+        self.backbone = self.make_efficientnet()
+
+    def make_efficientnet(self):
+        def replace_layers_rec(layer):
+            """Recursively apply spectral normalization to Conv and Linear layers."""
+            if len(list(layer.children())) == 0:
+                if isinstance(layer, torch.nn.Conv2d):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+                elif isinstance(layer, torch.nn.Linear):
+                    layer = spectral_norm_torch(layer)
+                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
+            else:
+                for child in list(layer.children()):
+                    replace_layers_rec(child)
+
+        model = efficientnet_v2_s()
+        model.features[0][0] = torch.nn.Conv2d(
+            self.image_shape[0],
+            24,
+            kernel_size=(3, 3),
+            stride=(2, 2),
+            padding=(1, 1),
+            bias=False,
+        )
+        # model.classifier = torch.nn.Linear(1280, self.num_classes)
+        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
+        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
+        # apply spectral normalization
+        if self.spectral_normalization:
+            replace_layers_rec(model)
+        return model
+
+    def forward_hidden(self, x):
+        x = self.backbone.features(x)
+        x = self.backbone.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.backbone.pre_classifier(x)
+        return x
+
+    def forward(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for resnet
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through backbone
+        x = self.forward_hidden(x)
+        self.hidden = x
+
+        return self.backbone.classifier(x)  # default classifier
+
+    def activate_uncert_head(self, deactivate_backbone=True):
+        pass
+
+    def deactivate_uncert_head(self):
+        pass
+
+
 class EfficientNetSPN(nn.Module, EinetUtils):
     """
     Spectral normalized EfficientNetV2-S with einet as the output layer.
@@ -2580,8 +2668,10 @@ class EfficientNetDropout(nn.Module, EinetUtils):
 
 class EfficientNetEnsemble(nn.Module, EinetUtils):
     """
-    Ensemble of EfficientNets.
-    For training, keep uncert_head deactivated, activate for sampling-inference
+    Wrapper for an Ensemble of EfficientNets.
+    Train N EfficientNetDet first, then use
+    this class to load the pretrained models.
+    Make sure to use the same parameters.
     """
 
     def __init__(
@@ -2590,96 +2680,43 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
         image_shape,  # (C, H, W)
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
-        num_hidden=1280,
-        num_ensembles=5,
+        num_hidden=32,
+        spectral_normalization=True,
+        ensemble_paths=[],
         **kwargs,
     ):
         super(EfficientNetEnsemble, self).__init__()
         self.num_classes = num_classes
         self.explaining_vars = explaining_vars
-        self.spec_norm_bound = spec_norm_bound
         self.image_shape = image_shape
         self.marginalized_scopes = None
-        self.num_hidden = num_hidden
-        self.backbones = [self.make_efficientnet() for _ in range(num_ensembles)]
-
-    def make_efficientnet(self):
-        def replace_layers_rec(layer):
-            import torchvision
-
-            """Recursively apply spectral normalization to Conv and Linear layers."""
-            if len(list(layer.children())) == 0:
-                if isinstance(layer, torch.nn.Conv2d):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
-                elif isinstance(layer, torch.nn.Linear):
-                    layer = spectral_norm_torch(layer)
-                    # layer = spectral_norm(layer, norm_bound=self.spec_norm_bound)
-                elif isinstance(layer, torchvision.ops.StochasticDepth):
-                    layer = StochasticDepthActive(layer.p, layer.mode)
-            else:
-                for child in list(layer.children()):
-                    replace_layers_rec(child)
-
-        model = efficientnet_v2_s()
-        model.features[0][0] = torch.nn.Conv2d(
-            self.image_shape[0],
-            24,
-            kernel_size=(3, 3),
-            stride=(2, 2),
-            padding=(1, 1),
-            bias=False,
-        )
-        model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
-        model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
-        # apply spectral normalization
-        replace_layers_rec(model)
-        return model
+        self.members = []
+        for path in ensemble_paths:
+            member = EfficientNetDet(
+                num_classes,
+                image_shape,
+                explaining_vars,
+                spec_norm_bound,
+                num_hidden,
+                spectral_normalization,
+            )
+            member.load_state_dict(torch.load(path))
+            self.members.append(member)
 
     def activate_uncert_head(self, deactivate_backbone=True):
-        """ """
-        self.uncert_head = True
-        return
+        pass
 
     def deactivate_uncert_head(self):
-        """ """
-        self.uncert_head = False
-        return
-
-    def forward_hidden(self, x):
-        xs = []
-        for b in self.backbones:
-            intermed = b.features(x)
-            intermed = b.avgpool(intermed)
-            intermed = torch.flatten(intermed, 1)
-            intermed = b.pre_classifier(intermed)
-            xs.append(intermed)
-        xs = torch.stack(xs)
-        return xs
-
-    def forward_ensemble_classifier(self, xs):
-        results = []
-        for i, b in enumerate(self.backbones):
-            results.append(b.classifier(xs[i]))
-        return results
+        pass
 
     def forward(self, x):
-        # x is flattened
-        # extract explaining vars
-        exp_vars = x[:, self.explaining_vars]
-        # mask out explaining vars for resnet
-        mask = torch.ones_like(x, dtype=torch.bool)
-        mask[:, self.explaining_vars] = False
-        intermed = x[mask]
-        # reshape to image
-        intermed = intermed.reshape(
-            -1, self.image_shape[0], self.image_shape[1], self.image_shape[2]
-        )
-
-        # feed through resnet
-        intermed = self.forward_hidden(intermed)
-        self.hidden = intermed
-        results = self.forward_ensemble_classifier(intermed)
-
+        """
+        Forward pass through the ensemble.
+        Simply averages the results of all members.
+        """
+        results = []
+        for member in self.members:
+            results.append(member(x))
         results = torch.stack(results)
+        results = results.mean(axis=0)
         return results
