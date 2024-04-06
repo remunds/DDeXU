@@ -18,6 +18,7 @@ from dirty_mnist_experiment import start_dirty_mnist_run
 from cifar10_expl_experiment import start_cifar10_expl_run
 from cifar10_expl_brightness import start_cifar10_brightness_run
 from cifar10_calib_experiment import start_cifar10_calib_run
+from cifar100_calib_experiment import start_cifar100_calib_run
 from svhn_calib_experiment import start_svhn_calib_run
 from svhn_expl_experiment import start_svhn_expl_run
 
@@ -221,6 +222,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     if "Ensemble" in model:
         model_params["ensemble_paths"] = ensemble_members
 
+    if "cifar100" in dataset:
+        model_params["num_classes"] = 100
+
     train_params = dict(
         pretrained_path=pretrained_path,
         # learning_rate_warmup=0.035,
@@ -332,6 +336,16 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif "cifar10-c-calib" in dataset:
         try:
             start_cifar10_calib_run(
+                run_name, batch_sizes, model_params, train_params, None
+            )
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            mlflow.set_tag("pruned", e)
+            mlflow.end_run()
+    elif "cifar100-c-calib" in dataset:
+        try:
+            start_cifar100_calib_run(
                 run_name, batch_sizes, model_params, train_params, None
             )
         except Exception as e:
@@ -1035,8 +1049,8 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 # Zweites Tuning
 loss = [
     "hybrid",
-    # "hybrid_mid_low",
-    # "hybrid_mid_high",
+    "hybrid_mid_low",
+    "hybrid_mid_high",
     # "hybrid_high",
     # "hybrid_low",
     # "generative",
@@ -1049,7 +1063,8 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    "cifar10-c-calib",
+    # "cifar10-c-calib",
+    "cifar100-c-calib",
     # "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
@@ -1061,15 +1076,15 @@ dense_models = [
     "DenseResNetSNGP",
 ]
 models = [
+    "EfficientNetSPN",
     "EfficientNetDet",
-    # "EfficientNetSPN",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
     # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
     # "EfficientNetDropout",
     # "EfficientNetEnsemble",
-    # "EfficientNetSNGP",
+    "EfficientNetSNGP",
 ]
 
 ensemble_members = [
@@ -1211,7 +1226,7 @@ for d in dataset:
             l = "discriminative"
             run_conv(d, l, "end-to-end", m, pretrained_path=None)
             continue
-        elif "Det" in m or "GMM" in m or "Dropout" in m or "Ensemble" in m:
+        elif "GMM" in m or "Dropout" in m or "Ensemble" in m:
             # pretrained_path = trained_models[d][m]
             # pretrained_path = (
             #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
@@ -1223,6 +1238,7 @@ for d in dataset:
         elif "Det" in m:
             l = "discriminative"
             for i in range(5):
+                print(f"Ensemble Member: {i}")
                 torch.manual_seed(i)
                 run_conv(d, l, "backbone_only", m, pretrained_path=None)
             continue
