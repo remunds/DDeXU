@@ -1799,7 +1799,7 @@ class EfficientNetDet(nn.Module, EinetUtils):
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
         num_hidden=32,
-        spectral_normalization=True,
+        spectral_normalization=False,
         **kwargs,
     ):
         super(EfficientNetDet, self).__init__()
@@ -2562,6 +2562,7 @@ class EfficientNetDropout(nn.Module, EinetUtils):
         explaining_vars=[],  # indices of variables that should be explained
         spec_norm_bound=0.9,
         num_hidden=1280,
+        spectral_normalization=False,
         **kwargs,
     ):
         super(EfficientNetDropout, self).__init__()
@@ -2572,6 +2573,7 @@ class EfficientNetDropout(nn.Module, EinetUtils):
         self.marginalized_scopes = None
         self.num_hidden = num_hidden
         self.backbone = self.make_efficientnet()
+        self.spectral_normalization = spectral_normalization
 
     def make_efficientnet(self):
         def replace_layers_rec(layer):
@@ -2603,7 +2605,8 @@ class EfficientNetDropout(nn.Module, EinetUtils):
         model.pre_classifier = torch.nn.Linear(1280, self.num_hidden)
         model.classifier = torch.nn.Linear(self.num_hidden, self.num_classes)
         # apply spectral normalization
-        replace_layers_rec(model)
+        if self.spectral_normalization:
+            replace_layers_rec(model)
         return model
 
     def activate_uncert_head(self, deactivate_backbone=True):

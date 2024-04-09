@@ -216,7 +216,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             image_shape=image_shape,
             train_batch_size=batch_sizes["resnet"],
             spec_norm_bound=7,
-            num_hidden=64,  # 16 too low, 32 worked well, failed with 128 already
+            num_hidden=32,  # SNGP: 16 too low, 32 worked well, failed with 128 already
             # spec_norm_bound=20,  # i think 7 might be good for cifar etc.
         )
     if "Ensemble" in model:
@@ -227,8 +227,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
 
     train_params = dict(
         pretrained_path=pretrained_path,
-        # learning_rate_warmup=0.035,
-        learning_rate_warmup=0.03,
+        # learning_rate_warmup=0.03, # didn't work anymore for Det and cifar100
+        learning_rate_warmup=0.003,
         early_stop=30,
     )
     if loss == "discriminative" or loss == "noloss":
@@ -1050,9 +1050,9 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 loss = [
     "hybrid",
     "hybrid_mid_low",
-    "hybrid_mid_high",
+    # "hybrid_mid_high",
     # "hybrid_high",
-    # "hybrid_low",
+    "hybrid_low",
     # "generative",
     # "discriminative",
 ]
@@ -1076,13 +1076,13 @@ dense_models = [
     "DenseResNetSNGP",
 ]
 models = [
-    "EfficientNetSPN",
+    # "EfficientNetSPN",
     "EfficientNetDet",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
     # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    # "EfficientNetDropout",
+    "EfficientNetDropout",
     # "EfficientNetEnsemble",
     "EfficientNetSNGP",
 ]

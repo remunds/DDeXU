@@ -37,7 +37,7 @@ def load_datasets():
     # download cifar100-c
     if not os.path.exists(cifar100_c_path_complete + ".tar"):
         print("Downloading CIFAR-100-C...")
-        os.system(f"wget {cifar100_c_url} -O {cifar100_c_path_complete}")
+        os.system(f"wget {cifar100_c_url} -O {cifar100_c_path_complete}.tar")
 
         print("Extracting CIFAR-100-C...")
         os.system(f"tar -xvf {cifar100_c_path_complete}.tar")
