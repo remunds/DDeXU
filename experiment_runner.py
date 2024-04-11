@@ -208,6 +208,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spec_norm_bound=7,  # only for ConvResNetSPN
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
+            num_hidden=32,
         )
     else:
         model_params = dict(
@@ -228,7 +229,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     train_params = dict(
         pretrained_path=pretrained_path,
         # learning_rate_warmup=0.03, # didn't work anymore for Det and cifar100
-        learning_rate_warmup=0.003,
+        learning_rate_warmup=0.0005,
         early_stop=30,
     )
     if loss == "discriminative" or loss == "noloss":
@@ -286,9 +287,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     # elif "EfficientNetSNGP" in model:
     #     lr = 0.005
     elif "EfficientNet" in model:
-        lr = 0.015
-        # lr = 0.02
-        # lr = 0.05
+        # lr = 0.015 # this used to work good and fast
+        lr = 0.007
     else:
         raise ValueError(
             "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
@@ -1048,7 +1048,7 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    "hybrid",
+    # "hybrid",
     "hybrid_mid_low",
     # "hybrid_mid_high",
     # "hybrid_high",
@@ -1076,8 +1076,8 @@ dense_models = [
     "DenseResNetSNGP",
 ]
 models = [
-    # "EfficientNetSPN",
-    "EfficientNetDet",
+    "EfficientNetSPN",
+    # "EfficientNetDet",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
     # "EfficientNetGMM",

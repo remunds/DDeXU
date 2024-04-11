@@ -106,6 +106,19 @@ def calibration_plot(confidences, accs, ece, nll, name):
     plt.clf()
 
 
+def calibration_plot_multi(confidences, accs, names):
+    fig, ax = plt.subplots()
+    # Plot the calibration curve
+    for i in range(len(names)):
+        ax.plot(confidences[i], accs[i], marker="o", label=names[i])
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray")  # Diagonal line for reference
+    ax.set_xlabel("mean confidence")
+    ax.set_ylabel("observed accuracy")
+    ax.legend()
+    mlflow.log_figure(fig, f"calibration_multi.pdf")
+    plt.clf()
+
+
 # Explaining variables vs. uncertainty/confidence
 def explain_plot(
     corruptions,

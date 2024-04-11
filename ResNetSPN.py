@@ -643,18 +643,19 @@ class EinetUtils:
         mlflow.log_metric(key=f"mean_nll_{name}", value=mean_nll)
 
         # equal frequency binning
-        conf, acc = equal_frequency_binning(
+        conf_freq, acc_freq = equal_frequency_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
-        ece = compute_ece(conf, acc)
+        ece = compute_ece(conf_freq, acc_freq)
         mlflow.log_metric(key=f"ece_eq_freq_{name}", value=ece)
-        calibration_plot(conf, acc, ece, mean_nll, f"eq_freq_{name}")
-        conf, acc = equal_width_binning(
+        calibration_plot(conf_freq, acc_freq, ece, mean_nll, f"eq_freq_{name}")
+        conf_w, acc_w = equal_width_binning(
             confidences, predictions, labels, num_bins=n_bins
         )
-        ece = compute_ece(conf, acc)
+        ece = compute_ece(conf_w, acc_w)
         mlflow.log_metric(key=f"ece_eq_width_{name}", value=ece)
-        calibration_plot(conf, acc, ece, mean_nll, f"eq_width_{name}")
+        calibration_plot(conf_w, acc_w, ece, mean_nll, f"eq_width_{name}")
+        return (conf_freq, acc_freq), (conf_w, acc_w)
 
     # taken from https://github.com/omegafragger/DDU/blob/main/metrics/ood_metrics.py
     def eval_ood(self, uncert_id, uncert_ood, device, confidence=False):
@@ -2572,8 +2573,8 @@ class EfficientNetDropout(nn.Module, EinetUtils):
         self.image_shape = image_shape
         self.marginalized_scopes = None
         self.num_hidden = num_hidden
-        self.backbone = self.make_efficientnet()
         self.spectral_normalization = spectral_normalization
+        self.backbone = self.make_efficientnet()
 
     def make_efficientnet(self):
         def replace_layers_rec(layer):
