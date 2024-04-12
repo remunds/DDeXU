@@ -542,7 +542,9 @@ class EinetUtils:
             return uncertainty  # (N)
         return torch.mean(uncertainty).item()  # scalar
 
-    def eval_calibration(self, log_p_x_g_y, device, name, dl, n_bins=20):
+    def eval_calibration(
+        self, log_p_x_g_y, device, name, dl, n_bins=20, method="posterior"
+    ):
         """Computes the expected calibration error and plots the calibration curve."""
         self.eval()
         assert dl is not None
@@ -556,6 +558,23 @@ class EinetUtils:
         # use softmax to convert logs to probs
         probs = torch.softmax(posteriors_log, dim=1)
         confidences, predictions = torch.max(probs, dim=1)
+        if method == "entropy":
+            name += "_entropy"
+            # replace confidences with entropies
+            entropies = self.eval_entropy(log_p_x_g_y, device, dl, return_all=True)
+            confidences = entropies * -1
+            # normalize to [0, 1]
+            confidences = (confidences - torch.min(confidences)) / (
+                torch.max(confidences) - torch.min(confidences)
+            )
+
+        if method == "nll":
+            name += "_nll"
+            nll = -log_p_x_g_y.mean(dim=1)
+            # normalize to [0, 1]
+            nll = (nll - torch.min(nll)) / (torch.max(nll) - torch.min(nll))
+            confidences = nll
+
         print(confidences[:5])
         from plotting_utils import histogram_plot, calibration_plot
 
@@ -1188,9 +1207,11 @@ class ConvResNetSPN(ResNet, EinetUtils):
         self.einet_dropout = einet_dropout
         self.image_shape = image_shape
         self.marginalized_scopes = None
+        self.num_hidden = 512 * block.expansion
         self.einet = self.make_einet_output_layer(
-            512 * block.expansion + len(explaining_vars), num_classes
+            self.num_hidden + len(explaining_vars), num_classes
         )
+        self.num_classes = num_classes
 
     def activate_uncert_head(self, deactivate_backbone=True):
         """
@@ -1288,6 +1309,7 @@ class ConvResNetSPN(ResNet, EinetUtils):
 
         # feed through resnet
         x = self.forward_hidden(x)
+        self.hidden = x
 
         if self.einet_active:
             # classifier is einet, so we need to concatenate the explaining vars

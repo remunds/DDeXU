@@ -260,7 +260,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = True
         train_params["num_epochs"] = 400
     elif training == "warmup":
-        train_params["warmup_epochs"] = 50
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = False
     elif training == "backbone_only":
         train_params["warmup_epochs"] = 400
@@ -1048,9 +1048,9 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 
 # Zweites Tuning
 loss = [
-    # "hybrid",
+    "hybrid",
     "hybrid_mid_low",
-    # "hybrid_mid_high",
+    "hybrid_mid_high",
     # "hybrid_high",
     "hybrid_low",
     # "generative",
@@ -1077,14 +1077,14 @@ dense_models = [
 ]
 models = [
     "EfficientNetSPN",
-    # "EfficientNetDet",
-    # "ConvResNetSPN",
+    "ConvResNetSPN",
     # "ConvResNetDDU",
-    # "EfficientNetGMM",
+    "EfficientNetGMM",
     # "ConvResNetDDUGMM",
+    "EfficientNetDet",
     "EfficientNetDropout",
     # "EfficientNetEnsemble",
-    "EfficientNetSNGP",
+    # "EfficientNetSNGP",
 ]
 
 ensemble_members = [

@@ -174,6 +174,7 @@ def start_cifar100_calib_run(run_name, batch_sizes, model_params, train_params, 
             del model_params["layers"]
             del model_params["spectral_normalization"]
             del model_params["mod"]
+            del model_params["num_hidden"]
 
             model = ConvResNetSPN(
                 block,
@@ -255,7 +256,7 @@ def start_cifar100_calib_run(run_name, batch_sizes, model_params, train_params, 
                 train_num_data=train_num_data,
                 **model_params,
             )
-        elif model_name == "ConvResnetDDUGMM":
+        elif model_name == "ConvResNetDDUGMM":
             from ResNetSPN import ConvResnetDDUGMM
             from net.resnet import BasicBlock, Bottleneck
 
@@ -341,7 +342,11 @@ def start_cifar100_calib_run(run_name, batch_sizes, model_params, train_params, 
 
         # Calibration of test
         print("evaluating calibration")
-        model.eval_calibration(orig_test_ll, device, "test", test_dl)
+        model.eval_calibration(
+            orig_test_ll, device, "test", test_dl, method="posterior"
+        )
+        model.eval_calibration(orig_test_ll, device, "test", test_dl, method="entropy")
+        model.eval_calibration(orig_test_ll, device, "test", test_dl, method="nll")
 
         # AUROC and AUPR for OOD detection vs SVHN
         svhn_test_ds = load_svhn_test()
@@ -455,7 +460,11 @@ def start_cifar100_calib_run(run_name, batch_sizes, model_params, train_params, 
 
         # evaluate calibration
         print("evaluating calibration")
-        model.eval_calibration(None, device, "test-c", cifar100_c_dl)
+        model.eval_calibration(
+            None, device, "test-c", cifar100_c_dl, method="posterior"
+        )
+        model.eval_calibration(None, device, "test-c", cifar100_c_dl, method="entropy")
+        model.eval_calibration(None, device, "test-c", cifar100_c_dl, method="nll")
         print("done evaluating calibration")
 
         del cifar100_c_ds, cifar100_c_dl
