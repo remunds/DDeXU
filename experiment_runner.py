@@ -182,6 +182,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     run_name = f"{loss}_{training}_{model}"
 
     batch_sizes = dict(resnet=512)
+    # batch_sizes = dict(resnet=125)
     if "mnist" in dataset:
         image_shape = (1, 28, 28)
     elif "cifar10" in dataset or "svhn" in dataset:
@@ -209,6 +210,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
             num_hidden=32,
+            model_size="l",
         )
     else:
         model_params = dict(
@@ -219,6 +221,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spec_norm_bound=7,
             num_hidden=32,  # SNGP: 16 too low, 32 worked well, failed with 128 already
             # spec_norm_bound=20,  # i think 7 might be good for cifar etc.
+            model_size="l",
         )
     if "Ensemble" in model:
         model_params["ensemble_paths"] = ensemble_members
@@ -1063,9 +1066,9 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    # "cifar10-c-calib",
+    "cifar10-c-calib",
+    "svhn-c-calib",
     "cifar100-c-calib",
-    # "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
@@ -1077,12 +1080,12 @@ dense_models = [
 ]
 models = [
     "EfficientNetSPN",
-    "ConvResNetSPN",
+    # "ConvResNetSPN",
     # "ConvResNetDDU",
-    "EfficientNetGMM",
+    # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
     "EfficientNetDet",
-    "EfficientNetDropout",
+    # "EfficientNetDropout",
     # "EfficientNetEnsemble",
     # "EfficientNetSNGP",
 ]

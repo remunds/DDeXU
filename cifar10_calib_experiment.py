@@ -174,6 +174,7 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             del model_params["layers"]
             del model_params["spectral_normalization"]
             del model_params["mod"]
+            del model_params["num_hidden"]
 
             model = ConvResNetSPN(
                 block,
@@ -341,7 +342,11 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # Calibration of test
         print("evaluating calibration")
-        model.eval_calibration(orig_test_ll, device, "test", test_dl)
+        model.eval_calibration(
+            orig_test_ll, device, "test", test_dl, method="posterior"
+        )
+        model.eval_calibration(orig_test_ll, device, "test", test_dl, method="entropy")
+        model.eval_calibration(orig_test_ll, device, "test", test_dl, method="nll")
 
         # AUROC and AUPR for OOD detection vs SVHN
         svhn_test_ds = load_svhn_test()
@@ -455,7 +460,9 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
 
         # evaluate calibration
         print("evaluating calibration")
-        model.eval_calibration(None, device, "test-c", cifar10_c_dl)
+        model.eval_calibration(None, device, "test-c", cifar10_c_dl, method="posterior")
+        model.eval_calibration(None, device, "test-c", cifar10_c_dl, method="entropy")
+        model.eval_calibration(None, device, "test-c", cifar10_c_dl, method="nll")
         print("done evaluating calibration")
 
         del cifar10_c_ds, cifar10_c_dl

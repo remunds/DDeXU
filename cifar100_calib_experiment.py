@@ -432,7 +432,7 @@ def start_cifar100_calib_run(run_name, batch_sizes, model_params, train_params, 
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=4,
+            num_workers=2,
         )
 
         # OOD vs CIFAR-10-C

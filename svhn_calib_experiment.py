@@ -126,6 +126,7 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
             del model_params["layers"]
             del model_params["spectral_normalization"]
             del model_params["mod"]
+            del model_params["num_hidden"]
 
             model = ConvResNetSPN(
                 block,
@@ -283,7 +284,15 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
 
         # calibration of test
         print("evaluating calibration")
-        model.eval_calibration(orig_test_ll, device, name="svhn", dl=test_dl)
+        model.eval_calibration(
+            orig_test_ll, device, name="svhn", dl=test_dl, method="posterior"
+        )
+        model.eval_calibration(
+            orig_test_ll, device, name="svhn", dl=test_dl, method="entropy"
+        )
+        model.eval_calibration(
+            orig_test_ll, device, name="svhn", dl=test_dl, method="nll"
+        )
         print("done evaluating calibration")
 
         # eval OOD
@@ -397,7 +406,13 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
 
         # evaluate calibration
         print("evaluating calibration on corrupted data")
-        model.eval_calibration(None, device, name="test-c", dl=svhn_c_dl)
+        model.eval_calibration(
+            None, device, name="test-c", dl=svhn_c_dl, method="posterior"
+        )
+        model.eval_calibration(
+            None, device, name="test-c", dl=svhn_c_dl, method="entropy"
+        )
+        model.eval_calibration(None, device, name="test-c", dl=svhn_c_dl, method="nll")
         print("done evaluating calibration on corrupted data")
 
         del svhn_c_ds, svhn_c_dl

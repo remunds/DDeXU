@@ -1806,7 +1806,7 @@ class AutoEncoderSPN(nn.Module, EinetUtils):
         return lowest_val_loss
 
 
-from torchvision.models import efficientnet_v2_s
+from torchvision.models import efficientnet_v2_s, efficientnet_v2_m, efficientnet_v2_l
 from torch.nn.utils.parametrizations import spectral_norm as spectral_norm_torch
 
 
@@ -1823,6 +1823,7 @@ class EfficientNetDet(nn.Module, EinetUtils):
         spec_norm_bound=0.9,
         num_hidden=32,
         spectral_normalization=False,
+        model_size="s",
         **kwargs,
     ):
         super(EfficientNetDet, self).__init__()
@@ -1834,6 +1835,7 @@ class EfficientNetDet(nn.Module, EinetUtils):
         self.marginalized_scopes = None
         # self.num_hidden = 1280  # from efficientnet_s
         self.num_hidden = num_hidden
+        self.model_size = model_size
         self.backbone = self.make_efficientnet()
 
     def make_efficientnet(self):
@@ -1850,7 +1852,15 @@ class EfficientNetDet(nn.Module, EinetUtils):
                 for child in list(layer.children()):
                     replace_layers_rec(child)
 
-        model = efficientnet_v2_s()
+        if self.model_size == "s":
+            model = efficientnet_v2_s()
+        elif self.model_size == "m":
+            model = efficientnet_v2_m()
+        elif self.model_size == "l":
+            model = efficientnet_v2_l()
+        else:
+            raise NotImplementedError
+
         model.features[0][0] = torch.nn.Conv2d(
             self.image_shape[0],
             24,
@@ -1916,6 +1926,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         einet_leaf_type="Normal",
         einet_dropout=0.0,
         num_hidden=32,
+        model_size="s",
         **kwargs,
     ):
         super(EfficientNetSPN, self).__init__()
@@ -1936,6 +1947,7 @@ class EfficientNetSPN(nn.Module, EinetUtils):
         self.marginalized_scopes = None
         # self.num_hidden = 1280  # from efficientnet_s
         self.num_hidden = num_hidden
+        self.model_size = model_size
         self.backbone = self.make_efficientnet()
         self.einet = self.make_einet_output_layer(
             self.num_hidden + len(explaining_vars), num_classes
@@ -1957,10 +1969,20 @@ class EfficientNetSPN(nn.Module, EinetUtils):
                 for child in list(layer.children()):
                     replace_layers_rec(child)
 
-        model = efficientnet_v2_s()
+        if self.model_size == "s":
+            model = efficientnet_v2_s()
+            out_channels = 24
+        elif self.model_size == "m":
+            model = efficientnet_v2_m()
+        elif self.model_size == "l":
+            out_channels = 32
+            model = efficientnet_v2_l()
+        else:
+            raise NotImplementedError
+
         model.features[0][0] = torch.nn.Conv2d(
             self.image_shape[0],
-            24,
+            out_channels,
             kernel_size=(3, 3),
             stride=(2, 2),
             padding=(1, 1),
