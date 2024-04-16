@@ -1246,6 +1246,8 @@ for d in dataset:
                 run_conv(d, l, "backbone_only", m, pretrained_path=None)
             continue
         elif "SPN" in m:
+            if d == "cifar10-c-calib":
+                continue
             for l in loss:
                 # pretrained_path = pretrained_backbones[d][m]
                 # # pretrained_path = trained_models[d][m]

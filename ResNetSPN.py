@@ -1854,16 +1854,18 @@ class EfficientNetDet(nn.Module, EinetUtils):
 
         if self.model_size == "s":
             model = efficientnet_v2_s()
+            out_channels = 24
         elif self.model_size == "m":
             model = efficientnet_v2_m()
         elif self.model_size == "l":
             model = efficientnet_v2_l()
+            out_channels = 32
         else:
             raise NotImplementedError
 
         model.features[0][0] = torch.nn.Conv2d(
             self.image_shape[0],
-            24,
+            out_channels,
             kernel_size=(3, 3),
             stride=(2, 2),
             padding=(1, 1),

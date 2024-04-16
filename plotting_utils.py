@@ -153,7 +153,7 @@ def explain_plot(
     for i in range(explanations.shape[1]):
         ax2.plot(
             explanations[:, i],
-            label=corruptions[i],
+            label=corruptions[i].replace("_", " "),
             color=colors[i],
             linestyle="dashed",
             marker="o",
@@ -201,12 +201,15 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
     ax.plot(
         bins[:-1], accs, label="accuracy", marker="o", linewidth=1.5, linestyle="--"
     )
-    ax.plot(bins[:-1], ll_expl_binned, label="ll", marker="o", linewidth=1.5)
-    ax.plot(bins[:-1], p_expl_binned, label="p", marker="o", linewidth=1.5)
-    ax.plot(bins[:-1], mpe_expl_binned, label="mpe", marker="o", linewidth=1.5)
+    ax.set_ylabel("Accuracy")
     ax.set_xlabel("Brightness Corruption")
-    ax.set_ylabel("Explanations")
     ax.grid(True)
+
+    ax2 = ax.twinx()
+    ax2.plot(bins[:-1], ll_expl_binned, label="ll", marker="o", linewidth=1.5)
+    ax2.plot(bins[:-1], p_expl_binned, label="posterior", marker="o", linewidth=1.5)
+    ax2.plot(bins[:-1], mpe_expl_binned, label="mpe", marker="o", linewidth=1.5)
+    ax2.set_ylabel("Explanations")
 
     # Increase thickness of lines slightly
     ax.spines["bottom"].set_linewidth(1.5)
