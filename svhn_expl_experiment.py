@@ -274,7 +274,7 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             trial=trial,
             **train_params,
         )
-
+        model.compute_normalization_values(train_dl, device)
         model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl, device)
         mlflow.log_metric("backbone_valid_acc", valid_acc)
@@ -285,8 +285,8 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
         elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
             mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
+        # if train_params["num_epochs"] == 0:
+        #     return lowest_val_loss
 
         # Evaluate
         model.eval()
@@ -362,6 +362,10 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
                 ] = expl_ll  # len: [1, num_expl_vars]
                 expl_mpe = model.explain_mpe(dl, device)
                 eval_dict[corruption][corr_level]["expl_mpe"] = expl_mpe.tolist()
+
+                expl_post = model.explain_posterior(dl, device)
+                eval_dict[corruption][corr_level]["expl_post"] = expl_post
+
         mlflow.log_dict(eval_dict, "eval_dict")
 
         overall_acc = np.mean(
@@ -399,8 +403,18 @@ def start_svhn_expl_run(run_name, batch_sizes, model_params, train_params, trial
             ]
             expl_mpe = torch.tensor(expl_mpe)
 
-            explain_plot(corruptions, lls_marg, expl_ll, corruption, "ll")
-            explain_plot(corruptions, entropy, expl_mpe, corruption, "mpe")
+            expl_post = [
+                eval_dict[corruption][l]["expl_post"] for l in eval_dict[corruption]
+            ]
+            expl_post = torch.tensor(expl_post)
+
+            fig = explain_plot(corruptions, lls_marg, expl_ll, corruption, "ll")
+            mlflow.log_figure(fig, f"ll_{corruption}.pdf")
+            fig = explain_plot(corruptions, entropy, expl_mpe, corruption, "mpe")
+            mlflow.log_figure(fig, f"mpe_{corruption}.pdf")
+            fig = explain_plot(corruptions, entropy, expl_post, corruption, "post")
+            mlflow.log_figure(fig, f"post_{corruption}.pdf")
+
             # expl_ll.shape = [num_levels, num_expl_vars]
 
         return lowest_val_loss

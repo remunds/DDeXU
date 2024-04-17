@@ -42,7 +42,6 @@ class EinetUtils:
         trial=None,
         pretrained_path=None,
         use_mpe_reconstruction_loss=False,
-        ensemble_num=1,
     ):
         if pretrained_path is not None:
             print(f"loading pretrained model from {pretrained_path}")
@@ -64,25 +63,18 @@ class EinetUtils:
 
         self.train()
         self.deactivate_uncert_head()
-        if ensemble_num == 1:
-            optimizer = [torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)]
-        else:
-            optimizer = [
-                torch.optim.Adam(
-                    self.backbones[i].parameters(), lr=learning_rate_warmup
-                )
-                for i in range(ensemble_num)
-            ]
+        print("lr: ", learning_rate_warmup)
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate_warmup)
         lr_schedule_backbone = None
-        # if (
-        #     lr_schedule_warmup_step_size is not None
-        #     and lr_schedule_warmup_gamma is not None
-        # ):
-        #     lr_schedule_backbone = torch.optim.lr_scheduler.StepLR(
-        #         optimizer,
-        #         step_size=lr_schedule_warmup_step_size,
-        #         gamma=lr_schedule_warmup_gamma,
-        #     )
+        if (
+            lr_schedule_warmup_step_size is not None
+            and lr_schedule_warmup_gamma is not None
+        ):
+            lr_schedule_backbone = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=lr_schedule_warmup_step_size,
+                gamma=lr_schedule_warmup_gamma,
+            )
 
         val_increase = 0
         lowest_val_loss = torch.inf
@@ -93,44 +85,29 @@ class EinetUtils:
             t.set_description(f"Epoch {epoch}")
             loss = 0.0
             for data, target in dl_train:
-                for o in optimizer:
-                    o.zero_grad()
+                optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
-                for i in range(ensemble_num):
-                    if ensemble_num == 1:
-                        pred = output
-                        retain = False
-                    else:
-                        pred = output[i]
-                        retain = True
-                    loss_v = torch.nn.CrossEntropyLoss()(pred, target)
-                    loss += loss_v.item()
-                    loss_v.backward(retain_graph=retain)
-                    optimizer[i].step()
+                loss_v = torch.nn.CrossEntropyLoss()(output, target)
+                loss += loss_v.item()
+                loss_v.backward()
+                optimizer.step()
             if lr_schedule_backbone is not None:
                 lr_schedule_backbone.step()
 
             val_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
-                    for o in optimizer:
-                        o.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
-                    for i in range(ensemble_num):
-                        if ensemble_num == 1:
-                            pred = output
-                        else:
-                            pred = output[i]
-                        loss_v = torch.nn.CrossEntropyLoss()(pred, target)
-                        val_loss += loss_v.item()
+                    loss_v = torch.nn.CrossEntropyLoss()(output, target)
+                    val_loss += loss_v.item()
             t.set_postfix(
                 dict(
-                    train_loss=loss / (len(dl_train.dataset) * ensemble_num),
-                    val_loss=val_loss / (len(dl_valid.dataset) * ensemble_num),
+                    train_loss=loss / (len(dl_train.dataset)),
+                    val_loss=val_loss / (len(dl_valid.dataset)),
                 )
             )
             mlflow.log_metric(
@@ -176,22 +153,17 @@ class EinetUtils:
         # train einet (and optionally resnet jointly)
         self.activate_uncert_head(deactivate_backbone)
         if deactivate_backbone:
-            optimizer = [
-                torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
-                for _ in optimizer
-            ]
+            optimizer = torch.optim.Adam(self.einet.parameters(), lr=learning_rate)
         else:
-            optimizer = [
-                torch.optim.Adam(self.parameters(), lr=learning_rate) for _ in optimizer
-            ]
+            optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
         lr_schedule_einet = None
-        # if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
-        #     lr_schedule_einet = torch.optim.lr_scheduler.StepLR(
-        #         optimizer,
-        #         step_size=lr_schedule_step_size,
-        #         gamma=lr_schedule_gamma,
-        #     )
+        if lr_schedule_step_size is not None and lr_schedule_gamma is not None:
+            lr_schedule_einet = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=lr_schedule_step_size,
+                gamma=lr_schedule_gamma,
+            )
         lowest_val_loss = torch.inf if num_epochs > 0 else lowest_val_loss
         val_increase = 0
         divisor = self.num_hidden + len(self.explaining_vars)
@@ -203,8 +175,7 @@ class EinetUtils:
             nll_loss = 0.0
             mpe_loss = 0.0
             for data, target in dl_train:
-                for o in optimizer:
-                    o.zero_grad()
+                optimizer.zero_grad()
                 target = target.type(torch.LongTensor)
                 data, target = data.to(device), target.to(device)
                 output = self(data)
@@ -247,8 +218,7 @@ class EinetUtils:
                     loss_v = loss_v + mpe_reconstruction_loss
                 loss += loss_v.item()
                 loss_v.backward()
-                for o in optimizer:
-                    o.step()
+                optimizer.step()
             if lr_schedule_einet is not None:
                 lr_schedule_einet.step()
             # print(5000 * mpe_loss)
@@ -259,8 +229,6 @@ class EinetUtils:
             val_mpe_loss = 0.0
             with torch.no_grad():
                 for data, target in dl_valid:
-                    for o in optimizer:
-                        o.zero_grad()
                     target = target.type(torch.LongTensor)
                     data, target = data.to(device), target.to(device)
                     output = self(data)
@@ -1161,6 +1129,77 @@ class BottleNeckSN(Bottleneck):
         self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
         self.conv2 = spectral_norm(self.conv2, norm_bound=spec_norm_bound)
         self.conv3 = spectral_norm(self.conv3, norm_bound=spec_norm_bound)
+
+
+class ConvResNetDet(ResNet, EinetUtils):
+    """
+    Spectral normalized convolutional ResNet with einet as the output layer.
+    """
+
+    def __init__(
+        self,
+        block,
+        layers,
+        num_classes,
+        image_shape,  # (C, H, W)
+        explaining_vars=[],  # indices of variables that should be explained
+        spec_norm_bound=0.9,
+        spectral_normalization=False,
+        **kwargs,
+    ):
+        super(ConvResNetSPN, self).__init__(block, layers, num_classes, **kwargs)
+        self.conv1 = nn.Conv2d(
+            image_shape[0],
+            64,  # self.inplanes,
+            kernel_size=(7, 7),
+            stride=(2, 2),
+            padding=(3, 3),
+            bias=False,
+        )
+        if spectral_normalization:
+            # self.conv1 = nn.utils.spectral_norm(self.conv1)
+            self.conv1 = spectral_norm(self.conv1, norm_bound=spec_norm_bound)
+        self.explaining_vars = explaining_vars
+        self.image_shape = image_shape
+        self.num_hidden = 512 * block.expansion
+        self.num_classes = num_classes
+
+    def activate_uncert_head(self, deactivate_backbone=True):
+        pass
+
+    def deactivate_uncert_head(self):
+        pass
+
+    def forward_hidden(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        return x
+
+    def _forward_impl(self, x):
+        # x is flattened
+        # extract explaining vars
+        exp_vars = x[:, self.explaining_vars]
+        # mask out explaining vars for backbone
+        mask = torch.ones_like(x, dtype=torch.bool)
+        mask[:, self.explaining_vars] = False
+        x = x[mask]
+        # reshape to image
+        x = x.reshape(-1, self.image_shape[0], self.image_shape[1], self.image_shape[2])
+
+        # feed through resnet
+        x = self.forward_hidden(x)
+        self.hidden = x
+        return self.fc(x)
 
 
 class ConvResNetSPN(ResNet, EinetUtils):

@@ -77,7 +77,7 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
     ).set_zorder(10)
 
     plt.tight_layout()
-    # mlflow.log_figure(fig, f"{mode}_{title}.pdf")
+    mlflow.log_figure(fig, f"{mode}_{title}.pdf")
     return fig
 
 
@@ -199,17 +199,44 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
     # plot ll, p and mpe, in one plot where x-axis is the brightness value (bins) and y-axis is the explanation value
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(
-        bins[:-1], accs, label="accuracy", marker="o", linewidth=1.5, linestyle="--"
+        bins[:-1],
+        accs,
+        label="accuracy",
+        marker="o",
+        linewidth=1.5,
+        linestyle="--",
+        color="tab:red",
     )
-    ax.set_ylabel("Accuracy")
-    ax.set_xlabel("Brightness Corruption")
+    ax.set_ylabel("accuracy")
+    ax.set_xlabel("brightness corruption")
     ax.grid(True)
 
     ax2 = ax.twinx()
-    ax2.plot(bins[:-1], ll_expl_binned, label="ll", marker="o", linewidth=1.5)
-    ax2.plot(bins[:-1], p_expl_binned, label="posterior", marker="o", linewidth=1.5)
-    ax2.plot(bins[:-1], mpe_expl_binned, label="mpe", marker="o", linewidth=1.5)
-    ax2.set_ylabel("Explanations")
+    ax2.plot(
+        bins[:-1],
+        ll_expl_binned,
+        label="ll explanation",
+        marker="o",
+        linewidth=1.5,
+        color="tab:blue",
+    )
+    ax2.plot(
+        bins[:-1],
+        p_expl_binned,
+        label="posterior explanation",
+        marker="o",
+        linewidth=1.5,
+        color="tab:orange",
+    )
+    ax2.plot(
+        bins[:-1],
+        mpe_expl_binned,
+        label="mpe",
+        marker="o",
+        linewidth=1.5,
+        color="tab:green",
+    )
+    ax2.set_ylabel("explanations")
 
     # Increase thickness of lines slightly
     ax.spines["bottom"].set_linewidth(1.5)
@@ -221,7 +248,11 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
 
     ax.tick_params(axis="both", which="major", labelsize=10)
 
-    ax.legend(loc="upper left", fontsize=10).set_zorder(10)
+    handles, labels = ax.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(
+        handles + handles2, labels + labels2, loc="upper left", fontsize=10
+    ).set_zorder(10)
 
     plt.tight_layout()
     return fig

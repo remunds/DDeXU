@@ -344,7 +344,7 @@ def start_cifar10_brightness_run(
         model.activate_uncert_head()
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl_b, device)
-        mlflow.log_metric("valid_b_acc", valid_acc)
+        mlflow.log_metric("valid_acc", valid_acc)
         model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl_b, device)
         mlflow.log_metric("backbone_valid_acc", valid_acc)
@@ -357,8 +357,8 @@ def start_cifar10_brightness_run(
         elif train_params["num_epochs"] > 0 or train_params["warmup_epochs"] > 0:
             mlflow.pytorch.log_state_dict(model.state_dict(), "model")
 
-        if train_params["num_epochs"] == 0:
-            return lowest_val_loss
+        # if train_params["num_epochs"] == 0:
+        #     return lowest_val_loss
 
         # Evaluate
         model.eval()

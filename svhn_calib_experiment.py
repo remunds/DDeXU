@@ -37,15 +37,15 @@ def load_datasets():
     from torchvision.datasets import SVHN
     from torchvision import transforms
 
-    train_transformer = transforms.Compose(
-        [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
-            transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
-        ]
-    )
+    # train_transformer = transforms.Compose(
+    #     [
+    #         transforms.RandomCrop(32, padding=4),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         transforms.Normalize((0.4377, 0.4438, 0.4728), (0.198, 0.201, 0.197)),
+    #         transforms.Lambda(lambda x: x.reshape(-1, 32 * 32 * 3).squeeze()),
+    #     ]
+    # )
     test_transformer = transforms.Compose(
         [
             transforms.ToTensor(),
@@ -58,7 +58,8 @@ def load_datasets():
         root=dataset_dir + "svhn",
         download=True,
         split="train",
-        transform=train_transformer,
+        # transform=train_transformer,
+        transform=test_transformer,
     )
     train_ds, valid_ds = torch.utils.data.random_split(
         train_ds, [0.8, 0.2], generator=torch.Generator().manual_seed(0)
@@ -111,7 +112,31 @@ def start_svhn_calib_run(run_name, batch_sizes, model_params, train_params, tria
         # Create model
         model_name = model_params["model"]
         del model_params["model"]
-        if model_name == "ConvResNetSPN":
+        if model_name == "ConvResNetDet":
+            from ResNetSPN import ConvResNetDet
+            from torchvision.models.resnet import BasicBlock, Bottleneck
+
+            if model_params["block"] == "basic":
+                block = BasicBlock
+            elif model_params["block"] == "bottleneck":
+                block = Bottleneck
+            else:
+                raise NotImplementedError
+
+            del model_params["block"]
+            layers = model_params["layers"]
+            del model_params["layers"]
+            del model_params["spectral_normalization"]
+            del model_params["mod"]
+            del model_params["num_hidden"]
+
+            model = ConvResNetDet(
+                block,
+                layers,
+                explaining_vars=[],  # for calibration test, we don't need explaining vars
+                **model_params,
+            )
+        elif model_name == "ConvResNetSPN":
             from ResNetSPN import ConvResNetSPN, ResidualBlockSN, BottleNeckSN
 
             if model_params["block"] == "basic":

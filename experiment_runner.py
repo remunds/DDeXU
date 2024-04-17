@@ -27,7 +27,7 @@ from svhn_expl_experiment import start_svhn_expl_run
 # from svhn_expl_experiment_custom import start_svhn_expl_run
 # from svhn_expl_experiment_pres import start_svhn_expl_run
 
-torch.manual_seed(0)
+torch.manual_seed(42)
 # Set our tracking server uri for logging
 mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 
@@ -195,8 +195,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     if "SPN" in model or "DDU" in model or "GMM" in model:
         model_params = dict(
             model=model,  # ConvResNetSPN, ConvResNetDDU
-            block="basic",  # basic, bottleneck
-            layers=[2, 2, 2, 2],
+            block="basic",  # basic, bottleneck for resnet50
+            layers=[2, 2, 2, 2],  # [3, 4, 6, 3] for resnet50
             num_classes=10,
             image_shape=image_shape,
             einet_depth=5,
@@ -210,7 +210,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spectral_normalization=True,  # only for ConvResNetDDU
             mod=True,  # only for ConvResNetDDU
             num_hidden=32,
-            model_size="l",
+            model_size="s",
         )
     else:
         model_params = dict(
@@ -221,7 +221,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             spec_norm_bound=7,
             num_hidden=32,  # SNGP: 16 too low, 32 worked well, failed with 128 already
             # spec_norm_bound=20,  # i think 7 might be good for cifar etc.
-            model_size="l",
+            # model_size="l",
+            spectral_normalization=True if "SNGP" in model else False,
+            model_size="s",
         )
     if "Ensemble" in model:
         model_params["ensemble_paths"] = ensemble_members
@@ -229,11 +231,24 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     if "cifar100" in dataset:
         model_params["num_classes"] = 100
 
+    # False, s works
+    # True, s works too
+    # False, l: *.5 got stuck at 0.0044, same with *.1
+    # learning_rate of warmup is dependent on whether spectral_norm is active
+    if model_params["spectral_normalization"]:
+        lr_warmup = 0.3
+    else:
+        lr_warmup = 0.001
+    if model_params["model_size"] == "l":
+        # No idea what to pick here... nothing seems to work
+        lr_warmup *= 500
+
     train_params = dict(
         pretrained_path=pretrained_path,
-        # learning_rate_warmup=0.03, # didn't work anymore for Det and cifar100
-        learning_rate_warmup=0.0005,
-        early_stop=30,
+        learning_rate_warmup=lr_warmup,
+        lr_schedule_warmup_step_size=10,
+        lr_schedule_warmup_gamma=0.8,
+        early_stop=20,
     )
     if loss == "discriminative" or loss == "noloss":
         train_params["lambda_v"] = 1.0
@@ -287,10 +302,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         lr = 0.002
     elif "ConvResNetDDU" in model:
         lr = 0.02
-    # elif "EfficientNetSNGP" in model:
-    #     lr = 0.005
     elif "EfficientNet" in model:
-        # lr = 0.015 # this used to work good and fast
         lr = 0.007
     else:
         raise ValueError(
@@ -402,6 +414,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         # train_params["use_mpe_reconstruction_loss"] = True
         train_params["use_mpe_reconstruction_loss"] = True
         model_params["num_hidden"] = 128
+        start_bright_run()
+        train_params["use_mpe_reconstruction_loss"] = False
         start_bright_run()
 
     elif "svhn-c-calib" in dataset:
@@ -1055,7 +1069,7 @@ loss = [
     "hybrid_mid_low",
     "hybrid_mid_high",
     # "hybrid_high",
-    "hybrid_low",
+    # "hybrid_low",
     # "generative",
     # "discriminative",
 ]
@@ -1067,8 +1081,8 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     "cifar10-c-calib",
-    "svhn-c-calib",
     "cifar100-c-calib",
+    "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
@@ -1080,14 +1094,15 @@ dense_models = [
 ]
 models = [
     "EfficientNetSPN",
+    "ConvResNetDet",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
-    # "EfficientNetGMM",
+    "EfficientNetGMM",
     # "ConvResNetDDUGMM",
     "EfficientNetDet",
-    # "EfficientNetDropout",
+    "EfficientNetDropout",
     # "EfficientNetEnsemble",
-    # "EfficientNetSNGP",
+    "EfficientNetSNGP",
 ]
 
 ensemble_members = [
@@ -1152,10 +1167,13 @@ pretrained_backbones = {
         "EfficientNetSPN": "298139550611321154/1032be5fb5304f58ab1564ffd819ff3c/artifacts/model",
     },
     "svhn-c-expl": {
-        "EfficientNetSPN": "354955436886369284/d0b7ff2869cf47cabee81603af9c273a/artifacts/model"
+        "EfficientNetSPN": "354955436886369284/a5ca604abf99406eb81f63dd5c9a67bf/artifacts/model",
     },
     "svhn-c-calib": {
         "EfficientNetSPN": "382722780317026903/e906f4cb0e3640fb87fb37dfc907944f/artifacts/model"
+    },
+    "cifar10-expl-bright": {
+        "EfficientNetSPN": "217000296246753437/53a5498c0fde4a89ba4cbf4b308f60f0/artifacts/model"
     },
 }
 
@@ -1246,16 +1264,15 @@ for d in dataset:
                 run_conv(d, l, "backbone_only", m, pretrained_path=None)
             continue
         elif "SPN" in m:
-            if d == "cifar10-c-calib":
-                continue
             for l in loss:
                 # pretrained_path = pretrained_backbones[d][m]
-                # # pretrained_path = trained_models[d][m]
+                # # # pretrained_path = trained_models[d][m]
                 # pretrained_path = (
                 #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
                 # )
                 # pretrained_path = None
                 run_conv(d, l, "seperate", m, pretrained_path=None)
+                # run_conv(d, l, "eval_only", m, pretrained_path=pretrained_path)
                 # run_conv(d, l, "backbone_only", m, pretrained_path=None)
                 # run_conv(d, l, "einet_only", m, pretrained_path)
             continue
