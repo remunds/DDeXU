@@ -215,6 +215,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     else:
         model_params = dict(
             model=model,
+            block="basic",  # basic, bottleneck for resnet50
+            layers=[2, 2, 2, 2],  # [3, 4, 6, 3] for resnet50
             num_classes=10,
             image_shape=image_shape,
             train_batch_size=batch_sizes["resnet"],
@@ -302,12 +304,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         lr = 0.002
     elif "ConvResNetDDU" in model:
         lr = 0.02
-    elif "EfficientNet" in model:
+    else:  # e.g. all efficientNet
         lr = 0.007
-    else:
-        raise ValueError(
-            "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
-        )
     train_params["learning_rate"] = lr
     if "mnist-calib" in dataset:
         try:
@@ -1094,7 +1092,7 @@ dense_models = [
 ]
 models = [
     "EfficientNetSPN",
-    "ConvResNetDet",
+    # "ConvResNetDet",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
     "EfficientNetGMM",
@@ -1265,6 +1263,8 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
+                if d == "cifar10-c-calib":
+                    continue
                 # pretrained_path = pretrained_backbones[d][m]
                 # # # pretrained_path = trained_models[d][m]
                 # pretrained_path = (

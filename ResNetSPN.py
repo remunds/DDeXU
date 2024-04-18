@@ -1147,7 +1147,7 @@ class ConvResNetDet(ResNet, EinetUtils):
         spectral_normalization=False,
         **kwargs,
     ):
-        super(ConvResNetSPN, self).__init__(block, layers, num_classes, **kwargs)
+        super(ConvResNetDet, self).__init__(block, layers, num_classes, **kwargs)
         self.conv1 = nn.Conv2d(
             image_shape[0],
             64,  # self.inplanes,

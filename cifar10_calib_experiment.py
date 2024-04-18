@@ -174,8 +174,11 @@ def start_cifar10_calib_run(run_name, batch_sizes, model_params, train_params, t
             layers = model_params["layers"]
             del model_params["layers"]
             del model_params["spectral_normalization"]
-            del model_params["mod"]
+            # del model_params["mod"]
             del model_params["num_hidden"]
+
+            del model_params["train_batch_size"]
+            del model_params["model_size"]
 
             model = ConvResNetDet(
                 block,
