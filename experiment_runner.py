@@ -241,6 +241,7 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         lr_warmup = 0.3
     else:
         lr_warmup = 0.001
+
     if model_params["model_size"] == "l":
         # No idea what to pick here... nothing seems to work
         lr_warmup *= 500
@@ -276,9 +277,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 800
     elif training == "seperate":
-        train_params["warmup_epochs"] = 400
+        train_params["warmup_epochs"] = 1  # 400
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 400
+        train_params["num_epochs"] = 1  # 400
     elif training == "warmup":
         train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = False
@@ -304,6 +305,8 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         lr = 0.002
     elif "ConvResNetDDU" in model:
         lr = 0.02
+    elif "SNGP" in model:
+        lr = 0.00001
     else:  # e.g. all efficientNet
         lr = 0.007
     train_params["learning_rate"] = lr
@@ -1064,8 +1067,8 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
 # Zweites Tuning
 loss = [
     "hybrid",
-    "hybrid_mid_low",
-    "hybrid_mid_high",
+    # "hybrid_mid_low",
+    # "hybrid_mid_high",
     # "hybrid_high",
     # "hybrid_low",
     # "generative",
@@ -1079,8 +1082,8 @@ dataset = [
     # "mnist-calib",
     # "mnist-expl",
     "cifar10-c-calib",
-    "cifar100-c-calib",
-    "svhn-c-calib",
+    # "cifar100-c-calib",
+    # "svhn-c-calib",
     # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
@@ -1095,24 +1098,42 @@ models = [
     # "ConvResNetDet",
     # "ConvResNetSPN",
     # "ConvResNetDDU",
-    "EfficientNetGMM",
+    # "EfficientNetGMM",
     # "ConvResNetDDUGMM",
-    "EfficientNetDet",
-    "EfficientNetDropout",
+    # "EfficientNetDet",
+    # "EfficientNetDropout",
     # "EfficientNetEnsemble",
-    "EfficientNetSNGP",
+    # "EfficientNetSNGP",
 ]
 
-ensemble_members = [
-    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
-    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
-    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
-    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
-    "279248034225110540/621bdb52966446b1a6e5bdd674f7e4be/artifacts/model",
-]
-ensemble_members = [
-    f"/data_docker/mlartifacts/{m}/state_dict.pth" for m in ensemble_members
-]
+ensemble_members_dict = {
+    "cifar10-c-calib": [
+        "279248034225110540/df45c655ce064173bfa2bce97ea1873e/artifacts/model/state_dict.pth",
+        "279248034225110540/e298816027c94fb0967ff67732b7ee85/artifacts/model/state_dict.pth",
+        "279248034225110540/3d630a5cb75044ff9cd098169bf24bc9/artifacts/model/state_dict.pth",
+        "279248034225110540/813b4f9b8b77449fbe35741917c8b371/artifacts/model/state_dict.pth",
+        "279248034225110540/b2864c0fb59341e0acaf654448d0630c/artifacts/model/state_dict.pth",
+    ],
+    "cifar100-c-calib": [
+        "352663593920914837/96677430286e4e9e9bfe8338217d23b4/artifacts/model/state_dict.pth",
+        "352663593920914837/cd7d1bb9e08c4d7790c8dc56f099b1af/artifacts/model/state_dict.pth",
+        "352663593920914837/6914054a73694a48902b7f50428bd373/artifacts/model/state_dict.pth",
+        "352663593920914837/917f120246154a889a4989c0f0180948/artifacts/model/state_dict.pth",
+        "352663593920914837/3adc5d76ce0f4288abc5f308d0860a15/artifacts/model/state_dict.pth",
+    ],
+    "svhn-c-calib": [
+        "382722780317026903/580ba0e7f39f4eab96f6d68d35b73fff/artifacts/model/state_dict.pth",
+        "382722780317026903/a53d43877c7f41518e3c79e9b6cf4b0f/artifacts/model/state_dict.pth",
+        "382722780317026903/3f6af23c46d24eb5af67eaa8444fe4c9/artifacts/model/state_dict.pth",
+        "382722780317026903/ebde1178f0c8432084fc3ec07d55f839/artifacts/model/state_dict.pth",
+        "382722780317026903/a8fae2c6ba994f8abb6024f108a2f2d6/artifacts/model/state_dict.pth",
+    ],
+}
+for d in ensemble_members_dict:
+    ensemble_members_dict[d] = [
+        "/data_docker/mlartifacts/" + m for m in ensemble_members_dict[d]
+    ]
+
 
 pretrained_backbones = {
     # acc: 1
@@ -1245,7 +1266,7 @@ for d in dataset:
             l = "discriminative"
             run_conv(d, l, "end-to-end", m, pretrained_path=None)
             continue
-        elif "GMM" in m or "Dropout" in m or "Ensemble" in m:
+        elif "GMM" in m or "Dropout" in m:
             # pretrained_path = trained_models[d][m]
             # pretrained_path = (
             #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
@@ -1254,6 +1275,12 @@ for d in dataset:
             run_conv(d, l, "backbone_only", m, pretrained_path=None)
             # run_conv(d, l, "eval_only", m, pretrained_path=None)
             continue
+        elif "Ensemble" in m:
+            # make sure that correct ensemble members are specified.
+            ensemble_members = ensemble_members_dict[d]
+            l = "discriminative"
+            run_conv(d, l, "eval_only", m, pretrained_path=None)
+
         elif "Det" in m:
             l = "discriminative"
             for i in range(5):
@@ -1263,8 +1290,6 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
-                if d == "cifar10-c-calib":
-                    continue
                 # pretrained_path = pretrained_backbones[d][m]
                 # # # pretrained_path = trained_models[d][m]
                 # pretrained_path = (

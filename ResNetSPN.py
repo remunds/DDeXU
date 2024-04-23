@@ -2401,7 +2401,7 @@ class SNGPUtils:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.state_dict(), path)
 
-    def load(self, path):
+    def load(self, path, backbone_only=False):
         state_dict = torch.load(path)
         self.load_state_dict(state_dict, strict=False)
 
@@ -2780,6 +2780,7 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
         self.image_shape = image_shape
         self.marginalized_scopes = None
         self.members = []
+        self.num_hidden = num_hidden
         for path in ensemble_paths:
             member = EfficientNetDet(
                 num_classes,
@@ -2791,6 +2792,9 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
             )
             member.load_state_dict(torch.load(path))
             self.members.append(member)
+
+    def compute_normalization_values(self, dl, device):
+        pass
 
     def activate_uncert_head(self, deactivate_backbone=True):
         pass

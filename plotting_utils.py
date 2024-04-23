@@ -106,7 +106,7 @@ def calibration_plot(confidences, accs, ece, nll, name):
     plt.clf()
 
 
-def calibration_plot_multi(confidences, accs, names, binning):
+def calibration_plot_multi(confidences, accs, names, binning, dl_name):
     plt.clf()  # clear previous plots
     fig, ax = plt.subplots()
     # Plot the calibration curve
@@ -116,7 +116,7 @@ def calibration_plot_multi(confidences, accs, names, binning):
     ax.set_xlabel("mean confidence")
     ax.set_ylabel("observed accuracy")
     ax.legend(loc="upper left", fontsize=10).set_zorder(10)
-    mlflow.log_figure(fig, f"calibration_multi_{binning}.pdf")
+    mlflow.log_figure(fig, f"calibration_multi_{binning}_{dl_name}.pdf")
     plt.clf()
 
 
