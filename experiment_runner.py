@@ -277,9 +277,9 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         train_params["deactivate_backbone"] = False
         train_params["num_epochs"] = 800
     elif training == "seperate":
-        train_params["warmup_epochs"] = 1  # 400
+        train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = True
-        train_params["num_epochs"] = 1  # 400
+        train_params["num_epochs"] = 400
     elif training == "warmup":
         train_params["warmup_epochs"] = 400
         train_params["deactivate_backbone"] = False
@@ -1081,10 +1081,10 @@ dataset = [
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",
-    "cifar10-c-calib",
+    # "cifar10-c-calib",
     # "cifar100-c-calib",
     # "svhn-c-calib",
-    # "cifar10-expl-bright",
+    "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
 ]

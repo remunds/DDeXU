@@ -13,28 +13,44 @@ def load_datasets():
     from torchvision.datasets import CIFAR10
     from torchvision import transforms
 
-    def add_brightness(imgs, distr="normal", value=None):
-        # add or subtract brightness of all images
-        # assumes imgs.shape = [batch_size, 32, 32, 3]
-        # assumes imgs are in range [0, 255]
-        # values are drawn from a normal distribution
+    # def add_brightness(imgs, distr="normal", value=None):
+    #     # add or subtract brightness of all images
+    #     # assumes imgs.shape = [batch_size, 32, 32, 3]
+    #     # assumes imgs are in range [0, 255]
+    #     # values are drawn from a normal distribution
+    #     imgs_torch = torch.tensor(imgs, dtype=torch.float32)
+    #     if value is None:
+    #         if distr == "normal":
+    #             values = torch.normal(0, 50, size=(imgs.shape[0],))
+    #         elif distr == "uniform":
+    #             values = torch.randint(-300, 300, size=(imgs.shape[0],))
+    #         else:
+    #             raise NotImplementedError
+    #         values = values.reshape(-1, 1, 1, 1)
+
+    #     else:
+    #         # values = torch.normal(value, 20, size=(imgs.shape[0],))
+    #         values = torch.ones((imgs.shape[0],)) * value
+    #         values = values.reshape(-1, 1, 1, 1)
+    #     imgs = torch.clamp(imgs_torch + values, 0, 255)
+    #     imgs = imgs.to(dtype=torch.uint8).numpy()
+    # return imgs, values
+
+    def add_noise(imgs, value=None):
         imgs_torch = torch.tensor(imgs, dtype=torch.float32)
         if value is None:
-            if distr == "normal":
-                values = torch.normal(0, 50, size=(imgs.shape[0],))
-            elif distr == "uniform":
-                values = torch.randint(-300, 300, size=(imgs.shape[0],))
-            else:
-                raise NotImplementedError
-            values = values.reshape(-1, 1, 1, 1)
-
+            std_dev = torch.randint(0, 100, size=(imgs_torch.shape[0],))
         else:
-            # values = torch.normal(value, 20, size=(imgs.shape[0],))
-            values = torch.ones((imgs.shape[0],)) * value
-            values = values.reshape(-1, 1, 1, 1)
-        imgs = torch.clamp(imgs_torch + values, 0, 255)
+            std_dev = torch.ones((imgs_torch.shape[0],)) * value
+
+        noise = torch.randn(imgs_torch.shape) * std_dev.reshape(-1, 1, 1, 1)
+        # for img in imgs_torch:
+        #     random_choice = np.random.choice(100) / 10 #std dev of noise
+        #     noise = torch.randn(img.shape) * random_choice #N(0,r)
+        #     img + noise
+        imgs = torch.clamp(imgs_torch + noise, 0, 255)
         imgs = imgs.to(dtype=torch.uint8).numpy()
-        return imgs, values
+        return imgs, std_dev
 
     test_transformer = transforms.Compose(
         [
@@ -49,12 +65,13 @@ def load_datasets():
     # corrupt train-data with brightness (Normal-dist)
     # maximum +5 and -5
     # print first train image
-    train_ds_bright, values = add_brightness(train_ds.data.copy())
+    # train_ds_bright, values = add_brightness(train_ds.data.copy())
+    train_ds_bright, values = add_noise(train_ds.data.copy())
 
     # find index in value where value > 100
-    first_large = values > 100
+    first_large = values > 98
     first_large = np.where(first_large)[0][0]
-    first_small = values < -100
+    first_small = values == 50
     first_small = np.where(first_small)[0][0]
 
     import matplotlib.pyplot as plt
@@ -62,7 +79,7 @@ def load_datasets():
     plt.imshow(train_ds_bright[first_large])
     # add value as title
     plt.title(f"brightness: {values[first_large]}")
-    plt.savefig(f"bright_{first_large}.pdf")
+    plt.savefig(f"low_blur_{first_large}.pdf")
     plt.clf()
 
     plt.imshow(train_ds.data[first_large])
@@ -73,7 +90,7 @@ def load_datasets():
     plt.imshow(train_ds_bright[first_small])
     # add value as title
     plt.title(f"brightness: {values[first_small]}")
-    plt.savefig(f"dark_{first_small}.pdf")
+    plt.savefig(f"high_blur_{first_small}.pdf")
     plt.clf()
 
     plt.imshow(train_ds.data[first_small])
@@ -106,7 +123,8 @@ def load_datasets():
     )
     test_normal_ds = list(zip(test_normal_data, test_ds.targets))
 
-    test_uniform, values_u = add_brightness(test_ds.data.copy(), distr="uniform")
+    # test_uniform, values_u = add_brightness(test_ds.data.copy(), distr="uniform")
+    test_uniform, values_u = add_noise(test_ds.data.copy())
     test_uniform = [test_transformer(img).flatten() for img in test_uniform]
     test_uniform_data = torch.concat(
         [
@@ -117,7 +135,7 @@ def load_datasets():
     )
     test_uniform_ds = list(zip(test_uniform_data, test_ds.targets))
 
-    test_bright, values_b = add_brightness(test_ds.data.copy(), value=100)
+    test_bright, values_b = add_noise(test_ds.data.copy(), value=90)
     test_bright = [test_transformer(img).flatten() for img in test_bright]
     test_bright_data = torch.concat(
         [
@@ -128,7 +146,7 @@ def load_datasets():
     )
     test_bright_ds = list(zip(test_bright_data, test_ds.targets))
 
-    test_dark, values_d = add_brightness(test_ds.data.copy(), value=-100)
+    test_dark, values_d = add_noise(test_ds.data.copy(), value=10)
     test_dark = [test_transformer(img).flatten() for img in test_dark]
     test_dark_data = torch.concat(
         [
@@ -151,11 +169,12 @@ def load_datasets():
 
     # qualitative
     test_q_data = test_ds.data[:10]
-    levels = [-200, -150, -100, -50, 0, 50, 100, 150, 200]
+    # levels = [-200, -150, -100, -50, 0, 50, 100, 150, 200]
+    levels = range(0, 100, 20)
     test_q_ds = []
     test_q_images = []
     for l in levels:
-        adjusted, _ = add_brightness(test_q_data.copy(), value=l)
+        adjusted, _ = add_noise(test_q_data.copy(), value=l)
         test_q_images.append(adjusted)
         test_q = [test_transformer(img).flatten() for img in adjusted]
         test_q = torch.concat(
@@ -391,17 +410,13 @@ def start_cifar10_brightness_run(
         mpe_expl = model.explain_mpe(test_uniform_dl, device, True)
 
         # bin the x-axis values. They go from -200 to 200, so with 20 bins, each bin is 20 wide
-        bins = np.linspace(-300, 300, 21)
-        print("bins:", bins)
+        # bins = np.linspace(-300, 300, 21)
+        bins = np.linspace(0, 100, 21)
         mpe_expl = torch.cat(mpe_expl, dim=0)
-        print("ds: ", test_uniform_ds)
-        print("ds len: ", len(test_uniform_ds))
         brightness_vals = [
             test_uniform_ds[i][0][0].item() for i in range(len(test_uniform_ds))
         ]
-        print("brightness_vals: ", brightness_vals)
         bright_bins = np.digitize(brightness_vals, bins)
-        print("bright_bins: ", bright_bins)
 
         # compute acc of each bin
         accs = [
@@ -431,13 +446,19 @@ def start_cifar10_brightness_run(
         mpe_expl_binned = [
             mpe_expl[bright_bins == i].mean().cpu().numpy() for i in range(1, 21)
         ]
+        mlflow.log_metric("ll_min", np.min(ll_expl_binned))
+        mlflow.log_metric("ll_max", np.max(ll_expl_binned))
         # normalize the explanations
         ll_expl_binned = (ll_expl_binned - np.min(ll_expl_binned)) / (
             np.max(ll_expl_binned) - np.min(ll_expl_binned)
         )
+        mlflow.log_metric("p_min", np.min(p_expl_binned))
+        mlflow.log_metric("p_max", np.max(p_expl_binned))
         p_expl_binned = (p_expl_binned - np.min(p_expl_binned)) / (
             np.max(p_expl_binned) - np.min(p_expl_binned)
         )
+        mlflow.log_metric("mpe_min", np.min(mpe_expl_binned))
+        mlflow.log_metric("mpe_max", np.max(mpe_expl_binned))
         mpe_expl_binned = (mpe_expl_binned - np.min(mpe_expl_binned)) / (
             np.max(mpe_expl_binned) - np.min(mpe_expl_binned)
         )

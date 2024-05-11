@@ -1,6 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import mlflow
+from tueplots import bundles
+
+# plt.rcParams.update(bundles.iclr2024(usetex=False, column="full"))
+plt.rcParams.update(bundles.iclr2024(usetex=False))
 
 
 # Uncertainty reflects strength of corruption well
@@ -10,15 +14,11 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
     ax.set_ylabel("Accuracy", fontsize=12)
     ax.set_xticks(np.array(list(range(1, 6))))
 
-    # # Adjust x-axis limits to start at 1
-    # ax.set_xlim([1, len(accuracies)])
-
-    # # Add a minor tick at 0
-    # ax.xaxis.set_minor_locator(plt.MultipleLocator(0.5))
     # Set tick locations and labels
     ax.set_xticks(np.arange(len(accuracies)))
     ax.set_xticklabels([str(i + 1) for i in range(len(accuracies))])
     ax.set_ylim([0, 1])
+    ax.set_xlim([0, len(accuracies) - 1])
 
     # Plot accuracies with dotted lines and markers
     ax.plot(
@@ -27,17 +27,21 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
         marker="o",
         label="Accuracy",
         color="orange",
-        linewidth=1.5,
+        linewidth=2,
     )
 
     ax2 = ax.twinx()
-    label = "Marginal LL" if mode == "ll" else "Entropy"
+    label = "Marginal LL" if mode == "ll" else "Entropy (normalized)"
     ax2.set_ylabel(label, fontsize=12)
     if mode == "ll":
         # ax2.set_ylim([-12, -4]) # cifar10
         ax2.set_ylim([-20, 10])  # svhn
     else:
-        ax2.set_ylim([0, 1.25])  # svhn
+        # project entropy to [0,1]
+        uncertainties = (uncertainties - np.min(uncertainties)) / (
+            np.max(uncertainties) - np.min(uncertainties)
+        )
+        ax2.set_ylim([0, 1])  # svhn
 
     # Plot uncertainties with dotted lines and markers
     ax2.plot(
@@ -46,7 +50,7 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
         marker="o",
         label=label,
         color="blue",
-        linewidth=1.5,
+        linewidth=2,
     )
 
     # Grid
@@ -66,8 +70,6 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
     ax.tick_params(axis="both", which="major", labelsize=10)
     ax2.tick_params(axis="both", which="major", labelsize=10)
 
-    ax.set_title(title, fontsize=14)
-
     # Legend
     handles, labels = ax.get_legend_handles_labels()
     handles2, labels2 = ax2.get_legend_handles_labels()
@@ -76,7 +78,7 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
         handles + handles2, labels + labels2, loc=location, fontsize=10
     ).set_zorder(10)
 
-    plt.tight_layout()
+    # plt.tight_layout()
     mlflow.log_figure(fig, f"{mode}_{title}.pdf")
     return fig
 
@@ -99,9 +101,6 @@ def calibration_plot(confidences, accs, ece, nll, name):
     ax.plot([0, 1], [0, 1], linestyle="--", color="gray")  # Diagonal line for reference
     ax.set_xlabel("mean confidence")
     ax.set_ylabel("observed accuracy")
-    ax.set_title(
-        "calibration plot, ECE: {ece:.3f}, NLL: {nll:.3f}".format(ece=ece, nll=nll)
-    )
     mlflow.log_figure(fig, f"calibration_{name}.pdf")
     plt.clf()
 
@@ -196,6 +195,7 @@ def explain_plot(
 
 
 def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_binned):
+
     # plot ll, p and mpe, in one plot where x-axis is the brightness value (bins) and y-axis is the explanation value
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(
@@ -236,7 +236,7 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
         linewidth=1.5,
         color="tab:green",
     )
-    ax2.set_ylabel("explanations")
+    ax2.set_ylabel("explanations normalized in [0,1]")
 
     # Increase thickness of lines slightly
     ax.spines["bottom"].set_linewidth(1.5)
