@@ -2,88 +2,12 @@ import torch
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as colors
 import sklearn.datasets
 
 from torch.utils.data import DataLoader
 import os
 import mlflow
-
-### data and stuff from here: https://www.tensorflow.org/tutorials/understanding/sngp
-### visualization macros
-
-
-def plot_uncertainty_surface(
-    train_examples,
-    train_labels,
-    ood_examples,
-    test_uncertainty,
-    ax,
-    cmap=None,
-    plot_train=True,
-    input_is_ll=False,
-):
-    """Visualizes the 2D uncertainty surface.
-
-    For simplicity, assume these objects already exist in the memory:
-
-        test_examples: Array of test examples, shape (num_test, 2).
-        train_labels: Array of train labels, shape (num_train, ).
-        train_examples: Array of train examples, shape (num_train, 2).
-
-    Arguments:
-        test_uncertainty: Array of uncertainty scores, shape (num_test,).
-        ax: A matplotlib Axes object that specifies a matplotlib figure.
-        cmap: A matplotlib colormap object specifying the palette of the
-        predictive surface.
-
-    Returns:
-        pcm: A matplotlib PathCollection object that contains the palette
-        information of the uncertainty plot.
-    """
-    plt.rcParams["figure.dpi"] = 140
-    DEFAULT_X_RANGE = (-3.5, 3.5)
-    DEFAULT_Y_RANGE = (-2.5, 2.5)
-    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00"])
-    DEFAULT_NORM = colors.Normalize(
-        vmin=0,
-        vmax=1,
-    )
-    DEFAULT_N_GRID = 100
-    # Normalize uncertainty for better visualization.
-    test_uncertainty = test_uncertainty - np.min(test_uncertainty)
-    test_uncertainty = test_uncertainty / (
-        np.max(test_uncertainty) - np.min(test_uncertainty)
-    )
-
-    # Set view limits.
-    ax.set_ylim(DEFAULT_Y_RANGE)
-    ax.set_xlim(DEFAULT_X_RANGE)
-
-    # Plot normalized uncertainty surface.
-    pcm = ax.imshow(
-        np.reshape(test_uncertainty, [DEFAULT_N_GRID, DEFAULT_N_GRID]),
-        cmap=cmap,
-        origin="lower",
-        extent=DEFAULT_X_RANGE + DEFAULT_Y_RANGE,
-        vmin=DEFAULT_NORM.vmin,
-        vmax=DEFAULT_NORM.vmax,
-        interpolation="bicubic",
-        aspect="auto",
-    )
-
-    if plot_train:
-        # Plot training data.
-        ax.scatter(
-            train_examples[:, 0],
-            train_examples[:, 1],
-            c=train_labels,
-            cmap=DEFAULT_CMAP,
-            alpha=0.5,
-        )
-        ax.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
-
-    return pcm
+from plotting_utils import plot_uncertainty_surface
 
 
 def make_training_data(sample_size=500):
@@ -221,10 +145,13 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         probs_class_0 = posteriors[:, 0].cpu().detach().numpy()
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, probs_class_0, ax=ax
+            train_examples,
+            train_labels,
+            probs_class_0,
+            ax=ax,
+            ood_examples=ood_examples,
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Class Probability")
         mlflow.log_figure(fig, "posterior_class_probability.pdf")
 
         # Visualize SPN predictive entropy
@@ -233,10 +160,9 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         print("entropy: ", entropy[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, entropy, ax=ax
+            train_examples, train_labels, entropy, ax=ax, ood_examples=ood_examples
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Entropy")
         mlflow.log_figure(fig, "posterior_predictive_entropy.pdf")
 
         # Visualize SPN predictive variance/uncertainty
@@ -245,33 +171,30 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         print("variance: ", variance[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, variance, ax=ax
+            train_examples, train_labels, variance, ax=ax, ood_examples=ood_examples
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Predictive Variance")
         mlflow.log_figure(fig, "posterior_predictive_variance.pdf")
 
         lls = model.eval_ll_marg(None, device, test_dl, return_all=True)
         nll = -(lls.cpu().detach().numpy())  # negative log likelihood
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, nll, ax=ax
+            train_examples, train_labels, nll, ax=ax, ood_examples=ood_examples
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL")
         mlflow.log_figure(fig, "nll.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples,
             train_labels,
-            ood_examples,
             nll,
             ax=ax,
             plot_train=False,
+            ood_examples=ood_examples,
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("NLL")
         mlflow.log_figure(fig, "nll_no_train.pdf")
 
         dempster_shafer = (
@@ -282,10 +205,13 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         )
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, dempster_shafer, ax=ax
+            train_examples,
+            train_labels,
+            dempster_shafer,
+            ax=ax,
+            ood_examples=ood_examples,
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Dempster Shafer")
         mlflow.log_figure(fig, "dempster_shafer.pdf")
 
         # maximum predictive probability as in Figure 3, appendix C in https://arxiv.org/pdf/2006.10108.pdf
@@ -295,10 +221,9 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         print("uncert max posterior: ", uncertainty[:5])
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, uncertainty, ax=ax
+            train_examples, train_labels, uncertainty, ax=ax, ood_examples=ood_examples
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Maximum Predictive Probability")
         mlflow.log_figure(fig, "max_pred_prob.pdf")
 
         # Test epistemic as in DDU p(z)
@@ -310,33 +235,22 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         print("min density p(z): ", np.min(epistemic))
         print("max density p(z): ", np.max(epistemic))
 
-        # uncertainty = 1 - 2 * np.abs(epistemic - 0.5)
-        # print("uncert density: ", uncertainty[:5])
-
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples,
-            train_labels,
-            ood_examples,
-            # uncertainty,
-            epistemic,
-            ax=ax,
+            train_examples, train_labels, epistemic, ax=ax, ood_examples=ood_examples
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Epistemic Uncertainty")
         mlflow.log_figure(fig, "epistemic.pdf")
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
             train_examples,
             train_labels,
-            ood_examples,
-            # uncertainty,
             epistemic,
             ax=ax,
             plot_train=False,
+            ood_examples=ood_examples,
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Epistemic Uncertainty")
         mlflow.log_figure(fig, "epistemic_notrain.pdf")
 
         # Test aleatoric as in DDU entropy of softmax
@@ -346,10 +260,9 @@ def start_two_moons_run(run_name, batch_sizes, model_params, train_params, trial
         print(aleatoric)
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_examples, train_labels, ood_examples, aleatoric, ax=ax
+            train_examples, train_labels, aleatoric, ax=ax, ood_examples=ood_examples
         )
         plt.colorbar(pcm, ax=ax)
-        plt.title("Aleatoric Uncertainty")
         mlflow.log_figure(fig, "aleatoric.pdf")
 
         plt.close()

@@ -1075,7 +1075,7 @@ loss = [
     # "discriminative",
 ]
 dataset = [
-    # "two-moons",
+    "two-moons",
     # "figure6",
     # "latent_figure6",
     # "dirty-mnist",
@@ -1084,14 +1084,14 @@ dataset = [
     # "cifar10-c-calib",
     # "cifar100-c-calib",
     # "svhn-c-calib",
-    "cifar10-expl-bright",
+    # "cifar10-expl-bright",
     # "cifar10-c-expl",
     # "svhn-c-expl",
 ]
 dense_models = [
-    # "DenseResNetSPN",
+    "DenseResNetSPN",
     # "DenseResNetGMM",
-    "DenseResNetSNGP",
+    # "DenseResNetSNGP",
 ]
 models = [
     "EfficientNetSPN",

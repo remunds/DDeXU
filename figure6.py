@@ -100,77 +100,6 @@ def plot_data(data, labels):
     plt.clf()
 
 
-def plot_uncertainty_surface(
-    train_examples,
-    train_labels,
-    test_uncertainty,
-    ax,
-    cmap=None,
-    plot_train=True,
-    input_is_ll=False,
-):
-    """Visualizes the 2D uncertainty surface.
-
-    For simplicity, assume these objects already exist in the memory:
-
-        test_examples: Array of test examples, shape (num_test, 2).
-        train_labels: Array of train labels, shape (num_train, ).
-        train_examples: Array of train examples, shape (num_train, 2).
-
-    Arguments:
-        test_uncertainty: Array of uncertainty scores, shape (num_test,).
-        ax: A matplotlib Axes object that specifies a matplotlib figure.
-        cmap: A matplotlib colormap object specifying the palette of the
-        predictive surface.
-
-    Returns:
-        pcm: A matplotlib PathCollection object that contains the palette
-        information of the uncertainty plot.
-    """
-    plt.rcParams["figure.dpi"] = 140
-    DEFAULT_X_RANGE = (-10, 10)
-    DEFAULT_Y_RANGE = (-10, 10)
-    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00", "#4daf4a"])
-    DEFAULT_NORM = colors.Normalize(
-        vmin=0,
-        vmax=1,
-    )
-    DEFAULT_N_GRID = 100
-    # Normalize uncertainty for better visualization.
-    test_uncertainty = test_uncertainty - np.min(test_uncertainty)
-    test_uncertainty = test_uncertainty / (
-        np.max(test_uncertainty) - np.min(test_uncertainty)
-    )
-
-    # Set view limits.
-    ax.set_ylim(DEFAULT_Y_RANGE)
-    ax.set_xlim(DEFAULT_X_RANGE)
-
-    # Plot normalized uncertainty surface.
-    pcm = ax.imshow(
-        np.reshape(test_uncertainty, [DEFAULT_N_GRID, DEFAULT_N_GRID]),
-        cmap=cmap,
-        origin="lower",
-        extent=DEFAULT_X_RANGE + DEFAULT_Y_RANGE,
-        vmin=DEFAULT_NORM.vmin,
-        vmax=DEFAULT_NORM.vmax,
-        interpolation="bicubic",
-        aspect="auto",
-    )
-
-    if plot_train:
-        # Plot training data.
-        ax.scatter(
-            train_examples[:, 0],
-            train_examples[:, 1],
-            c=train_labels,
-            cmap=DEFAULT_CMAP,
-            alpha=0.5,
-        )
-
-    return pcm
-
-
 def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
     # set seeds
     torch.manual_seed(1)
@@ -255,6 +184,8 @@ def start_figure6_run(run_name, batch_sizes, model_params, train_params, trial):
         ll_marg = model.eval_ll_marg(None, device, test_dl, return_all=True)
         print(ll_marg.shape)
         ll_marg_cpu = ll_marg.cpu().detach().numpy()
+
+        from plotting_utils import plot_uncertainty_surface
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(train_data, train_labels, -ll_marg_cpu, ax=ax)

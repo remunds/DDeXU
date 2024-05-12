@@ -5,6 +5,7 @@ from tueplots import bundles
 
 # plt.rcParams.update(bundles.iclr2024(usetex=False, column="full"))
 plt.rcParams.update(bundles.iclr2024(usetex=False))
+plt.rcParams.update({"lines.linewidth": 2})
 
 
 # Uncertainty reflects strength of corruption well
@@ -27,7 +28,6 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
         marker="o",
         label="Accuracy",
         color="orange",
-        linewidth=2,
     )
 
     ax2 = ax.twinx()
@@ -50,7 +50,6 @@ def uncert_corrupt_plot(accuracies, uncertainties, title, mode="ll"):
         marker="o",
         label=label,
         color="blue",
-        linewidth=2,
     )
 
     # Grid
@@ -143,7 +142,6 @@ def explain_plot(
         color="red",
         linestyle="solid",
         marker="o",
-        linewidth=1.5,
     )
     ax.set_ylabel(label, fontsize=12)
     ax.tick_params(axis="y")
@@ -156,7 +154,6 @@ def explain_plot(
             color=colors[i],
             linestyle="dashed",
             marker="o",
-            linewidth=1.5,
         )
     ax2.tick_params(axis="y")
     ax2.set_ylabel(f"{mode} explanations", fontsize=12)
@@ -203,7 +200,6 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
         accs,
         label="accuracy",
         marker="o",
-        linewidth=1.5,
         linestyle="--",
         color="tab:red",
     )
@@ -217,7 +213,6 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
         ll_expl_binned,
         label="ll explanation",
         marker="o",
-        linewidth=1.5,
         color="tab:blue",
     )
     ax2.plot(
@@ -225,7 +220,6 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
         p_expl_binned,
         label="posterior explanation",
         marker="o",
-        linewidth=1.5,
         color="tab:orange",
     )
     ax2.plot(
@@ -233,7 +227,6 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
         mpe_expl_binned,
         label="mpe",
         marker="o",
-        linewidth=1.5,
         color="tab:green",
     )
     ax2.set_ylabel("explanations normalized in [0,1]")
@@ -256,3 +249,89 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
 
     plt.tight_layout()
     return fig
+
+
+def plot_uncertainty_surface(
+    train_examples,
+    train_labels,
+    test_uncertainty,
+    ax,
+    cmap=None,
+    plot_train=True,
+    ood_examples=None,
+):
+    """
+    adapted from here: https://www.tensorflow.org/tutorials/understanding/sngp
+    Visualizes the 2D uncertainty surface.
+
+    For simplicity, assume these objects already exist in the memory:
+
+        test_examples: Array of test examples, shape (num_test, 2).
+        train_labels: Array of train labels, shape (num_train, ).
+        train_examples: Array of train examples, shape (num_train, 2).
+
+    Arguments:
+        test_uncertainty: Array of uncertainty scores, shape (num_test,).
+        ax: A matplotlib Axes object that specifies a matplotlib figure.
+        cmap: A matplotlib colormap object specifying the palette of the
+        predictive surface.
+
+    Returns:
+        pcm: A matplotlib PathCollection object that contains the palette
+        information of the uncertainty plot.
+    """
+    import matplotlib.colors as colors
+
+    plt.rcParams["figure.dpi"] = 140
+    DEFAULT_X_RANGE = (-3.5, 3.5)
+    DEFAULT_Y_RANGE = (-2.5, 2.5)
+    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00"])
+    DEFAULT_NORM = colors.Normalize(
+        vmin=0,
+        vmax=1,
+    )
+    DEFAULT_N_GRID = 100
+    # Normalize uncertainty for better visualization.
+    test_uncertainty = test_uncertainty - np.min(test_uncertainty)
+    test_uncertainty = test_uncertainty / (
+        np.max(test_uncertainty) - np.min(test_uncertainty)
+    )
+
+    # Set view limits.
+    ax.set_ylim(DEFAULT_Y_RANGE)
+    ax.set_xlim(DEFAULT_X_RANGE)
+
+    # Make axis labels better readable
+    ax.tick_params(axis="both", which="major", labelsize=10)
+
+    # Increase thickness of lines slightly
+    ax.spines["bottom"].set_linewidth(1.5)
+    ax.spines["left"].set_linewidth(1.5)
+    ax.spines["top"].set_linewidth(1.5)
+    ax.spines["right"].set_linewidth(1.5)
+
+    # Plot normalized uncertainty surface.
+    pcm = ax.imshow(
+        np.reshape(test_uncertainty, [DEFAULT_N_GRID, DEFAULT_N_GRID]),
+        cmap=cmap,
+        origin="lower",
+        extent=DEFAULT_X_RANGE + DEFAULT_Y_RANGE,
+        vmin=DEFAULT_NORM.vmin,
+        vmax=DEFAULT_NORM.vmax,
+        interpolation="bicubic",
+        aspect="auto",
+    )
+
+    if plot_train:
+        # Plot training data.
+        ax.scatter(
+            train_examples[:, 0],
+            train_examples[:, 1],
+            c=train_labels,
+            cmap=DEFAULT_CMAP,
+            alpha=0.5,
+        )
+        if ood_examples is not None:
+            ax.scatter(ood_examples[:, 0], ood_examples[:, 1], c="red", alpha=0.1)
+
+    return pcm
