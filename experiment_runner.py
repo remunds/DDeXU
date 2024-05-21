@@ -1075,9 +1075,9 @@ loss = [
     # "discriminative",
 ]
 dataset = [
-    "two-moons",
+    # "two-moons",
     # "figure6",
-    # "latent_figure6",
+    "latent_figure6",
     # "dirty-mnist",
     # "mnist-calib",
     # "mnist-expl",

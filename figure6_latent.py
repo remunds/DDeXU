@@ -103,7 +103,7 @@ def plot_data(data, labels):
     plt.clf()
 
 
-def plot_uncertainty_surface(
+def plot_uncertainty_surface_old(
     train_examples,
     train_labels,
     test_uncertainty,
@@ -268,6 +268,7 @@ def start_latent_figure6_run(run_name, batch_sizes, model_params, train_params, 
         model.eval()
 
         from gmm_utils import gmm_fit, gmm_get_logits
+        from plotting_utils import plot_uncertainty_surface
 
         # use gaussians as embeddings
         # embeddings have shape (num_samples, num_gaussians)
@@ -279,18 +280,20 @@ def start_latent_figure6_run(run_name, batch_sizes, model_params, train_params, 
         ll_marg = torch.logsumexp(logits, dim=1)
         ll_marg_cpu = ll_marg.cpu().detach().numpy()
 
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, -ll_marg_cpu, ax=ax)
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Marginal NLL")
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, -ll_marg_cpu, ax=ax, fig6=True
+        )
+        # plt.colorbar(pcm, ax=ax)
+        # plt.title("Marginal NLL")
         mlflow.log_figure(fig, "nll.pdf")
 
-        fig, ax = plt.subplots(figsize=(7, 5.5))
+        fig, ax = plt.subplots(figsize=(6, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, -ll_marg_cpu, ax=ax, plot_train=False
+            train_data, train_labels, -ll_marg_cpu, ax=ax, plot_train=False, fig6=True
         )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Marginal NLL")
+        # plt.colorbar(pcm, ax=ax)
+        # plt.title("Marginal NLL")
         mlflow.log_figure(fig, "nll_notrain.pdf")
 
         # logits represent P(x|y), so p(y|x) = p(x|y) * p(y) / p(x)
@@ -299,18 +302,20 @@ def start_latent_figure6_run(run_name, batch_sizes, model_params, train_params, 
         # entropy = -torch.sum(torch.exp(logits) * logits, dim=1)
         entropy_cpu = entropy.cpu().detach().numpy()
 
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, entropy_cpu, ax=ax)
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Entropy")
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, entropy_cpu, ax=ax, fig6=True
+        )
+        # plt.colorbar(pcm, ax=ax)
+        # plt.title("Entropy")
         mlflow.log_figure(fig, "entropy.pdf")
 
-        fig, ax = plt.subplots(figsize=(7, 5.5))
+        fig, ax = plt.subplots(figsize=(6, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, entropy_cpu, ax=ax, plot_train=False
+            train_data, train_labels, entropy_cpu, ax=ax, plot_train=False, fig6=True
         )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Entropy")
+        # plt.colorbar(pcm, ax=ax)
+        # plt.title("Entropy")
         mlflow.log_figure(fig, "entropy_notrain.pdf")
 
         # Einet
@@ -321,35 +326,44 @@ def start_latent_figure6_run(run_name, batch_sizes, model_params, train_params, 
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, entropy_einet_cpu, ax=ax
+            train_data, train_labels, entropy_einet_cpu, ax=ax, fig6=True
         )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Entropy")
+        clb = plt.colorbar(pcm, ax=ax)
+        clb.ax.tick_params(labelsize=25)
+        # plt.title("Entropy")
         mlflow.log_figure(fig, "entropy_einet.pdf")
 
         fig, ax = plt.subplots(figsize=(7, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, entropy_einet_cpu, ax=ax, plot_train=False
+            train_data,
+            train_labels,
+            entropy_einet_cpu,
+            ax=ax,
+            plot_train=False,
+            fig6=True,
         )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Entropy")
+        clb = plt.colorbar(pcm, ax=ax)
+        clb.ax.tick_params(labelsize=25)
+        # plt.title("Entropy")
         mlflow.log_figure(fig, "entropy_einet_notrain.pdf")
 
         nll_einet = -model(test_tensor).mean(dim=1)
         nll_einet_cpu = nll_einet.cpu().detach().numpy()
 
-        fig, ax = plt.subplots(figsize=(7, 5.5))
-        pcm = plot_uncertainty_surface(train_data, train_labels, nll_einet_cpu, ax=ax)
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Marginal NLL")
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+        pcm = plot_uncertainty_surface(
+            train_data, train_labels, nll_einet_cpu, ax=ax, fig6=True
+        )
+        # plt.colorbar(pcm, ax=ax)
+        # plt.title("Marginal NLL")
         mlflow.log_figure(fig, "nll_einet.pdf")
 
-        fig, ax = plt.subplots(figsize=(7, 5.5))
+        fig, ax = plt.subplots(figsize=(6, 5.5))
         pcm = plot_uncertainty_surface(
-            train_data, train_labels, nll_einet_cpu, ax=ax, plot_train=False
+            train_data, train_labels, nll_einet_cpu, ax=ax, plot_train=False, fig6=True
         )
-        plt.colorbar(pcm, ax=ax)
-        plt.title("Marginal NLL")
+        # plt.colorbar(pcm, ax=ax)
+        # plt.title("Marginal NLL")
         mlflow.log_figure(fig, "nll_einet_notrain.pdf")
 
         return 0

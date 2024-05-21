@@ -333,8 +333,8 @@ class EinetUtils:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.state_dict(), path)
 
-    def load(self, path, backbone_only=False):
-        state_dict = torch.load(path)
+    def load(self, path, backbone_only=False, map_location=None):
+        state_dict = torch.load(path, map_location=map_location)
         if backbone_only:
             state_dict = {k: v for k, v in state_dict.items() if "einet" not in k}
         self.load_state_dict(state_dict, strict=False)
@@ -2772,6 +2772,7 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
         num_hidden=32,
         spectral_normalization=True,
         ensemble_paths=[],
+        map_location=None,
         **kwargs,
     ):
         super(EfficientNetEnsemble, self).__init__()
@@ -2790,7 +2791,7 @@ class EfficientNetEnsemble(nn.Module, EinetUtils):
                 num_hidden,
                 spectral_normalization,
             )
-            member.load_state_dict(torch.load(path))
+            member.load_state_dict(torch.load(path, map_location=map_location))
             self.members.append(member)
 
     def compute_normalization_values(self, dl, device):

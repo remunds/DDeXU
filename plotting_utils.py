@@ -111,9 +111,23 @@ def calibration_plot_multi(confidences, accs, names, binning, dl_name):
     for i in range(len(names)):
         ax.plot(confidences[i], accs[i], marker="o", label=names[i])
     ax.plot([0, 1], [0, 1], linestyle="--", color="gray")  # Diagonal line for reference
-    ax.set_xlabel("mean confidence")
-    ax.set_ylabel("observed accuracy")
+
+    # Grid
+    ax.grid(True)
+
+    # Increase thickness of lines slightly
+    ax.spines["bottom"].set_linewidth(1.5)
+    ax.spines["left"].set_linewidth(1.5)
+    ax.spines["top"].set_linewidth(1.5)
+    ax.spines["right"].set_linewidth(1.5)
+
+    # Make axis labels better readable
+    ax.tick_params(axis="both", which="major", labelsize=10)
+
+    ax.set_xlabel("mean confidence", fontsize=12)
+    ax.set_ylabel("observed accuracy", fontsize=12)
     ax.legend(loc="upper left", fontsize=10).set_zorder(10)
+
     mlflow.log_figure(fig, f"calibration_multi_{binning}_{dl_name}.pdf")
     plt.clf()
 
@@ -125,17 +139,22 @@ def explain_plot(
     explanations,
     name,
     mode="ll",
+    show_legend=True,
 ):
     assert len(corruptions) == explanations.shape[1]
     # plt.set_cmap("tab20")
     cmap = plt.get_cmap("tab20")
     colors = cmap(np.linspace(0, 1, len(corruptions)))
+    if show_legend:
+        fig, ax = plt.subplots(figsize=(10, 6))
+    else:
+        fig, ax = plt.subplots(figsize=(7, 6))
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.set_xlabel("severity", fontsize=12)
-    ax.set_xticks(np.array(list(range(1, 6))))
+    ax.set_xticks(np.arange(len(explanations)))
+    ax.set_xticklabels([str(i + 1) for i in range(len(explanations))])
+    ax.set_xlabel("Severity", fontsize=12)
 
-    label = "marginal ll" if mode == "ll" else "entropy"
+    label = "Marginal data log-likelihood" if mode == "ll" else "Entropy"
     ax.plot(
         uncertainty,
         label=label,
@@ -150,14 +169,15 @@ def explain_plot(
     for i in range(explanations.shape[1]):
         ax2.plot(
             explanations[:, i],
-            label=corruptions[i].replace("_", " "),
+            label=corruptions[i].replace("_", " ").capitalize(),
             color=colors[i],
             linestyle="dashed",
             marker="o",
         )
     ax2.tick_params(axis="y")
+    mode = "Log likelihood" if mode == "ll" else "MPE" if mode == "mpe" else "Entropy"
     ax2.set_ylabel(f"{mode} explanations", fontsize=12)
-    if mode == "mpe":
+    if mode == "MPE":
         # mpe-expl
         ax2.set_ylim([0, 5])
 
@@ -177,15 +197,16 @@ def explain_plot(
     ax.tick_params(axis="both", which="major", labelsize=10)
     ax2.tick_params(axis="both", which="major", labelsize=10)
 
-    handles, labels = ax.get_legend_handles_labels()
-    handles2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(
-        handles + handles2,
-        labels + labels2,
-        loc="upper left",
-        bbox_to_anchor=(1.1, 1),
-        fontsize=10,
-    ).set_zorder(10)
+    if show_legend:
+        handles, labels = ax.get_legend_handles_labels()
+        handles2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(
+            handles + handles2,
+            labels + labels2,
+            loc="upper left",
+            bbox_to_anchor=(1.1, 1),
+            fontsize=10,
+        ).set_zorder(10)
 
     plt.tight_layout()
     return fig
@@ -259,6 +280,7 @@ def plot_uncertainty_surface(
     cmap=None,
     plot_train=True,
     ood_examples=None,
+    fig6=False,
 ):
     """
     adapted from here: https://www.tensorflow.org/tutorials/understanding/sngp
@@ -283,9 +305,14 @@ def plot_uncertainty_surface(
     import matplotlib.colors as colors
 
     plt.rcParams["figure.dpi"] = 140
-    DEFAULT_X_RANGE = (-3.5, 3.5)
-    DEFAULT_Y_RANGE = (-2.5, 2.5)
-    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00"])
+    if fig6:
+        DEFAULT_X_RANGE = (-10, 10)
+        DEFAULT_Y_RANGE = (-10, 10)
+    else:
+        DEFAULT_X_RANGE = (-3.5, 3.5)
+        DEFAULT_Y_RANGE = (-2.5, 2.5)
+
+    DEFAULT_CMAP = colors.ListedColormap(["#377eb8", "#ff7f00", "#4daf4a"])
     DEFAULT_NORM = colors.Normalize(
         vmin=0,
         vmax=1,
@@ -302,7 +329,8 @@ def plot_uncertainty_surface(
     ax.set_xlim(DEFAULT_X_RANGE)
 
     # Make axis labels better readable
-    ax.tick_params(axis="both", which="major", labelsize=10)
+    ax.tick_params(axis="both", which="major", labelsize=25)
+    # ax.tick_params(axis="both", which="minor", labelsize=15)
 
     # Increase thickness of lines slightly
     ax.spines["bottom"].set_linewidth(1.5)
