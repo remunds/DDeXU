@@ -364,6 +364,7 @@ def start_cifar10_brightness_run(
         # before costly evaluation, make sure that the model is not completely off
         valid_acc = model.eval_acc(valid_dl_b, device)
         mlflow.log_metric("valid_acc", valid_acc)
+        print("valid_acc", valid_acc)
         model.deactivate_uncert_head()
         valid_acc = model.eval_acc(valid_dl_b, device)
         mlflow.log_metric("backbone_valid_acc", valid_acc)

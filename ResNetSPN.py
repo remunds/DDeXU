@@ -47,9 +47,10 @@ class EinetUtils:
             print(f"loading pretrained model from {pretrained_path}")
             if num_epochs == 0 and warmup_epochs == 0:
                 # load complete model and return
-                self.load(pretrained_path)
+                self.load(pretrained_path, map_location=device)
             else:
-                self.load(pretrained_path, backbone_only=True)
+                # self.load(pretrained_path, backbone_only=True, map_location=device)
+                self.load(pretrained_path, map_location=device)
             # self.deactivate_uncert_head()
             # val_acc = self.eval_acc(dl_valid, device)
             # print(f"pretrained backbone validation accuracy: {val_acc}")
@@ -336,8 +337,10 @@ class EinetUtils:
     def load(self, path, backbone_only=False, map_location=None):
         state_dict = torch.load(path, map_location=map_location)
         if backbone_only:
+            print("loading backbone only")
             state_dict = {k: v for k, v in state_dict.items() if "einet" not in k}
         self.load_state_dict(state_dict, strict=False)
+        # self.load_state_dict(state_dict)
 
     def get_embeddings(self, dl, device):
         self.eval()

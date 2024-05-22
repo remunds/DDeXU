@@ -145,8 +145,10 @@ def explain_plot(
     # plt.set_cmap("tab20")
     cmap = plt.get_cmap("tab20")
     colors = cmap(np.linspace(0, 1, len(corruptions)))
-    if show_legend:
-        fig, ax = plt.subplots(figsize=(10, 6))
+    if show_legend and mode == "ll":
+        fig, ax = plt.subplots(figsize=(9.75, 6))
+    elif show_legend and mode != "ll":
+        fig, ax = plt.subplots(figsize=(9, 6))
     else:
         fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -175,8 +177,12 @@ def explain_plot(
             marker="o",
         )
     ax2.tick_params(axis="y")
-    mode = "Log likelihood" if mode == "ll" else "MPE" if mode == "mpe" else "Entropy"
-    ax2.set_ylabel(f"{mode} explanations", fontsize=12)
+    mode = (
+        "Log likelihood explanations"
+        if mode == "ll"
+        else "MPE" if mode == "mpe" else "Posterior explanations"
+    )
+    ax2.set_ylabel(f"{mode}", fontsize=12)
     if mode == "MPE":
         # mpe-expl
         ax2.set_ylim([0, 5])
@@ -219,38 +225,38 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
     ax.plot(
         bins[:-1],
         accs,
-        label="accuracy",
+        label="Accuracy",
         marker="o",
         linestyle="--",
         color="tab:red",
     )
-    ax.set_ylabel("accuracy")
-    ax.set_xlabel("brightness corruption")
+    ax.set_ylabel("Accuracy", fontsize=12)
+    ax.set_xlabel("Brightness corruption", fontsize=12)
     ax.grid(True)
 
     ax2 = ax.twinx()
     ax2.plot(
         bins[:-1],
         ll_expl_binned,
-        label="ll explanation",
+        label="LL explanation",
         marker="o",
         color="tab:blue",
     )
     ax2.plot(
         bins[:-1],
         p_expl_binned,
-        label="posterior explanation",
+        label="Posterior explanation",
         marker="o",
         color="tab:orange",
     )
     ax2.plot(
         bins[:-1],
         mpe_expl_binned,
-        label="mpe",
+        label="MPE",
         marker="o",
         color="tab:green",
     )
-    ax2.set_ylabel("explanations normalized in [0,1]")
+    ax2.set_ylabel("Explanations normalized in [0,1]", fontsize=12)
 
     # Increase thickness of lines slightly
     ax.spines["bottom"].set_linewidth(1.5)
