@@ -146,9 +146,11 @@ def explain_plot(
     cmap = plt.get_cmap("tab20")
     colors = cmap(np.linspace(0, 1, len(corruptions)))
     if show_legend and mode == "ll":
-        fig, ax = plt.subplots(figsize=(9.75, 6))
-    elif show_legend and mode != "ll":
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig, ax = plt.subplots(figsize=(10, 6))
+    elif show_legend and mode == "mpe":
+        fig, ax = plt.subplots(figsize=(9.5, 6))
+    elif show_legend and mode == "post":
+        fig, ax = plt.subplots(figsize=(9.1, 6))
     else:
         fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -166,6 +168,9 @@ def explain_plot(
     )
     ax.set_ylabel(label, fontsize=12)
     ax.tick_params(axis="y")
+    from matplotlib.ticker import FormatStrFormatter
+
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 
     ax2 = ax.twinx()
     for i in range(explanations.shape[1]):
@@ -178,12 +183,12 @@ def explain_plot(
         )
     ax2.tick_params(axis="y")
     mode = (
-        "Log likelihood explanations"
+        "Likelihood explanations"
         if mode == "ll"
-        else "MPE" if mode == "mpe" else "Posterior explanations"
+        else "Most probable explanation" if mode == "mpe" else "Posterior explanations"
     )
     ax2.set_ylabel(f"{mode}", fontsize=12)
-    if mode == "MPE":
+    if mode == "Most probable explanation":
         # mpe-expl
         ax2.set_ylim([0, 5])
 
@@ -210,7 +215,7 @@ def explain_plot(
             handles + handles2,
             labels + labels2,
             loc="upper left",
-            bbox_to_anchor=(1.1, 1),
+            bbox_to_anchor=(1.1, 1) if "like" in mode else (1.15, 1),
             fontsize=10,
         ).set_zorder(10)
 
@@ -231,7 +236,7 @@ def plot_brightness_binned(bins, accs, ll_expl_binned, p_expl_binned, mpe_expl_b
         color="tab:red",
     )
     ax.set_ylabel("Accuracy", fontsize=12)
-    ax.set_xlabel("Brightness corruption", fontsize=12)
+    ax.set_xlabel("Noise corruption severity", fontsize=12)
     ax.grid(True)
 
     ax2 = ax.twinx()

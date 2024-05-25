@@ -1231,7 +1231,8 @@ trained_models = {
         "EfficientNetSPN": "771929259740930885/77863a62033042b999743a3434edc708/artifacts/model"
     },
     "cifar10-expl-bright": {
-        "EfficientNetSPN": "217000296246753437/7744627715904221a0723f7ee4add3e0/artifacts/model"
+        "EfficientNetSPN": "217000296246753437/1e74e543cf1e4d9dabe131eb2ffd48ae/artifacts/model"
+        # "217000296246753437/7744627715904221a0723f7ee4add3e0/artifacts/model",
     },
 }
 

@@ -408,27 +408,28 @@ with mlflow.start_run(run_name=f"Eval"):
 
     # %%
     # load dataset and their manipulations
-    svhn, svhn_c = load_svhn()
-    cifar100, cifar100_c = load_cifar100()
+    # svhn, svhn_c = load_svhn()
+    # cifar100, cifar100_c = load_cifar100()
     cifar10, cifar10_c = load_cifar10()
 
     # %%
     # dls = [cifar100, cifar100_c]
     # dls = [cifar10, cifar10_c]
     dls = {
-        # "svhn": svhn,
-        "svhn-c": svhn_c,
-        # "cifar100": cifar100,
-        "cifar100-c": cifar100_c,
         # "cifar10": cifar10,
         "cifar10-c": cifar10_c,
+        # "cifar100": cifar100,
+        # "cifar100-c": cifar100_c,
+        # "svhn": svhn,
+        # "svhn-c": svhn_c,
     }
 
     device = "cpu"
 
     # load models from checkpoints
     model_checkpoints_c10 = {
-        "MCD": "279248034225110540/acf0f10905e24b8380b358a593174256/artifacts/model/state_dict.pth",
+        # "MCD": "279248034225110540/acf0f10905e24b8380b358a593174256/artifacts/model/state_dict.pth",
+        "MCD": "279248034225110540/0f28aecf98ea4b1a962beb64638b66a6/artifacts/model/state_dict.pth",
         "Softmax": "279248034225110540/3d630a5cb75044ff9cd098169bf24bc9/artifacts/model/state_dict.pth",
         # "SNGP": "279248034225110540/f3b109953e984d17ab6c342ade33ad1f/artifacts/model/state_dict.pth",
         "DDeXU": "279248034225110540/cafe642add1a45f3b2a8337d22d6ef52/artifacts/model/state_dict.pth",
@@ -494,64 +495,68 @@ with mlflow.start_run(run_name=f"Eval"):
     from plotting_utils import calibration_plot_multi
 
     for dl_name in dls:
-        confs_freq = []
-        accs_freq = []
-        confs_w = []
-        accs_w = []
-        names = []
-        model_checkpoints = all_model_checkpoints[dl_name]
+        for i in range(10):
+            confs_freq = []
+            accs_freq = []
+            confs_w = []
+            accs_w = []
+            names = []
+            model_checkpoints = all_model_checkpoints[dl_name]
 
-        with mlflow.start_run(run_name=f"Eval_{dl_name}", nested=True) as run:
-            for model_name in model_checkpoints:
-                print(model_name)
-                if model_name == "Softmax":
-                    model_params["spectral_normalization"] = False
-                    model = EfficientNetDet(**model_params)
-                elif model_name == "DDeXU":
-                    model = EfficientNetSPN(**model_params)
-                elif model_name == "DDU":
-                    model = EfficientNetGMM(**model_params)
-                elif model_name == "SNGP":
-                    model_params["spectral_normalization"] = True
-                    train_batch_size = (512,)
-                    train_num_data = 45000 + 5000
-                    model = EfficientNetSNGP(
-                        train_batch_size=train_batch_size,
-                        train_num_data=train_num_data,
-                        **model_params,
+            with mlflow.start_run(run_name=f"Eval_{dl_name}_{i}", nested=True) as run:
+                for model_name in model_checkpoints:
+                    model_params["num_classes"] = 100 if "cifar100" in dl_name else 10
+                    if model_name == "Softmax":
+                        model_params["spectral_normalization"] = False
+                        model = EfficientNetDet(**model_params)
+                    elif model_name == "DDeXU":
+                        model = EfficientNetSPN(**model_params)
+                    elif model_name == "DDU":
+                        model = EfficientNetGMM(**model_params)
+                    elif model_name == "SNGP":
+                        model_params["spectral_normalization"] = True
+                        train_batch_size = (512,)
+                        train_num_data = 45000 + 5000
+                        model = EfficientNetSNGP(
+                            train_batch_size=train_batch_size,
+                            train_num_data=train_num_data,
+                            **model_params,
+                        )
+                    elif model_name == "MCD":
+                        model = EfficientNetDropout(**model_params)
+                    elif model_name == "DE":
+                        model_params["ensemble_paths"] = [
+                            "/data_docker/mlartifacts/" + m
+                            for m in model_checkpoints[model_name]
+                        ]
+                        model = EfficientNetEnsemble(
+                            **model_params, map_location=device
+                        )
+                        for m in model.members:
+                            m.to(device)
+                    if model_name != "DE":
+                        path = pre_path + model_checkpoints[model_name]
+                        model.load(path, backbone_only=False, map_location=device)
+                    model = model.to(device)
+                    model = model.eval()
+                    dl = dls[dl_name]
+                    if "DDeXU" in model_name:
+                        model.compute_normalization_values(
+                            dl, device
+                        )  # this should be train instead of test
+                    model.activate_uncert_head(deactivate_backbone=True)
+                    lls = model.eval_ll(dl, device, return_all=True)
+                    (conf_freq, acc_freq), (conf_w, acc_w) = model.eval_calibration(
+                        lls, device, model_name, dl, method="posterior"
                     )
-                elif model_name == "MCD":
-                    model = EfficientNetDropout(**model_params)
-                elif model_name == "DE":
-                    model_params["ensemble_paths"] = [
-                        "/data_docker/mlartifacts/" + m
-                        for m in model_checkpoints[model_name]
-                    ]
-                    model = EfficientNetEnsemble(**model_params, map_location=device)
-                    for m in model.members:
-                        m.to(device)
-                if model_name != "DE":
-                    path = pre_path + model_checkpoints[model_name]
-                    model.load(path, backbone_only=False, map_location=device)
-                model = model.to(device)
-                model = model.eval()
-                dl = dls[dl_name]
-                if "DDeXU" in model_name:
-                    model.compute_normalization_values(
-                        dl, device
-                    )  # this should be train instead of test
-                model.activate_uncert_head(deactivate_backbone=True)
-                (conf_freq, acc_freq), (conf_w, acc_w) = model.eval_calibration(
-                    None, device, model_name, dl
-                )
-                confs_freq.append(conf_freq)
-                accs_freq.append(acc_freq)
-                confs_w.append(conf_w)
-                accs_w.append(acc_w)
-                names.append(model_name)
+                    confs_freq.append(conf_freq)
+                    accs_freq.append(acc_freq)
+                    confs_w.append(conf_w)
+                    accs_w.append(acc_w)
+                    names.append(model_name)
 
-            calibration_plot_multi(confs_freq, accs_freq, names, "freq", dl_name)
-            calibration_plot_multi(confs_w, accs_w, names, "w", dl_name)
+                calibration_plot_multi(confs_freq, accs_freq, names, "freq", dl_name)
+                calibration_plot_multi(confs_w, accs_w, names, "w", dl_name)
 
     # %% [markdown]
     # # Explanation plots
@@ -613,7 +618,11 @@ with mlflow.start_run(run_name=f"Eval"):
         expl_post = torch.tensor(expl_post)
         print(len(corruptions))
         print(expl_ll.shape)
-        show_legend = True if corruption == "pixelate" else False
+        show_legend = (
+            True
+            if (corruption == "pixelate" or corruption == "defocus_blur")
+            else False
+        )
         fig = explain_plot(
             corruptions, lls_marg, expl_ll, corruption, "ll", show_legend=show_legend
         )
