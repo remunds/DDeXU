@@ -5,27 +5,18 @@ import optuna
 
 from simple_einet.layers.distributions.multidistribution import MultiDistributionLayer
 from simple_einet.layers.distributions.normal import RatNormal
-from two_moons_experiment import start_two_moons_run
-from mnist_calib_experiment import start_mnist_calib_run
-from figure6 import start_figure6_run
-from figure6_latent import start_latent_figure6_run
 
-# from mnist_expl_experiment import start_mnist_expl_run, mnist_expl_manual_evaluation
-
-from mnist_expl_experiment2 import start_mnist_expl_run, mnist_expl_manual_evaluation
-from dirty_mnist_experiment import start_dirty_mnist_run
-
-from cifar10_expl_experiment import start_cifar10_expl_run
-from cifar10_expl_brightness import start_cifar10_brightness_run
-from cifar10_calib_experiment import start_cifar10_calib_run
-from cifar100_calib_experiment import start_cifar100_calib_run
-from svhn_calib_experiment import start_svhn_calib_run
-from svhn_expl_experiment import start_svhn_expl_run
-
-# from svhn_expl_experiment2 import start_svhn_expl_run
-# from svhn_expl_experiment_einsum import start_svhn_expl_run
-# from svhn_expl_experiment_custom import start_svhn_expl_run
-# from svhn_expl_experiment_pres import start_svhn_expl_run
+from experiments.two_moons_experiment import start_two_moons_run
+from experiments.mnist_calib_experiment import start_mnist_calib_run
+from experiments.figure6 import start_figure6_run
+from experiments.figure6_latent import start_latent_figure6_run
+from experiments.dirty_mnist_experiment import start_dirty_mnist_run
+from experiments.cifar10_expl_experiment import start_cifar10_expl_run
+from experiments.cifar10_expl_brightness import start_cifar10_brightness_run
+from experiments.cifar10_calib_experiment import start_cifar10_calib_run
+from experiments.cifar100_calib_experiment import start_cifar100_calib_run
+from experiments.svhn_calib_experiment import start_svhn_calib_run
+from experiments.svhn_expl_experiment import start_svhn_expl_run
 
 torch.manual_seed(42)
 # Set our tracking server uri for logging
