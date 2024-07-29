@@ -1,9 +1,9 @@
 import traceback
 import torch
+
 import mlflow
 import optuna
 
-from simple_einet.layers.distributions.multidistribution import MultiDistributionLayer
 from simple_einet.layers.distributions.normal import RatNormal
 
 from experiments.two_moons_experiment import start_two_moons_run
@@ -311,25 +311,6 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
             traceback.print_exc()
             mlflow.set_tag("pruned", e)
             mlflow.end_run()
-    elif "mnist-expl" in dataset:
-        model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
-        # train_params["highest_severity_train"] = 2
-        train_params["highest_severity_train"] = 5
-        # copy here, since some params are changed in the experiment
-        # train_params["use_mpe_reconstruction_loss"] = True
-        try:
-            start_mnist_expl_run(
-                run_name,
-                batch_sizes.copy(),
-                model_params.copy(),
-                train_params.copy(),
-                None,
-            )
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
-            mlflow.set_tag("pruned", e)
-            mlflow.end_run()
     elif "dirty-mnist" in dataset:
         try:
             start_dirty_mnist_run(
@@ -363,7 +344,6 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif "cifar10-c-expl" in dataset:
         model_params["explaining_vars"] = list(range(19))
         train_params["corruption_levels_train"] = [0, 1]
-        # train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_cifar10_expl_run(
                 run_name,
@@ -399,15 +379,11 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
         # for a in [True, False]:
         #     for b in [128, 256]:
         # train_params["train_backbone_default"] = True
-        # train_params["use_mpe_reconstruction_loss"] = a
         # model_params["num_hidden"] = b
         # start_bright_run()
         train_params["train_backbone_default"] = True
-        # train_params["use_mpe_reconstruction_loss"] = True
-        train_params["use_mpe_reconstruction_loss"] = True
         model_params["num_hidden"] = 128
         # start_bright_run()
-        train_params["use_mpe_reconstruction_loss"] = False
         start_bright_run()
 
     elif "svhn-c-calib" in dataset:
@@ -423,7 +399,6 @@ def run_conv(dataset, loss, training, model, pretrained_path=None):
     elif "svhn-c-expl" in dataset:
         model_params["explaining_vars"] = list(range(15))
         train_params["corruption_levels_train"] = [0, 1]
-        # train_params["use_mpe_reconstruction_loss"] = True
         try:
             start_svhn_expl_run(
                 run_name,
@@ -546,31 +521,6 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
                 mlflow.set_tag("pruned", e)
                 mlflow.end_run()
                 raise optuna.TrialPruned()
-        elif "mnist-expl" in dataset:
-            model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
-            train_params["highest_severity_train"] = 3
-            # copy here, since some params are changed in the experiment
-            try:
-                val_loss_2 = start_mnist_expl_run(
-                    run_name,
-                    batch_sizes.copy(),
-                    model_params.copy(),
-                    train_params.copy(),
-                    trial,
-                )
-                train_params["highest_severity_train"] = 4
-                val_loss_4 = start_mnist_expl_run(
-                    run_name, batch_sizes, model_params, train_params, trial
-                )
-                return (val_loss_2 + val_loss_4) / 2
-            except Exception as e:
-                if type(e) == optuna.exceptions.TrialPruned:
-                    raise e
-                print(e)
-                traceback.print_exc()
-                mlflow.set_tag("pruned", e)
-                mlflow.end_run()
-                raise optuna.TrialPruned()
         elif "dirty-mnist" in dataset:
             try:
                 return start_dirty_mnist_run(
@@ -648,77 +598,6 @@ def tune_conv(dataset, loss, training, model, pretrained_path=None):
         study.optimize(objective, n_trials=n_trials)
 
 
-# Ziel vom Tuning: Testen, ob und wie gut Idee mit Einet funktioniert -> End-to-End training kann man spaeter herausfinden
-# Nach Gespraech mit Christian neue Idee fuer schnelleres tuning:
-# Erstes Tuning:
-# - training schedule nur seperate
-# - einmal backbones (DenseRes, ConvRes, ConvResDDU, Efficient) optimieren (Heute)
-#    - dafuer nur LR (log) optimieren fuer jedes experiment (specnorm=0.95)
-#    - maximal 50 epochs, 15 trials
-#    - keine auswertung noetig
-# - Ergebnis: 1 (twomoons) + 3 (mnist) + 3 (dirty) + 3 (cifar) = 10 models
-# - Idealerweise bis morgen / heute abend fertig.
-#
-# Zweites Tuning:
-# - Beste backbones raussuchen und accuracy berechnen und notieren(!)
-# - Fuer jedes experiment:
-#   - Lade passendes Backbone
-#   - Nur seperate training (frozen backbone) (==ideal) -> end-to-end/warmup kann spaeter optimiert werden
-#   - Optimiere einet_depth, einet_rep, einet_dropout (jeweils 2-3 werte), lr (log)
-# - Alle losses, datasets und backbones (5 + 5 * 5 * 3) = 80 runs a 15 trials = 1200 trials
-
-# AutoEncoder spaeter extra optimieren
-
-# Alter tuning-versuch
-# loss = ["discriminative", "generative", "hybrid_low", "hybrid_high", "hybrid", "hybrid_very_low"]
-# training = ["end-to-end", "seperate", "warmup"]
-# dataset = [
-#     "two-moons",
-#     "mnist-calib",
-#     "mnist-expl",
-#     "dirty-mnist",
-#     "cifar10-c",
-#     "cifar10-c_expl",
-# ]
-# models = [
-#     "ConvResNetSPN",
-#     "ConvResNetDDU",
-#     "AutoEncoderSPN",
-#     "EfficientNetSPN",
-# ]
-
-# for l in loss:
-#     for t in training:
-#         for d in dataset:
-#             if d == "two-moons":
-#                 tune_two_moons(l, t)
-#             else:
-#                 for m in models:
-#                     tune_conv(d, l, t, m)
-
-# Erstes Tuning
-# dataset = [
-#     "two-moons",
-#     "mnist-calib",
-#     # "mnist-expl",
-#     "dirty-mnist",
-#     "cifar10-c",
-#     # "cifar10-c_expl",
-# ]
-# models = [
-#     "ConvResNetSPN",
-#     "ConvResNetDDU",
-#     # "AutoEncoderSPN",
-#     "EfficientNetSPN",
-# ]
-# for d in dataset:
-#     if d == "two-moons":
-#         tune_two_moons("discriminative", "backbone_only")
-#         continue
-#     for m in models:
-#         tune_conv(d, "discriminative", "backbone_only", m)
-
-
 def run_cifar_expl(dataset, model, loss, pretrained_path):
     mlflow.set_experiment(dataset)
     model_params = dict(
@@ -794,90 +673,6 @@ def run_cifar_expl(dataset, model, loss, pretrained_path):
             run_name, batch_sizes, model_params, train_params, trial=None
         )
         return (val_loss_2 + val_loss_4) / 2
-    except Exception as e:
-        print(e)
-        traceback.print_exc()
-        mlflow.set_tag("pruned", e)
-        mlflow.end_run()
-
-
-def run_mnist_expl(dataset, model, loss, pretrained_path):
-    mlflow.set_experiment(dataset)
-    model_params = dict(
-        model=model,
-        block="basic",  # basic, bottleneck
-        layers=[2, 2, 2, 2],
-        num_classes=10,
-        image_shape=(1, 28, 28),
-        einet_depth=5,
-        einet_num_sums=20,
-        einet_num_leaves=20,
-        einet_num_repetitions=5,
-        einet_leaf_type="Normal",
-        einet_dropout=0.0,
-        spec_norm_bound=0.9,  # only for ConvResNetSPN
-        spectral_normalization=True,  # only for ConvResNetDDU
-        mod=True,  # only for ConvResNetDDU
-    )
-    if model == "ConvResNetSPN":
-        lr = 0.002
-    elif model == "ConvResNetDDU":
-        lr = 0.02
-    elif model == "EfficientNetSPN":
-        lr = 0.015
-    else:
-        raise ValueError(
-            "model must be ConvResNetSPN, ConvResNetDDU or EfficientNetSPN"
-        )
-
-    if loss == "discriminative":
-        lambda_v = 1.0
-    elif loss == "generative":
-        lambda_v = 0.0
-    elif loss == "hybrid":
-        lambda_v = 0.5
-    elif loss == "hybrid_low":
-        lambda_v = 0.1
-    elif loss == "hybrid_very_low":
-        lambda_v = 0.01
-    elif loss == "hybrid_high":
-        lambda_v = 0.9
-    elif loss == "hybrid_very_high":
-        lambda_v = 0.99
-    else:
-        raise ValueError(
-            "loss must be discriminative, generative, hybrid, hybrid_low, hybrid_very_low or hybrid_high"
-        )
-    train_params = dict(
-        pretrained_path=pretrained_path,
-        learning_rate_warmup=0.05,  # irrelevant
-        learning_rate=lr,  # depends on model
-        lambda_v=lambda_v,  # depends on loss
-        warmup_epochs=0,
-        num_epochs=100,
-        # num_epochs=1,
-        deactivate_backbone=True,
-        early_stop=10,
-    )
-    batch_sizes = dict(resnet=512)
-    model_params["explaining_vars"] = [0, 1, 2]  # rotations, cutoffs, noises
-    train_params["highest_severity_train"] = 2
-    training = "einet_only"
-    run_name = f"{loss}_{training}_{model}_mspn"
-    try:
-        val_loss_2 = start_mnist_expl_run(
-            run_name,
-            batch_sizes.copy(),
-            model_params.copy(),
-            train_params.copy(),
-            trial=None,
-        )
-        # train_params["highest_severity_train"] = 4
-        # val_loss_4 = start_mnist_expl_run(
-        #     run_name, batch_sizes, model_params, train_params, trial=None
-        # )
-        # return (val_loss_2 + val_loss_4) / 2
-        return val_loss_2
     except Exception as e:
         print(e)
         traceback.print_exc()
@@ -1055,7 +850,9 @@ def run_dense_resnet(dataset, loss, training, model, pretrained_path=None):
             mlflow.end_run()
 
 
-# Zweites Tuning
+# This setting determines what experiment to run.
+# For DDeXU on cifar10-c with LEX and PEX explanations, run the following (creates everything form scratch)
+
 loss = [
     "hybrid",
     # "hybrid_mid_low",
@@ -1075,10 +872,11 @@ dataset = [
     # "cifar10-c-calib",
     # "cifar100-c-calib",
     # "svhn-c-calib",
-    "cifar10-expl-bright",
-    # "cifar10-c-expl",
+    # "cifar10-expl-bright",
+    "cifar10-c-expl",
     # "svhn-c-expl",
 ]
+# used only if two-moons or figure6 are chosen
 dense_models = [
     "DenseResNetSPN",
     # "DenseResNetGMM",
@@ -1086,11 +884,7 @@ dense_models = [
 ]
 models = [
     "EfficientNetSPN",
-    # "ConvResNetDet",
-    # "ConvResNetSPN",
-    # "ConvResNetDDU",
     # "EfficientNetGMM",
-    # "ConvResNetDDUGMM",
     # "EfficientNetDet",
     # "EfficientNetDropout",
     # "EfficientNetEnsemble",
@@ -1285,61 +1079,5 @@ for d in dataset:
             continue
         elif "SPN" in m:
             for l in loss:
-                # pretrained_path = pretrained_backbones[d][m]
-                pretrained_path = trained_models[d][m]
-                pretrained_path = (
-                    "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-                )
-                # pretrained_path = None
-                # run_conv(d, l, "seperate", m, pretrained_path=None)
-                # run_conv(d, l, "eval_only", m, pretrained_path=pretrained_path)
-                # run_conv(d, l, "backbone_only", m, pretrained_path=None)
-                run_conv(d, l, "einet_only", m, pretrained_path)
+                run_conv(d, l, "seperate", m, pretrained_path=None)
             continue
-        # pretrained_path = pretrained_backbones[d][m]
-        # pretrained_path = trained_models[d][m]
-        # pretrained_path = trained_models[d][l][m]
-        # pretrained_path = (
-        #     "/data_docker/mlartifacts/" + pretrained_path + "/state_dict.pth"
-        # )
-        # pretrained_path = None
-        # tune_conv(d, l, "end-to-end", m, pretrained_path)
-        # run_conv(d, l, "einet_only", m, pretrained_path)
-        # run_conv(d, l, "eval_only", m, pretrained_path)
-        # run_conv(d, l, "seperate", m, pretrained_path)
-        # run_conv(dataset, l, "seperate", m)
-
-
-# path = (
-#     "/data_docker/mlartifacts/"
-#     + trained_models["mnist-expl"]["EfficientNetSPN"]
-#     + "/state_dict.pth"
-# )
-# model_params = dict(
-#     model="EfficientNetSPN",  # ConvResNetSPN, ConvResNetDDU
-#     num_classes=10,
-#     image_shape=(1, 28, 28),
-#     explaining_vars=[0, 1, 2],
-#     einet_depth=5,
-#     einet_num_sums=20,
-#     einet_num_leaves=20,
-#     einet_num_repetitions=5,
-#     einet_leaf_type="Normal",
-#     einet_dropout=0.0,
-# )
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# mnist_expl_manual_evaluation(model_params, path, device)
-
-# path = (
-#     "/data_docker/mlartifacts/"
-#     + pretrained_backbones["mnist-expl"]["EfficientNetSPN"]
-#     + "/state_dict.pth"
-# )
-# run_mnist_expl("mnist-expl-new", "EfficientNetSPN", "hybrid_very_low", path)
-
-# path = (
-#     "/data_docker/mlartifacts/"
-#     + pretrained_backbones["cifar10-c-expl"]["EfficientNetSPN"]
-#     + "/state_dict.pth"
-# )
-# run_cifar_expl("cifar10-c-expl-new", "EfficientNetSPN", "hybrid_very_low", path)

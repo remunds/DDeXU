@@ -6,8 +6,9 @@ import sklearn.datasets
 
 from torch.utils.data import DataLoader
 import os
+
 import mlflow
-from plotting_utils import plot_uncertainty_surface
+from plotting.plotting_utils import plot_uncertainty_surface
 
 
 def make_training_data(sample_size=500):
